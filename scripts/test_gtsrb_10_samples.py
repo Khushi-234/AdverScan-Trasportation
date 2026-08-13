@@ -26,7 +26,8 @@ def main():
     num_samples_target = 10
 
     # 1. Patch config (fixes upstream null in id2label['43']) & load cached HF ViT model
-    print("\n[1/3] Ingesting Model via Module 1 (M1) contract on CPU ...")
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    print(f"\n[1/3] Ingesting Model via Module 1 (M1) contract on {device} ...")
     start_time = time.time()
 
     config_path = hf_hub_download(model_name, "config.json")
@@ -42,7 +43,7 @@ def main():
         cfg_dict["num_labels"] = len(cfg_dict["id2label"])
 
     model_config = ViTConfig.from_dict(cfg_dict)
-    raw_model = AutoModelForImageClassification.from_pretrained(model_name, config=model_config)
+    raw_model = AutoModelForImageClassification.from_pretrained(model_name, config=model_config, use_safetensors=True)
 
     # Ingest model through M1 contract
     sample_input = torch.randn(1, 3, 224, 224)
@@ -50,7 +51,7 @@ def main():
         model_path=raw_model,
         sample_input=sample_input,
         model_name="GTSRB_ViT_10Sample_Test",
-        device="cpu",
+        device=device,
     )
 
     print(f"M1 Ingestion Complete:")

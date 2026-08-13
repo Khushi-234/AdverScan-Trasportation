@@ -44,7 +44,7 @@ def main():
         cfg_dict["num_labels"] = len(cfg_dict["id2label"])
 
     model_config = ViTConfig.from_dict(cfg_dict)
-    raw_model = AutoModelForImageClassification.from_pretrained(model_name, config=model_config)
+    raw_model = AutoModelForImageClassification.from_pretrained(model_name, config=model_config, use_safetensors=True)
 
     # Ingest model through Module 1 standardized interface
     sample_input = torch.randn(1, 3, 224, 224)

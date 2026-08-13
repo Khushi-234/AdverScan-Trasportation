@@ -73,7 +73,7 @@ def main():
 
     model_config = ViTConfig.from_dict(cfg_dict)
     processor = AutoImageProcessor.from_pretrained(model_name)
-    model = AutoModelForImageClassification.from_pretrained(model_name, config=model_config)
+    model = AutoModelForImageClassification.from_pretrained(model_name, config=model_config, use_safetensors=True)
     model.eval()
 
     print("\n--- Model Specifications ---")
