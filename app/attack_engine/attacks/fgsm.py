@@ -75,7 +75,8 @@ class FGSM(BaseAttack):
         try:
             # Forward pass
             outputs = self.raw_model(inputs)
-            loss = loss_fn(outputs, labels)
+            logits = outputs.logits if hasattr(outputs, "logits") else outputs
+            loss = loss_fn(logits, labels)
 
             # Zero gradients
             self.raw_model.zero_grad()

@@ -18,7 +18,7 @@ from transformers import AutoModelForImageClassification, ViTConfig
 from app.ingestion import ingest_model
 from app.evaluation.dataset_loader import GTSRBDatasetLoader
 from app.evaluation.metrics import MetricsCalculator
-from app.attacks import FGSMAttack
+from app.attack_engine import execute_attack, AttackConfig
 
 load_dotenv()
 
@@ -118,16 +118,12 @@ def main():
     if total_samples == 0:
         raise ValueError("Dataset loader returned 0 samples. Aborting.")
 
-    # 4. Instantiate Attack Generator
-    if args.attack.lower() == "fgsm":
-        attack_generator = FGSMAttack(
-            model_adapter=adapter,
-            epsilon=args.epsilon,
-            num_classes=num_classes,
-            device=device,
-        )
-    else:
-        raise ValueError(f"Unsupported attack type: {args.attack}")
+    # 4. Configure Attack Parameters
+    attack_config = AttackConfig(
+        epsilon=args.epsilon,
+        clip_min=None,
+        clip_max=None,
+    )
 
     # 5. Run Clean vs Adversarial Evaluation Loop
     print(f"\n[3/3] Executing {args.attack.upper()} Attack Generation & Model Evaluation ...")
@@ -152,8 +148,14 @@ def main():
             clean_probs = torch.softmax(clean_logits, dim=-1)
             c_preds = torch.argmax(clean_probs, dim=-1)
 
-        # 5b. Generate Adversarial Perturbation
-        adv_pixels = attack_generator.generate(batch_pixels, batch_targets)
+        # 5b. Generate Adversarial Perturbation via M3 execute_attack()
+        adv_pixels = execute_attack(
+            model=adapter,
+            attack_name=args.attack.lower(),
+            inputs=batch_pixels,
+            labels=batch_targets,
+            config=attack_config,
+        )
 
         # 5c. Adversarial Forward Pass
         with torch.no_grad():
