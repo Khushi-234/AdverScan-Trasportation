@@ -9,6 +9,7 @@ import torch
 from dotenv import load_dotenv
 from huggingface_hub import hf_hub_download
 from transformers import AutoModelForImageClassification, ViTConfig
+from pathlib import Path
 
 from app.ingestion import ingest_model
 from app.evaluation import evaluate_baseline
