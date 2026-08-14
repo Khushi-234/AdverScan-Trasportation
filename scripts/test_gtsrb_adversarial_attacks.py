@@ -18,7 +18,7 @@ from transformers import AutoModelForImageClassification, ViTConfig
 from app.ingestion import ingest_model
 from app.evaluation.dataset_loader import GTSRBDatasetLoader
 from app.evaluation.metrics import MetricsCalculator
-from app.attack_engine import execute_attack, AttackConfig
+from app.attack_engine import execute_attack, AttackConfig, get_attack
 
 load_dotenv()
 
@@ -149,9 +149,10 @@ def main():
             c_preds = torch.argmax(clean_probs, dim=-1)
 
         # 5b. Generate Adversarial Perturbation via M3 execute_attack()
+        attack_cls = get_attack(args.attack.lower())
         adv_pixels = execute_attack(
             model=adapter,
-            attack_name=args.attack.lower(),
+            attack_cls=attack_cls,
             inputs=batch_pixels,
             labels=batch_targets,
             config=attack_config,
