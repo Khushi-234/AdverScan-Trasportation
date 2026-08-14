@@ -7,8 +7,9 @@ import torch
 import torch.nn as nn
 
 from app.attack_engine.base.base_attack import BaseAttack
-from app.attack_engine.config.attack_config import AttackConfig
+from app.attack_engine.config import AttackConfig
 from app.attack_engine.exceptions import AttackExecutionError
+from app.attack_engine.attack_registry import register_attack
 
 
 class FGSM(BaseAttack):
@@ -59,6 +60,7 @@ class FGSM(BaseAttack):
                     f"FGSM attack expects labels to be torch.Tensor or iterable, got {type(labels)}"
                 )
 
+        # Device selection
         device = next(self.raw_model.parameters()).device if list(self.raw_model.parameters()) else torch.device("cpu")
 
         # Move inputs and labels to target device
@@ -106,3 +108,7 @@ class FGSM(BaseAttack):
             if isinstance(e, AttackExecutionError):
                 raise e
             raise AttackExecutionError(f"Error during FGSM attack generation: {str(e)}") from e
+
+
+# Self-registration
+register_attack("fgsm", FGSM)

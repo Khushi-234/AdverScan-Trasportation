@@ -3,15 +3,16 @@ Attack Engine Orchestrator for managing multi-attack execution pipelines.
 """
 
 from typing import Any, Dict, List, Optional, Union
-from app.attack_engine.config.attack_config import AttackConfig
-from app.attack_engine.executor.attack_executor import execute_attack
-from app.attack_engine.selector.attack_selector import select_attacks
-from app.attack_engine.exceptions import AttackConfigurationError, AttackExecutionError
+from app.attack_engine.config import AttackConfig
+from app.attack_engine.attack_discovery import discover_attacks
+from app.attack_engine.attack_selector import select_attacks
+from app.attack_engine.attack_executor import execute_attack
+from app.attack_engine.exceptions import AttackConfigurationError
 
 
 class AttackEngine:
     """
-    Orchestrates the selection, configuration, and execution of adversarial attacks on models.
+    Orchestrates discovery, selection, configuration, and execution of adversarial attacks.
     """
 
     def __init__(self, model: Any):
@@ -19,11 +20,13 @@ class AttackEngine:
         Initialize the AttackEngine orchestrator.
 
         Args:
-            model: Target model or adapter.
+            model: Target model or adapter instance.
         """
         if model is None:
             raise AttackConfigurationError("AttackEngine requires a valid model instance.")
         self.model = model
+        # Ensure attack discovery runs on engine initialization
+        discover_attacks()
 
     def run_attack(
         self,
@@ -33,20 +36,22 @@ class AttackEngine:
         config: Optional[AttackConfig] = None,
     ) -> Any:
         """
-        Run a single attack by name.
+        Run a single attack by name string.
 
         Args:
             attack_name: Registered attack name.
-            inputs: Input data.
+            inputs: Input data batch.
             labels: Ground truth labels.
-            config: Optional AttackConfig.
+            config: Optional AttackConfig instance.
 
         Returns:
             Adversarial examples tensor.
         """
+        selected_classes = select_attacks(attack_name)
+        attack_cls = selected_classes[0]
         return execute_attack(
             model=self.model,
-            attack_name=attack_name,
+            attack_cls=attack_cls,
             inputs=inputs,
             labels=labels,
             config=config,
@@ -74,25 +79,26 @@ class AttackEngine:
         if isinstance(attack_names, str):
             attack_names = [attack_names]
 
-        # Validate attack selection
-        select_attacks(attack_names)
+        # Single lookup step: discover & select attack classes
+        selected_classes = select_attacks(attack_names)
 
         if configs is None:
             configs = {}
 
         results: Dict[str, Any] = {}
-        for name in attack_names:
+        for attack_cls in selected_classes:
+            name = attack_cls.__name__.lower()
             config = configs.get(name)
-            adv_examples = self.run_attack(
-                attack_name=name, inputs=inputs, labels=labels, config=config
+            adv_examples = execute_attack(
+                model=self.model,
+                attack_cls=attack_cls,
+                inputs=inputs,
+                labels=labels,
+                config=config,
             )
             results[name] = adv_examples
 
         return results
-
-
-# Alias for backward compatibility / clarity
-AttackOrchestrator = AttackEngine
 
 
 def run_attack_pipeline(

@@ -2,48 +2,50 @@
 Attack registry for cataloging and retrieving available adversarial attack classes.
 """
 
+import inspect
 from typing import Dict, List, Type
 from app.attack_engine.base.base_attack import BaseAttack
-from app.attack_engine.attacks.fgsm import FGSM
 from app.attack_engine.exceptions import AttackConfigurationError
 
-# Centralized attack registry mapping lowercase attack names to attack classes
-_ATTACK_REGISTRY: Dict[str, Type[BaseAttack]] = {
-    "fgsm": FGSM,
-}
+# Registry dictionary mapping lowercase attack names to attack classes. Starts empty.
+_ATTACK_REGISTRY: Dict[str, Type[BaseAttack]] = {}
 
 
 def register_attack(name: str, attack_cls: Type[BaseAttack]) -> None:
     """
-    Register a new attack class under a given name.
+    Register an attack class under a given name.
 
     Args:
         name: String identifier for the attack.
         attack_cls: Class inheriting from BaseAttack.
+
+    Raises:
+        AttackConfigurationError: If attack_cls does not inherit from BaseAttack.
     """
-    if not issubclass(attack_cls, BaseAttack):
+    if not (inspect.isclass(attack_cls) and issubclass(attack_cls, BaseAttack)):
         raise AttackConfigurationError(
-            f"Class {attack_cls} must inherit from BaseAttack."
+            f"Class '{attack_cls}' must be a subclass of BaseAttack."
         )
+
     _ATTACK_REGISTRY[name.lower()] = attack_cls
 
 
 def get_attack(name: str) -> Type[BaseAttack]:
     """
-    Retrieve an attack class by its registered identifier.
+    Retrieve a registered attack class by identifier name.
 
     Args:
-        name: String identifier of the attack (e.g., 'fgsm').
+        name: String identifier of the attack (e.g. 'fgsm').
 
     Returns:
-        The registered attack class.
+        Registered attack class.
 
     Raises:
-        AttackConfigurationError: If the attack name is not registered.
+        AttackConfigurationError: If the attack is not registered.
     """
     name_lower = name.lower()
     if name_lower not in _ATTACK_REGISTRY:
-        available = ", ".join(list_attacks())
+        available = ", ".join(list_attacks()) if _ATTACK_REGISTRY else "none"
         raise AttackConfigurationError(
             f"Attack '{name}' is not registered. Available attacks: [{available}]"
         )
@@ -58,3 +60,12 @@ def list_attacks() -> List[str]:
         List of registered attack name strings.
     """
     return list(_ATTACK_REGISTRY.keys())
+
+
+def clear_registry() -> None:
+    """
+    Clear all registered attacks from the registry and reset discovery state.
+    """
+    _ATTACK_REGISTRY.clear()
+    from app.attack_engine.attack_discovery import reset_discovery_state
+    reset_discovery_state()

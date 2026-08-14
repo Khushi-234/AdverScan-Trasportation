@@ -14,7 +14,8 @@ class DummyNet(nn.Module):
     def __init__(self):
         super().__init__()
         self.fc = nn.Linear(4, 2)
-        nn.init.constant_(self.fc.weight, 0.1)
+        nn.init.constant_(self.fc.weight[0], 0.1)
+        nn.init.constant_(self.fc.weight[1], -0.1)
         nn.init.constant_(self.fc.bias, 0.0)
 
     def forward(self, x):
@@ -58,4 +59,5 @@ def test_package_exports():
     assert hasattr(attack_module, "FGSM")
     assert hasattr(attack_module, "AttackConfig")
     assert hasattr(attack_module, "execute_attack")
+    assert hasattr(attack_module, "discover_attacks")
     assert hasattr(attack_module, "run_attack_pipeline")
