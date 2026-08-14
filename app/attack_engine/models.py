@@ -23,7 +23,7 @@ class AttackMetadata:
 
     attack_name: str
     attack_class: str
-    epsilon: float = 0.0
+    epsilon: Optional[float] = 0.0
     clip_min: Optional[float] = None
     clip_max: Optional[float] = None
     execution_time_seconds: float = 0.0
@@ -46,13 +46,6 @@ class AttackResult:
     metadata: AttackMetadata
     original_inputs: Optional[Any] = None
     labels: Optional[Any] = None
-
-    @property
-    def adv_inputs(self) -> Any:
-        """
-        Convenience property alias for adversarial_examples.
-        """
-        return self.adversarial_examples
 
 
 @dataclass
