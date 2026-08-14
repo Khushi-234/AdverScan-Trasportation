@@ -4,6 +4,7 @@ Attack Engine Orchestrator for managing multi-attack execution pipelines.
 
 from typing import Any, Dict, List, Optional, Union
 from app.attack_engine.config import AttackConfig
+from app.attack_engine.models import AttackResult, AttackResults
 from app.attack_engine.attack_discovery import discover_attacks
 from app.attack_engine.attack_selector import select_attacks
 from app.attack_engine.attack_executor import execute_attack
@@ -34,9 +35,9 @@ class AttackEngine:
         inputs: Any,
         labels: Any,
         config: Optional[AttackConfig] = None,
-    ) -> Any:
+    ) -> AttackResult:
         """
-        Run a single attack by name string.
+        Run a single attack by name string and return AttackResult.
 
         Args:
             attack_name: Registered attack name.
@@ -45,7 +46,7 @@ class AttackEngine:
             config: Optional AttackConfig instance.
 
         Returns:
-            Adversarial examples tensor.
+            AttackResult containing adversarial examples and execution metadata.
         """
         selected_classes = select_attacks(attack_name)
         attack_cls = selected_classes[0]
@@ -63,9 +64,9 @@ class AttackEngine:
         inputs: Any,
         labels: Any,
         configs: Optional[Dict[str, AttackConfig]] = None,
-    ) -> Dict[str, Any]:
+    ) -> AttackResults:
         """
-        Run multiple attacks in a pipeline and return dictionary of adversarial examples.
+        Run multiple attacks dynamically in a pipeline and return AttackResults collection.
 
         Args:
             attack_names: List of attack identifiers or single attack string.
@@ -74,31 +75,29 @@ class AttackEngine:
             configs: Optional dict mapping attack_name -> AttackConfig.
 
         Returns:
-            Dict mapping attack_name to adversarial examples.
+            AttackResults collection mapping attack_name to AttackResult.
         """
         if isinstance(attack_names, str):
             attack_names = [attack_names]
 
-        # Single lookup step: discover & select attack classes
-        selected_classes = select_attacks(attack_names)
-
         if configs is None:
             configs = {}
 
-        results: Dict[str, Any] = {}
-        for attack_cls in selected_classes:
-            name = attack_cls.__name__.lower()
-            config = configs.get(name)
-            adv_examples = execute_attack(
+        pipeline_results = AttackResults()
+        for name in attack_names:
+            selected_classes = select_attacks(name)
+            attack_cls = selected_classes[0]
+            config = configs.get(name.lower())
+            attack_result = execute_attack(
                 model=self.model,
                 attack_cls=attack_cls,
                 inputs=inputs,
                 labels=labels,
                 config=config,
             )
-            results[name] = adv_examples
+            pipeline_results[name] = attack_result
 
-        return results
+        return pipeline_results
 
 
 def run_attack_pipeline(
@@ -107,7 +106,7 @@ def run_attack_pipeline(
     inputs: Any,
     labels: Any,
     configs: Optional[Dict[str, AttackConfig]] = None,
-) -> Dict[str, Any]:
+) -> AttackResults:
     """
     Functional entry point for running an attack pipeline.
 
@@ -119,7 +118,7 @@ def run_attack_pipeline(
         configs: Optional dict mapping attack_name -> AttackConfig.
 
     Returns:
-        Dict mapping attack_name to adversarial examples.
+        AttackResults collection mapping attack_name to AttackResult.
     """
     engine = AttackEngine(model)
     return engine.run_pipeline(

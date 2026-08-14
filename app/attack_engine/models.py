@@ -47,6 +47,13 @@ class AttackResult:
     original_inputs: Optional[Any] = None
     labels: Optional[Any] = None
 
+    @property
+    def adv_inputs(self) -> Any:
+        """
+        Convenience property alias for adversarial_examples.
+        """
+        return self.adversarial_examples
+
 
 @dataclass
 class AttackResults:

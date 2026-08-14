@@ -150,13 +150,14 @@ def main():
 
         # 5b. Generate Adversarial Perturbation via M3 execute_attack()
         attack_cls = get_attack(args.attack.lower())
-        adv_pixels = execute_attack(
+        adv_result = execute_attack(
             model=adapter,
             attack_cls=attack_cls,
             inputs=batch_pixels,
             labels=batch_targets,
             config=attack_config,
         )
+        adv_pixels = adv_result.adversarial_examples
 
         # 5c. Adversarial Forward Pass
         with torch.no_grad():
