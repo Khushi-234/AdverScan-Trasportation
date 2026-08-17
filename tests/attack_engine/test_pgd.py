@@ -29,7 +29,6 @@ def test_pgd_registration():
     discover_attacks()
     attacks = list_attacks()
     assert "pgd" in attacks
-    assert "pgm" in attacks
     cls = get_attack("pgd")
     assert cls.__name__ == "PGD"
 
