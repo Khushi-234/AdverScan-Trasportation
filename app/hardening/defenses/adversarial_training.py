@@ -2,6 +2,16 @@
 Adversarial Training Defense Module for Module 7 (Hardening).
 
 Implements adversarial training / fine-tuning of PyTorch models using FGSM or PGD adversarial batch generation.
+
+Generate adversarial input
+        ↓
+Give it to the model with the correct label
+        ↓
+Calculate training loss
+        ↓
+Update model weights
+        ↓
+Model becomes more resistant
 """
 
 import time
@@ -30,15 +40,21 @@ def generate_fgsm_batch(
     Generate FGSM adversarial perturbations for a batch during training.
     """
     criterion = criterion or nn.CrossEntropyLoss()
-    x_adv = inputs.clone().detach().requires_grad_(True)
+    x_adv = inputs.clone().detach().requires_grad_(True) #cloning 
+
+    # Forward - propagation
     outputs = model(x_adv)
     loss = criterion(outputs, labels)
 
     model.zero_grad()
+
+    # Backward - propagation
     loss.backward()
 
     if x_adv.grad is not None:
         grad = x_adv.grad.data
+
+        # Adding small perbutation in the data
         x_adv = x_adv + epsilon * torch.sign(grad)
         x_adv = torch.clamp(x_adv, min=clip_min, max=clip_max)
 
@@ -61,6 +77,8 @@ def generate_pgd_batch(
     """
     criterion = criterion or nn.CrossEntropyLoss()
     x_original = inputs.clone().detach()
+
+    # Generate random starting point
     x_adv = inputs.clone().detach() + torch.randn_like(inputs) * (epsilon * 0.5)
     x_adv = torch.clamp(x_adv, min=clip_min, max=clip_max)
 
@@ -76,7 +94,8 @@ def generate_pgd_batch(
             with torch.no_grad():
                 grad = x_adv.grad.data
                 x_adv = x_adv + alpha * torch.sign(grad)
-                # Projection back into L-infinity epsilon ball
+                # Projection back into L-infinity epsilon ball, 
+                # Ensures adversarial example cannot move too far away from the original input.
                 eta = torch.clamp(x_adv - x_original, min=-epsilon, max=epsilon)
                 x_adv = torch.clamp(x_original + eta, min=clip_min, max=clip_max)
 
@@ -120,9 +139,12 @@ class AdversarialTrainingDefense(BaseDefense):
         labels: torch.Tensor,
         optimizer: optim.Optimizer,
         criterion: nn.Module,
-    ) -> float:
+    ) -> Dict[str, float]:
         """
-        Execute one fine-tuning epoch on input/label batch.
+        Execute one fine-tuning epoch on clean and adversarial inputs.
+
+        Returns:
+            Dict containing clean_loss, adv_loss, total_loss, clean_acc, and adv_acc.
         """
         model.train()
         optimizer.zero_grad()
@@ -151,22 +173,32 @@ class AdversarialTrainingDefense(BaseDefense):
                 criterion=criterion,
             )
 
-        # Combine clean and adversarial batch according to ratio_adv
-        if self.ratio_adv >= 1.0:
-            train_inputs = adv_inputs
-        elif self.ratio_adv <= 0.0:
-            train_inputs = inputs
-        else:
-            num_adv = int(inputs.shape[0] * self.ratio_adv)
-            train_inputs = torch.cat([adv_inputs[:num_adv], inputs[num_adv:]], dim=0)
+        # 1. Calculate clean loss and accuracy
+        clean_outputs = model(inputs)
+        clean_loss = criterion(clean_outputs, labels)
+        clean_preds = torch.argmax(clean_outputs, dim=-1)
+        clean_acc = float((clean_preds == labels).float().mean().item())
 
-        # Forward & Backprop
-        outputs = model(train_inputs)
-        loss = criterion(outputs, labels)
-        loss.backward()
+        # 2. Calculate adversarial loss and accuracy
+        adv_outputs = model(adv_inputs)
+        adv_loss = criterion(adv_outputs, labels)
+        adv_preds = torch.argmax(adv_outputs, dim=-1)
+        adv_acc = float((adv_preds == labels).float().mean().item())
+
+        # 3. Explicitly combine both clean and adversarial loss using ratio_adv
+        total_loss = (1.0 - self.ratio_adv) * clean_loss + self.ratio_adv * adv_loss
+
+        # 4. Backpropagate and update weights
+        total_loss.backward()
         optimizer.step()
 
-        return float(loss.item())
+        return {
+            "clean_loss": float(clean_loss.item()),
+            "adv_loss": float(adv_loss.item()),
+            "total_loss": float(total_loss.item()),
+            "clean_acc": clean_acc,
+            "adv_acc": adv_acc,
+        }
 
     def apply(
         self,
@@ -187,16 +219,27 @@ class AdversarialTrainingDefense(BaseDefense):
             optimizer = optim.Adam(hardened_model.parameters(), lr=self.lr)
             criterion = nn.CrossEntropyLoss()
 
-            losses = []
+            epoch_metrics = []
+            clean_losses = []
+            adv_losses = []
+            total_losses = []
+            clean_accuracies = []
+            adv_accuracies = []
+
             for epoch in range(self.epochs):
-                loss_val = self.train_epoch(
+                metrics = self.train_epoch(
                     model=hardened_model,
                     inputs=inputs,
                     labels=labels,
                     optimizer=optimizer,
                     criterion=criterion,
                 )
-                losses.append(loss_val)
+                epoch_metrics.append(metrics)
+                clean_losses.append(metrics["clean_loss"])
+                adv_losses.append(metrics["adv_loss"])
+                total_losses.append(metrics["total_loss"])
+                clean_accuracies.append(metrics["clean_acc"])
+                adv_accuracies.append(metrics["adv_acc"])
 
             hardened_model.eval()
 
@@ -212,23 +255,40 @@ class AdversarialTrainingDefense(BaseDefense):
                     "attack_type": self.attack_type,
                     "attack_steps": self.attack_steps,
                     "ratio_adv": self.ratio_adv,
-                    "losses": losses,
+                    "losses": total_losses,  # Backward compatibility
+                    "clean_losses": clean_losses,
+                    "adv_losses": adv_losses,
+                    "total_losses": total_losses,
+                    "clean_accuracies": clean_accuracies,
+                    "adv_accuracies": adv_accuracies,
+                    "epoch_metrics": epoch_metrics,
                 },
                 execution_time_seconds=exec_time,
                 timestamp=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             )
+
+            metrics_after = {
+                "final_clean_loss": clean_losses[-1] if clean_losses else 0.0,
+                "final_adv_loss": adv_losses[-1] if adv_losses else 0.0,
+                "final_total_loss": total_losses[-1] if total_losses else 0.0,
+                "final_clean_acc": clean_accuracies[-1] if clean_accuracies else 0.0,
+                "final_adv_acc": adv_accuracies[-1] if adv_accuracies else 0.0,
+            }
 
             return HardeningResult(
                 hardened_model=hardened_model,
                 metadata=meta,
                 hardened_inputs=inputs,
                 success=True,
+                metrics_after=metrics_after,
                 recommendations=[
                     f"Fine-tuned model weights with {self.epochs} epoch(s) of {self.attack_type.upper()} adversarial training.",
-                    "Adversarial training modifies internal network parameters to resist perturbation gradients.",
+                    f"Final hardening batch metrics: Clean Acc: {clean_accuracies[-1]:.2%}, Adv Acc: {adv_accuracies[-1]:.2%}, Total Loss: {total_losses[-1]:.4f}.",
+                    "Re-run Attack Engine and Vulnerability Assessment on the hardened model to benchmark defense impact against baseline metrics.",
                 ],
             )
         except Exception as e:
             if isinstance(e, HardeningConfigurationError):
                 raise
             raise DefenseExecutionError(f"AdversarialTrainingDefense failed: {str(e)}") from e
+
