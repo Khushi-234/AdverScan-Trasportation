@@ -67,6 +67,9 @@ class XAIExplainer:
         else:
             raise TypeError("Model must be callable or possess a predict method.")
 
+        if hasattr(outputs, "logits"):
+            outputs = outputs.logits
+
         if not isinstance(outputs, torch.Tensor):
             outputs = torch.tensor(outputs)
 

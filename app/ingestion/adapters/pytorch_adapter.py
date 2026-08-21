@@ -83,9 +83,13 @@ class PyTorchAdapter(BaseModelAdapter):
         with torch.no_grad():
             outputs = self._model(tensor_input)
 
+        if hasattr(outputs, "logits"):
+            outputs = outputs.logits
+
         if return_numpy:
             return outputs.cpu().numpy()
         return outputs
+
 
     def __call__(self, *args: Any, **kwargs: Any) -> Any:
         """

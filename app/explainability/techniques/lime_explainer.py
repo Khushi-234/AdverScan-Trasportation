@@ -82,9 +82,13 @@ class LIMEExplainer:
                     model_eval = model.eval() if hasattr(model, "eval") else model
                     with torch.no_grad():
                         out = model_eval(t_input)
+                    if hasattr(out, "logits"):
+                        out = out.logits
                     res = out.cpu().numpy() if isinstance(out, torch.Tensor) else np.asarray(out)
                 else:
                     raise TypeError("Model must be callable or possess a predict method.")
+                if hasattr(res, "logits"):
+                    res = res.logits
                 return res
 
             explainer = lime_image.LimeImageExplainer()

@@ -54,37 +54,80 @@ class SHAPExplainer:
             }
 
         try:
-            # Convert inputs to numpy if tensor
             import torch
+
+            # Convert inputs to numpy if tensor
             if isinstance(inputs, torch.Tensor):
                 inputs_np = inputs.detach().cpu().numpy()
             else:
                 inputs_np = np.asarray(inputs)
 
-            # Build prediction function wrapper
-            def predict_fn(x: np.ndarray) -> np.ndarray:
-                t_input = torch.tensor(x, dtype=torch.float32)
-                if hasattr(model, "predict"):
-                    res = model.predict(t_input, return_numpy=True)
-                elif callable(model):
-                    model_eval = model.eval() if hasattr(model, "eval") else model
-                    with torch.no_grad():
-                        out = model_eval(t_input)
-                    res = out.cpu().numpy() if isinstance(out, torch.Tensor) else np.asarray(out)
-                else:
-                    raise TypeError("Model must be callable or possess a predict method.")
-                return res
+            orig_shape = inputs_np.shape
+            B = orig_shape[0]
 
-            if background_inputs is not None:
-                if isinstance(background_inputs, torch.Tensor):
-                    bg_np = background_inputs.detach().cpu().numpy()
+            if inputs_np.ndim > 2:
+                flat_inputs = inputs_np.reshape(B, -1)
+                feature_dim = flat_inputs.shape[1]
+
+                if background_inputs is not None:
+                    if isinstance(background_inputs, torch.Tensor):
+                        bg_np = background_inputs.detach().cpu().numpy()
+                    else:
+                        bg_np = np.asarray(background_inputs)
+                    flat_bg = bg_np.reshape(len(bg_np), -1)
                 else:
-                    bg_np = np.asarray(background_inputs)
+                    flat_bg = np.zeros((1, feature_dim))
+
+                def predict_fn(x_flat: np.ndarray) -> np.ndarray:
+                    x_nd = x_flat.reshape((-1,) + orig_shape[1:])
+                    t_input = torch.tensor(x_nd, dtype=torch.float32)
+                    if hasattr(model, "predict"):
+                        res = model.predict(t_input, return_numpy=True)
+                    elif callable(model):
+                        model_eval = model.eval() if hasattr(model, "eval") else model
+                        with torch.no_grad():
+                            out = model_eval(t_input)
+                        if hasattr(out, "logits"):
+                            out = out.logits
+                        res = out.cpu().numpy() if isinstance(out, torch.Tensor) else np.asarray(out)
+                    else:
+                        raise TypeError("Model must be callable or possess a predict method.")
+                    if hasattr(res, "logits"):
+                        res = res.logits
+                    return res
+
+                explainer = shap.KernelExplainer(predict_fn, flat_bg)
+                nsamples = kwargs.get("nsamples", 10)
+                shap_values = explainer.shap_values(flat_inputs, nsamples=nsamples)
             else:
-                bg_np = np.zeros_like(inputs_np)
+                if background_inputs is not None:
+                    if isinstance(background_inputs, torch.Tensor):
+                        bg_np = background_inputs.detach().cpu().numpy()
+                    else:
+                        bg_np = np.asarray(background_inputs)
+                else:
+                    bg_np = np.zeros((1, inputs_np.shape[1]))
 
-            explainer = shap.Explainer(predict_fn, bg_np)
-            shap_values = explainer(inputs_np)
+                def predict_fn(x: np.ndarray) -> np.ndarray:
+                    t_input = torch.tensor(x, dtype=torch.float32)
+                    if hasattr(model, "predict"):
+                        res = model.predict(t_input, return_numpy=True)
+                    elif callable(model):
+                        model_eval = model.eval() if hasattr(model, "eval") else model
+                        with torch.no_grad():
+                            out = model_eval(t_input)
+                        if hasattr(out, "logits"):
+                            out = out.logits
+                        res = out.cpu().numpy() if isinstance(out, torch.Tensor) else np.asarray(out)
+                    else:
+                        raise TypeError("Model must be callable or possess a predict method.")
+                    if hasattr(res, "logits"):
+                        res = res.logits
+                    return res
+
+                explainer = shap.KernelExplainer(predict_fn, bg_np)
+                nsamples = kwargs.get("nsamples", 10)
+                shap_values = explainer.shap_values(inputs_np, nsamples=nsamples)
 
             values = shap_values.values if hasattr(shap_values, "values") else np.asarray(shap_values)
 

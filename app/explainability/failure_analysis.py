@@ -3,6 +3,26 @@ Prediction-change and failure analysis for explainability module in AdverScan.
 """
 
 from typing import Any, Dict, Optional
+import numpy as np
+import torch
+
+
+def _to_clean_value(val: Any) -> Any:
+    """Helper to convert PyTorch tensors or NumPy arrays to Python primitives/lists."""
+    if isinstance(val, torch.Tensor):
+        return val.detach().cpu().numpy().tolist() if val.ndim > 0 else val.item()
+    if isinstance(val, np.ndarray):
+        return val.tolist() if val.ndim > 0 else val.item()
+    return val
+
+
+def _is_equal(a: Any, b: Any) -> bool:
+    """Safely compare equality between scalars, lists, tensors, or numpy arrays."""
+    clean_a = _to_clean_value(a)
+    clean_b = _to_clean_value(b)
+    if isinstance(clean_a, list) or isinstance(clean_b, list):
+        return clean_a == clean_b
+    return bool(clean_a == clean_b)
 
 
 def is_prediction_correct(prediction: Any, true_label: Optional[Any]) -> Optional[bool]:
@@ -18,11 +38,16 @@ def is_prediction_correct(prediction: Any, true_label: Optional[Any]) -> Optiona
     """
     if true_label is None:
         return None
-    if isinstance(true_label, (list, tuple, set)):
-        return prediction in true_label
-    if isinstance(prediction, (list, tuple, set)):
-        return true_label in prediction
-    return bool(prediction == true_label)
+    pred_val = _to_clean_value(prediction)
+    true_val = _to_clean_value(true_label)
+
+    if isinstance(true_val, (list, tuple, set)):
+        if isinstance(pred_val, (list, tuple, set)):
+            return pred_val == list(true_val)
+        return pred_val in true_val
+    if isinstance(pred_val, (list, tuple, set)):
+        return true_val in pred_val
+    return bool(pred_val == true_val)
 
 
 def analyze_failure(
@@ -39,19 +64,15 @@ def analyze_failure(
         true_label: Optional ground truth label.
 
     Returns:
-        Dictionary containing:
-            - clean_correct: Optional[bool]
-            - adversarial_correct: Optional[bool]
-            - prediction_changed: bool
-            - attack_caused_failure: Optional[bool]
-            - true_label: Optional[Any]
-            - clean_prediction: Any
-            - adversarial_prediction: Any
-            - failure_mode: str
+        Dictionary containing failure mode analysis metrics.
     """
-    prediction_changed = bool(clean_prediction != adversarial_prediction)
+    prediction_changed = not _is_equal(clean_prediction, adversarial_prediction)
     clean_correct = is_prediction_correct(clean_prediction, true_label)
     adversarial_correct = is_prediction_correct(adversarial_prediction, true_label)
+
+    clean_pred_val = _to_clean_value(clean_prediction)
+    adv_pred_val = _to_clean_value(adversarial_prediction)
+    true_label_val = _to_clean_value(true_label)
 
     if true_label is None:
         attack_caused_failure = None
@@ -79,8 +100,8 @@ def analyze_failure(
         "adversarial_correct": adversarial_correct,
         "prediction_changed": prediction_changed,
         "attack_caused_failure": attack_caused_failure,
-        "true_label": true_label,
-        "clean_prediction": clean_prediction,
-        "adversarial_prediction": adversarial_prediction,
+        "true_label": true_label_val,
+        "clean_prediction": clean_pred_val,
+        "adversarial_prediction": adv_pred_val,
         "failure_mode": failure_mode,
     }

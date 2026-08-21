@@ -4,6 +4,25 @@ Clean vs adversarial model behavior and attribution comparison for explainabilit
 
 from typing import Any, Dict, Optional
 import numpy as np
+import torch
+
+
+def _to_clean_value(val: Any) -> Any:
+    """Helper to convert PyTorch tensors or NumPy arrays to Python primitives/lists."""
+    if isinstance(val, torch.Tensor):
+        return val.detach().cpu().numpy().tolist() if val.ndim > 0 else val.item()
+    if isinstance(val, np.ndarray):
+        return val.tolist() if val.ndim > 0 else val.item()
+    return val
+
+
+def _is_equal(a: Any, b: Any) -> bool:
+    """Safely compare equality between scalars, lists, tensors, or numpy arrays."""
+    clean_a = _to_clean_value(a)
+    clean_b = _to_clean_value(b)
+    if isinstance(clean_a, list) or isinstance(clean_b, list):
+        return clean_a == clean_b
+    return bool(clean_a == clean_b)
 
 
 def compare_attributions(
@@ -12,15 +31,6 @@ def compare_attributions(
 ) -> Dict[str, Any]:
     """
     Compare clean vs adversarial feature attribution maps using deterministic metrics.
-
-    Mathematical definitions:
-    - attribution_l1: Mean absolute element-wise difference: mean(|A_clean - A_adv|)
-    - attribution_l2: Frobenius/Euclidean norm of difference: norm(A_clean - A_adv)
-    - attribution_cosine_similarity: Cosine similarity between flattened attribution vectors:
-        (A_clean . A_adv) / (norm(A_clean) * norm(A_adv))
-    - attribution_mean_difference: Mean signed difference: mean(A_clean - A_adv)
-
-    Returns explicit unavailable status if attributions are missing or empty.
     """
     if clean_attribution is None or adv_attribution is None:
         return {
@@ -87,26 +97,15 @@ def compare_explanations(
 ) -> Dict[str, Any]:
     """
     Compare clean vs. adversarial prediction, confidence, and attribution.
-
-    Args:
-        clean_prediction: Model prediction on clean input.
-        adversarial_prediction: Model prediction on adversarial input.
-        clean_confidence: Prediction confidence on clean input.
-        adversarial_confidence: Prediction confidence on adversarial input.
-        clean_attribution: Optional clean feature attribution map/array.
-        adv_attribution: Optional adversarial feature attribution map/array.
-
-    Returns:
-        Structured comparison dictionary.
     """
-    prediction_changed = bool(clean_prediction != adversarial_prediction)
+    prediction_changed = not _is_equal(clean_prediction, adversarial_prediction)
     confidence_difference = float(clean_confidence - adversarial_confidence)
 
     attr_comp = compare_attributions(clean_attribution, adv_attribution)
 
     result = {
-        "clean_prediction": clean_prediction,
-        "adversarial_prediction": adversarial_prediction,
+        "clean_prediction": _to_clean_value(clean_prediction),
+        "adversarial_prediction": _to_clean_value(adversarial_prediction),
         "clean_confidence": float(clean_confidence),
         "adversarial_confidence": float(adversarial_confidence),
         "prediction_changed": prediction_changed,
