@@ -44,7 +44,8 @@ def generate_fgsm_batch(
 
     # Forward - propagation
     outputs = model(x_adv)
-    loss = criterion(outputs, labels)
+    logits = outputs.logits if hasattr(outputs, "logits") else outputs
+    loss = criterion(logits, labels)
 
     model.zero_grad()
 
@@ -85,7 +86,8 @@ def generate_pgd_batch(
     for _ in range(steps):
         x_adv.requires_grad = True
         outputs = model(x_adv)
-        loss = criterion(outputs, labels)
+        logits = outputs.logits if hasattr(outputs, "logits") else outputs
+        loss = criterion(logits, labels)
 
         model.zero_grad()
         loss.backward()
@@ -175,14 +177,16 @@ class AdversarialTrainingDefense(BaseDefense):
 
         # 1. Calculate clean loss and accuracy
         clean_outputs = model(inputs)
-        clean_loss = criterion(clean_outputs, labels)
-        clean_preds = torch.argmax(clean_outputs, dim=-1)
+        clean_logits = clean_outputs.logits if hasattr(clean_outputs, "logits") else clean_outputs
+        clean_loss = criterion(clean_logits, labels)
+        clean_preds = torch.argmax(clean_logits, dim=-1)
         clean_acc = float((clean_preds == labels).float().mean().item())
 
         # 2. Calculate adversarial loss and accuracy
         adv_outputs = model(adv_inputs)
-        adv_loss = criterion(adv_outputs, labels)
-        adv_preds = torch.argmax(adv_outputs, dim=-1)
+        adv_logits = adv_outputs.logits if hasattr(adv_outputs, "logits") else adv_outputs
+        adv_loss = criterion(adv_logits, labels)
+        adv_preds = torch.argmax(adv_logits, dim=-1)
         adv_acc = float((adv_preds == labels).float().mean().item())
 
         # 3. Explicitly combine both clean and adversarial loss using ratio_adv
