@@ -76,7 +76,7 @@ class LIMEExplainer:
                     images_t = images
 
                 t_input = torch.tensor(images_t, dtype=torch.float32)
-                if hasattr(model, "predict"):
+                if hasattr(model, "predict") and callable(getattr(model, "predict")):
                     res = model.predict(t_input, return_numpy=True)
                 elif callable(model):
                     model_eval = model.eval() if hasattr(model, "eval") else model
