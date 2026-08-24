@@ -1,11 +1,24 @@
 """
 Defensive Preprocessing Module for Module 7 (Hardening).
 
+This Preprocessing Defense: does not update model weights. 
+It tries to remove or weaken adversarial perturbations before the input reaches the model.
+
 Implements input preprocessing defenses:
 - Spatial Smoothing (Gaussian blur filtering)
 - Bit-Depth Reduction (Feature Squeezing)
 - JPEG Compression simulation
 - PreprocessedModelWrapper (nn.Module wrapping base model with runtime preprocessing)
+
+Adversarial Image
+        ↓
+Gaussian Blur / Feature Squeezing / JPEG
+        ↓
+Reduced adversarial perturbation
+        ↓
+Original Model
+        ↓
+Prediction
 """
 
 import time
