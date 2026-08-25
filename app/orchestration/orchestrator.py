@@ -17,6 +17,8 @@ from app.attack_engine.models import AttackResult, AttackResults
 from app.vulnerability_analysis.vulnerability_engine import VulnerabilityEngine
 from app.explainability.explainer import XAIExplainer
 from app.hardening.hardening_engine import HardeningEngine
+from app.retest.retest_engine import RetestEngine
+from app.report_generator import ReportData, ReportGenerator
 from app.orchestration.dataset_adapter import InMemoryDatasetLoader
 from app.orchestration.orchestration_result import OrchestrationResult
 from app.orchestration.pipeline_config import PipelineConfig
@@ -275,6 +277,58 @@ class AdverScanOrchestrator:
                 result.status = "PARTIAL_SUCCESS"
                 result.errors.append({
                     "module": "M7_hardening",
+                    "error_type": type(e).__name__,
+                    "message": str(e),
+                    "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                })
+
+        # Step 8: M8 Re-Test & Comparison Engine (Optional / Post-Hardening)
+        retest_res_obj = None
+        if config.enable_hardening and config.enable_retest and result.hardening_results:
+            try:
+                retest_engine = RetestEngine()
+                hardened_model_obj = result.hardening_results.get("hardened_model") or adapter.get_model()
+                retest_res_obj = retest_engine.retest(
+                    hardened_model=hardened_model_obj,
+                    dataset_loader=dataset_loader,
+                    attacks=config.attacks,
+                    before_baseline_result=baseline_result,
+                    before_vulnerability_analysis=result.vulnerability_analysis,
+                    attack_configs=config.attack_configs,
+                    before_attack_results=result.attack_results,
+                    num_classes=config.num_classes,
+                    model_name=config.model_name,
+                    device=config.device,
+                    batch_size=config.batch_size,
+                )
+                result.retest_results = retest_res_obj.to_dict()
+            except Exception as e:
+                result.status = "PARTIAL_SUCCESS"
+                result.errors.append({
+                    "module": "M8_retest",
+                    "error_type": type(e).__name__,
+                    "message": str(e),
+                    "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                })
+
+        # Step 9: M9 Security Report Generator
+        if config.enable_report:
+            try:
+                report_data = ReportData.from_orchestration_and_retest(
+                    orchestration_result=result,
+                    retest_result=retest_res_obj,
+                )
+                report_gen = ReportGenerator()
+                report_res = report_gen.generate(report_data)
+                result.report_result = report_res.to_dict()
+
+                if config.output_dir:
+                    report_res.save_json(f"{config.output_dir}/security_report.json")
+                    report_res.save_text(f"{config.output_dir}/security_report.txt")
+            except Exception as e:
+                result.status = "PARTIAL_SUCCESS"
+                result.errors.append({
+                    "module": "M9_report_generator",
                     "error_type": type(e).__name__,
                     "message": str(e),
                     "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),

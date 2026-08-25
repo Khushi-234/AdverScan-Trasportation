@@ -28,6 +28,8 @@ class OrchestrationResult:
     vulnerability_analysis: Dict[str, Dict[str, Any]] = field(default_factory=dict)
     xai_results: Dict[str, Dict[str, Any]] = field(default_factory=dict)
     hardening_results: Optional[Dict[str, Any]] = None
+    retest_results: Optional[Dict[str, Any]] = None
+    report_result: Optional[Dict[str, Any]] = None
 
     # Error Tracking
     errors: List[Dict[str, Any]] = field(default_factory=list)
