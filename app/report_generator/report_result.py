@@ -34,9 +34,33 @@ class ReportResult:
     formatted_report: str = ""
     metadata: Dict[str, Any] = field(default_factory=dict)
 
+    @staticmethod
+    def _sanitize(obj: Any) -> Any:
+        """Recursively convert PyTorch tensors, NumPy types, and non-serializable objects to JSON primitives."""
+        if obj is None or isinstance(obj, (int, float, str, bool)):
+            return obj
+        if hasattr(obj, "item") and callable(getattr(obj, "item")):
+            try:
+                return obj.item()
+            except Exception:
+                pass
+        if hasattr(obj, "tolist") and callable(getattr(obj, "tolist")):
+            try:
+                return obj.tolist()
+            except Exception:
+                pass
+        if isinstance(obj, dict):
+            return {str(k): ReportResult._sanitize(v) for k, v in obj.items()}
+        if isinstance(obj, (list, tuple, set)):
+            return [ReportResult._sanitize(v) for v in obj]
+        if hasattr(obj, "to_dict") and callable(getattr(obj, "to_dict")):
+            return ReportResult._sanitize(obj.to_dict())
+        return str(obj)
+
     def to_dict(self) -> Dict[str, Any]:
         """Convert ReportResult object to a dictionary representation."""
-        return asdict(self)
+        raw_dict = asdict(self)
+        return self._sanitize(raw_dict)
 
     def to_json(self, indent: int = 2) -> str:
         """Serialize ReportResult dictionary to JSON string."""
