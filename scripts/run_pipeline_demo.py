@@ -325,6 +325,8 @@ def main():
         xai_techniques=opts["xai_techniques"],
         enable_hardening=opts["enable_hardening"],
         defense=opts["defense"],
+        enable_retest=opts["enable_hardening"],
+        enable_report=True,
         custom_dataset_loader=dataset_loader,
     )
 
@@ -403,6 +405,36 @@ def main():
             print(f"Recommendations:          {result.hardening_results.get('recommendations')}")
     else:
         print("Hardening: Disabled or not executed.")
+
+    print("\n------------------------------------------------------------")
+    print("M8 — RE-TEST & COMPARISON ENGINE")
+    print("------------------------------------------------------------")
+    if result.retest_results:
+        print(f"Overall Improved:         {result.retest_results.get('overall_improved')}")
+        comparisons = result.retest_results.get("comparisons", {})
+        for atk_k, comp in comparisons.items():
+            print(f"[{atk_k.upper()}] Delta Vulnerability Score: {comp.get('delta_vulnerability_score', 0.0):.2f}")
+            print(f"    Delta Accuracy Drop:  {comp.get('delta_accuracy_drop', 0.0) * 100:.2f}%")
+            print(f"    Risk Level Before:    {comp.get('before_risk_level')}")
+            print(f"    Risk Level After:     {comp.get('after_risk_level')}")
+            print(f"    Is Vector Improved:   {comp.get('is_improved')}")
+    else:
+        print("Re-Test: Disabled or not executed.")
+
+    print("\n------------------------------------------------------------")
+    print("M9 — SECURITY REPORT GENERATOR")
+    print("------------------------------------------------------------")
+    if result.report_result:
+        print(f"Report ID:                {result.report_result.get('report_id')}")
+        print(f"Status:                   {result.report_result.get('status')}")
+        print(f"Risk Level:               {result.report_result.get('risk_level')}")
+        print(f"Vulnerability Score:      {result.report_result.get('vulnerability_score')}")
+        if result.report_result.get("recommendations"):
+            print("Recommendations:")
+            for rec in result.report_result.get("recommendations", []):
+                print(f"  - {rec}")
+    else:
+        print("Report Generator: Disabled or not executed.")
 
     if result.errors:
         print("\n------------------------------------------------------------")
