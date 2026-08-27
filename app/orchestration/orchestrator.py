@@ -384,6 +384,21 @@ class AdverScanOrchestrator:
                 if config.output_dir:
                     report_res.save_json(f"{config.output_dir}/security_report.json")
                     report_res.save_text(f"{config.output_dir}/security_report.txt")
+                print(f" Done ({time.time() - step_start:.2f}s)")
+            except Exception as e:
+                print(f" Failed ({time.time() - step_start:.2f}s)")
+                result.status = "PARTIAL_SUCCESS"
+                result.errors.append({
+                    "module": "M9_report_generator",
+                    "error_type": type(e).__name__,
+                    "message": str(e),
+                    "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                })
+                result.report_result = report_res.to_dict()
+
+                if config.output_dir:
+                    report_res.save_json(f"{config.output_dir}/security_report.json")
+                    report_res.save_text(f"{config.output_dir}/security_report.txt")
             except Exception as e:
                 result.status = "PARTIAL_SUCCESS"
                 result.errors.append({
