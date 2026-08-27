@@ -1,14 +1,18 @@
 """
 Device management module for handling PyTorch execution devices (CPU, CUDA, MPS).
+Delegates core logic to app.utils.device.
 """
 
 from typing import Any, Optional, Union
 import torch
 
+from app.utils.device import get_device as util_get_device, to_device as util_to_device
+
 
 class DeviceManager:
     """
     Manages hardware execution devices for machine learning models.
+    Delegates to app.utils.device.
     """
 
     @staticmethod
@@ -22,30 +26,7 @@ class DeviceManager:
         Returns:
             torch.device instance.
         """
-        if preferred_device is not None:
-            dev_str = str(preferred_device).lower()
-            if dev_str.startswith("cuda"):
-                if torch.cuda.is_available():
-                    return torch.device(preferred_device)
-                else:
-                    return torch.device("cpu")
-            elif dev_str.startswith("mps"):
-                if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
-                    return torch.device(preferred_device)
-                else:
-                    return torch.device("cpu")
-            elif dev_str == "cpu":
-                return torch.device("cpu")
-            else:
-                return torch.device(preferred_device)
-
-        # Automatic detection logic
-        if torch.cuda.is_available():
-            return torch.device("cuda")
-        elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
-            return torch.device("mps")
-        else:
-            return torch.device("cpu")
+        return util_get_device(preferred_device)
 
     @staticmethod
     def to_device(obj: Any, device: Union[str, torch.device]) -> Any:
@@ -59,7 +40,5 @@ class DeviceManager:
         Returns:
             The object moved to target device.
         """
-        target_device = DeviceManager.get_device(device)
-        if hasattr(obj, "to"):
-            return obj.to(target_device)
-        return obj
+        return util_to_device(obj, device)
+
