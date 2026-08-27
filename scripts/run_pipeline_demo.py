@@ -1,9 +1,10 @@
 """
 AdverScan — End-to-End Interactive Security Assessment Demo & CLI.
 
-Provides both an interactive prompt menu and command-line execution for Module 8 (Orchestration).
-Enables practical demonstration of M1 Model Ingestion -> M2 Baseline Evaluation -> M3 Attack Engine
--> M2 Adversarial Evaluation -> M5 Vulnerability Analysis -> M6 XAI -> M7 Hardening -> M8 OrchestrationResult.
+Provides both an interactive prompt menu and command-line execution for the complete AdverScan framework:
+M1 Model Ingestion -> M2 Baseline Evaluation -> M3 Attack Engine
+-> M2 Adversarial Evaluation -> M5 Vulnerability Analysis -> M6 XAI -> M7 Hardening
+-> M8 Re-Test & Comparison -> M9 Security Report Generator.
 """
 
 import argparse
@@ -22,7 +23,7 @@ from app.orchestration import AdverScanOrchestrator, PipelineConfig
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="AdverScan M8 End-to-End Interactive Security Assessment Demo & CLI"
+        description="AdverScan End-to-End Interactive Security Assessment Demo & CLI"
     )
     parser.add_argument(
         "--interactive",
@@ -39,8 +40,8 @@ def parse_args():
     parser.add_argument(
         "--samples",
         type=int,
-        default=3,
-        help="Number of samples to evaluate (default: 3)",
+        default=2000,
+        help="Number of samples to evaluate (default: 2000)",
     )
     parser.add_argument(
         "--attacks",
@@ -85,6 +86,24 @@ def parse_args():
         default="spatial_smoothing",
         help="Hardening defense type (spatial_smoothing, randomized_smoothing, adversarial_training, auto)",
     )
+    parser.add_argument(
+        "--enable-retest",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Enable M8 Re-Test & Comparison Engine (default: True)",
+    )
+    parser.add_argument(
+        "--enable-report",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Enable M9 Security Report Generator Engine (default: True)",
+    )
+    parser.add_argument(
+        "--output-dir",
+        type=str,
+        default="results/orchestration",
+        help="Output directory for generated security reports (default: 'results/orchestration')",
+    )
     return parser.parse_args()
 
 
@@ -113,7 +132,7 @@ def prompt_user_selection():
 
     # 3. Sample Count
     while True:
-        samples_str = input("\nNumber of samples to evaluate [3]: ").strip() or "3"
+        samples_str = input("\nNumber of samples to evaluate [2000]: ").strip() or "2000"
         try:
             samples_count = int(samples_str)
             if samples_count > 0:
@@ -188,11 +207,19 @@ def prompt_user_selection():
         }
         selected_defense = def_map.get(def_choice, "auto")
 
-    # 7. Pipeline Execution Mode Selection
+    # 7. Re-Test & Comparison Selection (M8)
+    enable_retest_str = input("\nEnable M8 Re-Test & Comparison Engine? [Y/n]: ").strip().lower() or "y"
+    enable_retest = enable_retest_str in ["y", "yes", "true", "1"]
+
+    # 8. Report Generator Selection (M9)
+    enable_report_str = input("\nEnable M9 Security Report Generator Engine? [Y/n]: ").strip().lower() or "y"
+    enable_report = enable_report_str in ["y", "yes", "true", "1"]
+
+    # 9. Pipeline Execution Mode Selection
     print("\nExecution Modes:")
     print("  1. Baseline Only (M1 → M2)")
     print("  2. Attack Assessment (M1 → M2 → M3 → M2_Adv → M5)")
-    print("  3. Full Security Assessment (M1 → M2 → M3 → M2_Adv → M5 → M6 / M7)")
+    print("  3. Full Security Assessment (M1 → M2 → M3 → M2_Adv → M5 → M6 / M7 / M8 / M9)")
     mode_choice = input("Select mode [3]: ").strip() or "3"
     mode_map = {
         "1": "baseline_only",
@@ -201,7 +228,7 @@ def prompt_user_selection():
     }
     selected_mode = mode_map.get(mode_choice, "full")
 
-    # 8. Device Selection
+    # 10. Device Selection
     cuda_available = torch.cuda.is_available()
     print("\nTarget Execution Device:")
     print("  1. CPU")
@@ -223,8 +250,11 @@ def prompt_user_selection():
         "xai_techniques": selected_xai,
         "enable_hardening": enable_hardening,
         "defense": selected_defense,
+        "enable_retest": enable_retest,
+        "enable_report": enable_report,
         "mode": selected_mode,
         "device": selected_device,
+        "output_dir": "results/orchestration",
     }
 
 
@@ -240,6 +270,9 @@ def print_summary_box(opts: dict):
     print(f"Selected Attacks:       {', '.join(opts['attacks']).upper()}")
     print(f"XAI Enabled:            {opts['enable_xai']} {opts['xai_techniques'] if opts['enable_xai'] else ''}")
     print(f"Hardening Enabled:      {opts['enable_hardening']} (Defense: {opts['defense'] if opts['enable_hardening'] else 'N/A'})")
+    print(f"M8 Re-Test Enabled:     {opts['enable_retest']}")
+    print(f"M9 Report Enabled:      {opts['enable_report']}")
+    print(f"Output Directory:       {opts.get('output_dir', 'results/orchestration')}")
     print("=" * 70)
 
 
@@ -269,6 +302,9 @@ def main():
             "xai_techniques": [t.lower() for t in args.xai_techniques],
             "enable_hardening": args.enable_hardening,
             "defense": args.defense.lower(),
+            "enable_retest": args.enable_retest,
+            "enable_report": args.enable_report,
+            "output_dir": args.output_dir,
             "mode": args.mode.lower(),
             "device": args.device.lower(),
         }
@@ -300,13 +336,14 @@ def main():
 
     # 2. Setup Dataset Loader for sample count
     split_str = f"test[:{opts['samples']}]"
-    print(f"[2/3] Loading dataset split '{split_str}' from '{dataset_name}'...")
+    batch_size = min(32, opts["samples"]) if opts["samples"] > 0 else 32
+    print(f"[2/3] Loading dataset split '{split_str}' from '{dataset_name}' (batch size: {batch_size})...")
     try:
         dataset_loader = GTSRBDatasetLoader(
             dataset_name=dataset_name,
             processor_name=model_name,
             split=split_str,
-            batch_size=opts["samples"],
+            batch_size=batch_size,
         )
     except Exception as e:
         print(f"  ❌ Error loading dataset '{dataset_name}': {e}")
@@ -325,8 +362,10 @@ def main():
         xai_techniques=opts["xai_techniques"],
         enable_hardening=opts["enable_hardening"],
         defense=opts["defense"],
-        enable_retest=opts["enable_hardening"],
-        enable_report=True,
+        enable_retest=opts["enable_retest"],
+        enable_report=opts["enable_report"],
+        output_dir=opts["output_dir"],
+        batch_size=batch_size,
         custom_dataset_loader=dataset_loader,
     )
 
