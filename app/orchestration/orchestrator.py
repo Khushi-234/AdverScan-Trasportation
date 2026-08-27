@@ -362,7 +362,7 @@ class AdverScanOrchestrator:
                 report_res = report_gen.generate(report_data)
 
                 writer = ReportWriter()
-                written_files = writer.write(report_res, formats=["md", "json", "csv"])
+                written_files = writer.write(report_res, formats=["md"])
                 
                 result.report_result = report_res.to_dict()
 
