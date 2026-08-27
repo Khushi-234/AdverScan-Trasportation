@@ -1,42 +1,92 @@
 """
-DTO dataclass for Module 9 (Report Generator) in AdverScan.
+ReportResult — Output DTO for the AdverScan Report Generator (Module 9).
 
-Stores the generated security report content, aggregated sections, recommendations,
-formatted text output, and metadata.
+Holds the fully generated, 15-section security report and provides
+serialization helpers (JSON, Markdown text).
 """
 
-from dataclasses import asdict, dataclass, field
+from __future__ import annotations
+
+from dataclasses import dataclass, field
 import json
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
+
+from .execution_summary import ExecutionSummary
 
 
 @dataclass
 class ReportResult:
     """
-    Data Transfer Object for the generated AdverScan Security Report.
+    Generated AdverScan Security Report DTO.
+
+    Contains all 15 report sections and provides serialization to
+    JSON and formatted text (Markdown).
     """
 
+    # Report identity
     report_id: str
     timestamp: str
     status: str = "SUCCESS"
+    scan_id: Optional[str] = None
+
+    # Section 1: Executive Summary
+    executive_summary: Dict[str, Any] = field(default_factory=dict)
+
+    # Section 2: Model Information
     model_info: Dict[str, Any] = field(default_factory=dict)
+
+    # Section 3: Dataset / Evaluation Configuration
+    dataset_config: Dict[str, Any] = field(default_factory=dict)
+
+    # Section 4: Baseline Performance
     baseline_performance: Dict[str, Any] = field(default_factory=dict)
+
+    # Section 5: Adversarial Attack Results
     attack_results: Dict[str, Any] = field(default_factory=dict)
+
+    # Section 6: Vulnerability Assessment
     vulnerability_metrics: Dict[str, Any] = field(default_factory=dict)
+
+    # Section 7: Vulnerability Score + Risk Level
     vulnerability_score: Optional[float] = None
     risk_level: str = "UNKNOWN"
+
+    # Section 8: MITRE ATLAS Mapping
+    mitre_atlas_mapping: Dict[str, Any] = field(default_factory=dict)
+
+    # Section 9: XAI Findings
     xai_findings: Dict[str, Any] = field(default_factory=dict)
+
+    # Section 10: Hardening
     hardening_results: Dict[str, Any] = field(default_factory=dict)
+
+    # Section 11: Re-Test Results
+    retest_results: Dict[str, Any] = field(default_factory=dict)
+
+    # Section 12: Before vs After Comparison
     before_vs_after: Dict[str, Any] = field(default_factory=dict)
+
+    # Section 13: Execution Performance
+    execution_summary: Optional[ExecutionSummary] = None
+
+    # Section 14: Recommendations
     recommendations: List[str] = field(default_factory=list)
-    summary: Dict[str, Any] = field(default_factory=dict)
+
+    # Section 15: Final Security Summary
+    final_security_summary: Dict[str, Any] = field(default_factory=dict)
+
+    # Formatted report string (Markdown)
     formatted_report: str = ""
+
+    # Arbitrary metadata
     metadata: Dict[str, Any] = field(default_factory=dict)
+
+    # ── Serialization ─────────────────────────────────────────────────────────
 
     @staticmethod
     def _sanitize(obj: Any) -> Any:
-        """Recursively convert PyTorch tensors, NumPy types, and non-serializable objects to JSON primitives."""
+        """Recursively convert non-JSON-serializable objects to primitives."""
         if obj is None or isinstance(obj, (int, float, str, bool)):
             return obj
         if hasattr(obj, "item") and callable(getattr(obj, "item")):
@@ -58,33 +108,47 @@ class ReportResult:
         return str(obj)
 
     def to_dict(self) -> Dict[str, Any]:
-        """Convert ReportResult object to a dictionary representation."""
-        raw_dict = asdict(self)
-        return self._sanitize(raw_dict)
+        """Convert ReportResult to a plain, JSON-safe dictionary."""
+        d = {
+            "report_id": self.report_id,
+            "timestamp": self.timestamp,
+            "status": self.status,
+            "scan_id": self.scan_id,
+            "executive_summary": self.executive_summary,
+            "model_info": self.model_info,
+            "dataset_config": self.dataset_config,
+            "baseline_performance": self.baseline_performance,
+            "attack_results": self.attack_results,
+            "vulnerability_metrics": self.vulnerability_metrics,
+            "vulnerability_score": self.vulnerability_score,
+            "risk_level": self.risk_level,
+            "mitre_atlas_mapping": self.mitre_atlas_mapping,
+            "xai_findings": self.xai_findings,
+            "hardening_results": self.hardening_results,
+            "retest_results": self.retest_results,
+            "before_vs_after": self.before_vs_after,
+            "execution_summary": (
+                self.execution_summary.to_dict() if self.execution_summary else None
+            ),
+            "recommendations": self.recommendations,
+            "final_security_summary": self.final_security_summary,
+            "metadata": self.metadata,
+        }
+        return self._sanitize(d)
 
     def to_json(self, indent: int = 2) -> str:
-        """Serialize ReportResult dictionary to JSON string."""
-        return json.dumps(self.to_dict(), indent=indent)
+        """Serialize to JSON string."""
+        return json.dumps(self.to_dict(), indent=indent, default=str)
 
     def save_json(self, output_path: Union[str, Path]) -> None:
-        """
-        Save report result dictionary as a JSON file.
-
-        Args:
-            output_path: Target file path to write JSON.
-        """
+        """Save as JSON file."""
         path = Path(output_path)
         path.parent.mkdir(parents=True, exist_ok=True)
         with open(path, "w", encoding="utf-8") as f:
-            json.dump(self.to_dict(), f, indent=2)
+            f.write(self.to_json())
 
     def save_text(self, output_path: Union[str, Path]) -> None:
-        """
-        Save formatted report string as a text/markdown file.
-
-        Args:
-            output_path: Target file path to write text/markdown report.
-        """
+        """Save formatted Markdown report as text file."""
         path = Path(output_path)
         path.parent.mkdir(parents=True, exist_ok=True)
         with open(path, "w", encoding="utf-8") as f:
