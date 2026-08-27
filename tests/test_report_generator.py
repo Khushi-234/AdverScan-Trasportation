@@ -5,7 +5,14 @@ Unit and integration tests for Module 9 (Report Generator) in AdverScan.
 import json
 import pytest
 
-from app.report_generator import ReportData, ReportResult, ReportGenerator
+from app.report_generator import (
+    ReportData,
+    ReportResult,
+    ReportGenerator,
+    ReportWriter,
+    ExecutionSummary,
+    ModuleExecutionRecord,
+)
 
 
 def test_report_data_creation_and_dict_conversion():
@@ -109,7 +116,15 @@ def test_report_generator_full_pipeline(tmp_path):
 
     with open(text_path, "r", encoding="utf-8") as f:
         loaded_text = f.read()
-        assert "ADVERSCAN SECURITY REPORT" in loaded_text
+        # New 15-section header
+        assert "ADVERSCAN SECURITY ASSESSMENT REPORT" in loaded_text
+        assert "1. EXECUTIVE SUMMARY" in loaded_text
+        assert "5. ADVERSARIAL ATTACK RESULTS" in loaded_text
+        assert "7. VULNERABILITY SCORE" in loaded_text
+        assert "8. MITRE ATLAS MAPPING" in loaded_text
+        assert "13. EXECUTION PERFORMANCE" in loaded_text
+        assert "14. RECOMMENDATIONS" in loaded_text
+        assert "15. FINAL SECURITY SUMMARY" in loaded_text
 
 
 def test_report_data_from_orchestration_and_retest():
@@ -156,3 +171,69 @@ def test_report_data_from_orchestration_and_retest():
     res = generator.generate(report_data)
     assert res.risk_level == "HIGH"
     assert res.vulnerability_score == 60.0
+
+
+def test_report_writer(tmp_path):
+    """Test that ReportWriter persists reports in all formats."""
+    sample_data = ReportData(
+        model_info={"model_name": "WriterTestModel"},
+        baseline_performance={"metrics": {"accuracy": 0.88}},
+        attack_results={
+            "fgsm": {"parameters": {"eps": 0.05},
+                     "evaluation": {"metrics": {"attack_success_rate": 0.65}}},
+        },
+        vulnerability_score=55.0,
+        risk_level="HIGH",
+    )
+
+    # Add a synthetic execution summary
+    exec_sum = ExecutionSummary(
+        run_label="WriterTest",
+        run_timestamp="2026-08-27 12:00:00",
+        total_elapsed_seconds=42.5,
+        modules=[
+            ModuleExecutionRecord(
+                module_id="M1", module_name="M1 Model Ingestion",
+                status="SUCCESS", elapsed_seconds=3.1,
+                metrics={"framework": "PyTorch"},
+            ),
+            ModuleExecutionRecord(
+                module_id="M2_baseline", module_name="M2 Baseline Evaluation",
+                status="SUCCESS", elapsed_seconds=12.4,
+                metrics={"accuracy": 0.88},
+            ),
+        ],
+    )
+    sample_data.execution_summary = exec_sum
+
+    generator = ReportGenerator()
+    result = generator.generate(sample_data)
+
+    # Write report
+    writer = ReportWriter(output_root=tmp_path / "reports")
+    paths = writer.write(result, formats=["md", "json", "csv"])
+
+    assert "md" in paths
+    assert "json" in paths
+    assert "csv" in paths
+
+    # Verify Markdown content
+    with open(paths["md"], "r", encoding="utf-8") as f:
+        md_text = f.read()
+    assert "ADVERSCAN SECURITY ASSESSMENT REPORT" in md_text
+    assert "13. EXECUTION PERFORMANCE" in md_text
+    assert "M1 Model Ingestion" in md_text
+
+    # Verify JSON structure
+    with open(paths["json"], "r", encoding="utf-8") as f:
+        j = json.load(f)
+    assert j["report_id"] == result.report_id
+    assert j["risk_level"] == "HIGH"
+    assert j["execution_summary"] is not None
+
+    # Verify CSV has header + module rows
+    with open(paths["csv"], "r", encoding="utf-8") as f:
+        csv_text = f.read()
+    assert "module_id" in csv_text
+    assert "M1" in csv_text
+    assert "M2_baseline" in csv_text
