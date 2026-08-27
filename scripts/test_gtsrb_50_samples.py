@@ -13,6 +13,7 @@ from transformers import AutoModelForImageClassification, ViTConfig
 from app.ingestion import ingest_model
 from app.evaluation.dataset_loader import GTSRBDatasetLoader
 from app.evaluation.evaluator import BaselineEvaluator
+from app.utils import load_gtsrb_vit_model
 
 
 def main():
@@ -25,24 +26,11 @@ def main():
     num_classes = 43
     num_samples_target = 50
 
-    # 1. Patch config (fixes upstream null in id2label['43']) & load cached HF ViT model
+    # 1. Load cached HF ViT model via central model_utils
     print("\n[1/3] Ingesting Model via Module 1 (M1) contract on CPU ...")
     start_time = time.time()
 
-    config_path = hf_hub_download(model_name, "config.json")
-    with open(config_path, "r", encoding="utf-8") as f:
-        cfg_dict = json.load(f)
-
-    if "id2label" in cfg_dict:
-        cfg_dict["id2label"] = {
-            str(k): (str(v) if v is not None else "Unused")
-            for k, v in cfg_dict["id2label"].items()
-        }
-        cfg_dict["label2id"] = {v: int(k) for k, v in cfg_dict["id2label"].items()}
-        cfg_dict["num_labels"] = len(cfg_dict["id2label"])
-
-    model_config = ViTConfig.from_dict(cfg_dict)
-    raw_model = AutoModelForImageClassification.from_pretrained(model_name, config=model_config, use_safetensors=True)
+    raw_model, model_config = load_gtsrb_vit_model(model_name)
 
     # Ingest model through M1 contract
     sample_input = torch.randn(1, 3, 224, 224)
