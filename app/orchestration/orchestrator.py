@@ -2,6 +2,7 @@
 Central AdverScanOrchestrator coordinator module for Module 8 (Orchestration).
 """
 
+from app.report_generator import ReportWriter
 from datetime import datetime
 import time
 from typing import Any, Dict, List, Optional
@@ -275,6 +276,83 @@ class AdverScanOrchestrator:
                 result.status = "PARTIAL_SUCCESS"
                 result.errors.append({
                     "module": "M7_hardening",
+                    "error_type": type(e).__name__,
+                    "message": str(e),
+                    "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                })
+
+        # Step 8: M8 Re-Test & Comparison Engine (Optional / Post-Hardening)
+        retest_res_obj = None
+        if config.enable_hardening and config.enable_retest and result.hardening_results:
+            step_start = time.time()
+            print("\n  ⏳ [Step 8/9] M8 Re-Test & Comparison Engine...")
+            try:
+                retest_engine = RetestEngine()
+                hardened_model_obj = result.hardening_results.get("hardened_model") or adapter.get_model()
+                retest_res_obj = retest_engine.retest(
+                    hardened_model=hardened_model_obj,
+                    dataset_loader=dataset_loader,
+                    attacks=config.attacks,
+                    before_baseline_result=baseline_result,
+                    before_vulnerability_analysis=result.vulnerability_analysis,
+                    attack_configs=config.attack_configs,
+                    before_attack_results=result.attack_results,
+                    num_classes=config.num_classes,
+                    model_name=config.model_name,
+                    device=config.device,
+                    batch_size=config.batch_size,
+                )
+                result.retest_results = retest_res_obj.to_dict()
+                print(f"  ✔ M8 Re-Test Completed ({time.time() - step_start:.2f}s)")
+            except Exception as e:
+                print(f"  ❌ M8 Re-Test Failed ({time.time() - step_start:.2f}s)")
+                result.status = "PARTIAL_SUCCESS"
+                result.errors.append({
+                    "module": "M8_retest",
+                    "error_type": type(e).__name__,
+                    "message": str(e),
+                    "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                })
+
+        # Step 9: M9 Security Report Generator
+        if config.enable_report:
+            step_start = time.time()
+            print("\n  ⏳ [Step 9/9] M9 Security Report Generator...", end="", flush=True)
+            try:
+                report_data = ReportData.from_orchestration_and_retest(
+                    orchestration_result=result,
+                    retest_result=retest_res_obj,
+                )
+                report_gen = ReportGenerator()
+                report_res = report_gen.generate(report_data)
+
+                writer = ReportWriter()
+                written_files = writer.write(report_res, formats=["md", "json", "csv"])
+                
+                result.report_result = report_res.to_dict()
+
+                if config.output_dir:
+                    report_res.save_json(f"{config.output_dir}/security_report.json")
+                    report_res.save_text(f"{config.output_dir}/security_report.txt")
+                print(f" Done ({time.time() - step_start:.2f}s)")
+            except Exception as e:
+                print(f" Failed ({time.time() - step_start:.2f}s)")
+                result.status = "PARTIAL_SUCCESS"
+                result.errors.append({
+                    "module": "M9_report_generator",
+                    "error_type": type(e).__name__,
+                    "message": str(e),
+                    "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                })
+                result.report_result = report_res.to_dict()
+
+                if config.output_dir:
+                    report_res.save_json(f"{config.output_dir}/security_report.json")
+                    report_res.save_text(f"{config.output_dir}/security_report.txt")
+            except Exception as e:
+                result.status = "PARTIAL_SUCCESS"
+                result.errors.append({
+                    "module": "M9_report_generator",
                     "error_type": type(e).__name__,
                     "message": str(e),
                     "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
