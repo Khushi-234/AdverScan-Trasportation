@@ -1,18 +1,26 @@
 """
 Module 9 — Report Generator package for AdverScan.
 
-Exposes the public reporting interface and DTOs:
-- ReportGenerator: Coordinator for generating security reports.
-- ReportData: Input data contract aggregating M1-M8 outputs.
-- ReportResult: DTO for generated reports, JSON/text outputs, and recommendations.
+Public API:
+    ReportData          — Structured input data contract (M1–M8 + execution).
+    ReportGenerator     — 15-section report coordinator.
+    ReportResult        — Generated report DTO with serialization helpers.
+    ReportWriter        — Persists reports to reports/<scan_id>/ on disk.
+    ExecutionSummary    — Per-module timing and status container (section 13).
+    ModuleExecutionRecord — Single module execution record.
 """
 
+from .execution_summary import ExecutionSummary, ModuleExecutionRecord
 from .report_data import ReportData
 from .report_generator import ReportGenerator
 from .report_result import ReportResult
+from .report_writer import ReportWriter
 
 __all__ = [
-    "ReportGenerator",
+    "ExecutionSummary",
+    "ModuleExecutionRecord",
     "ReportData",
+    "ReportGenerator",
     "ReportResult",
+    "ReportWriter",
 ]
