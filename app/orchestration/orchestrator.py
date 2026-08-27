@@ -18,6 +18,8 @@ from app.attack_engine.models import AttackResult, AttackResults
 from app.vulnerability_analysis.vulnerability_engine import VulnerabilityEngine
 from app.explainability.explainer import XAIExplainer
 from app.hardening.hardening_engine import HardeningEngine
+from app.retest.retest_engine import RetestEngine
+from app.report_generator import ReportData, ReportGenerator
 from app.orchestration.dataset_adapter import InMemoryDatasetLoader
 from app.orchestration.orchestration_result import OrchestrationResult
 from app.orchestration.pipeline_config import PipelineConfig
@@ -50,7 +52,14 @@ class AdverScanOrchestrator:
             timestamp=timestamp,
         )
 
+        device_info = f"Device: {config.device.upper()}"
+        if config.device.lower() == "cuda" and torch.cuda.is_available():
+            device_info += f" ({torch.cuda.get_device_name(0)})"
+        print(f"▶ [Pipeline Init] Starting AdverScan Pipeline | Mode: {mode.upper()} | {device_info}")
+
         # Step 1: M1 Model Ingestion
+        step_start = time.time()
+        print("  ⏳ [Step 1/9] M1 Model Ingestion...", end="", flush=True)
         try:
             adapter, metadata = ingest_model(
                 model_path=config.model_path,
@@ -61,7 +70,9 @@ class AdverScanOrchestrator:
                 task_type=config.task_type,
             )
             result.model_metadata = metadata.to_dict() if hasattr(metadata, "to_dict") else metadata
+            print(f" Done ({time.time() - step_start:.2f}s)")
         except Exception as e:
+            print(f" Failed ({time.time() - step_start:.2f}s)")
             result.status = "FAILED"
             result.errors.append({
                 "module": "M1_ingestion",
@@ -73,6 +84,8 @@ class AdverScanOrchestrator:
             return result
 
         # Step 2: M2 Baseline Evaluation
+        step_start = time.time()
+        print("\n  ⏳ [Step 2/9] M2 Baseline Clean Evaluation...")
         try:
             if config.custom_dataset_loader is not None:
                 dataset_loader = config.custom_dataset_loader
@@ -90,9 +103,11 @@ class AdverScanOrchestrator:
                 num_classes=config.num_classes,
                 model_name=config.model_name,
             )
-            baseline_result: EvaluationResult = baseline_evaluator.evaluate(output_dir=None)
+            baseline_result: EvaluationResult = baseline_evaluator.evaluate(output_dir=None, show_progress=True)
             result.baseline_evaluation = baseline_result.to_dict()
+            print(f"  ✔ M2 Clean Evaluation Completed ({time.time() - step_start:.2f}s) — Accuracy: {baseline_result.accuracy*100:.2f}%")
         except Exception as e:
+            print(f"  ❌ M2 Clean Evaluation Failed ({time.time() - step_start:.2f}s)")
             result.status = "FAILED"
             result.errors.append({
                 "module": "M2_baseline_evaluation",
@@ -127,11 +142,15 @@ class AdverScanOrchestrator:
         inputs, labels = sample_batch
 
         # Step 3: M3 Attack Engine Execution
+        step_start = time.time()
+        print(f"\n  ⏳ [Step 3/9] M3 Attack Engine Execution ({', '.join(config.attacks).upper()})...")
         attack_engine = AttackEngine(adapter)
         attack_results_coll = AttackResults()
         adv_evaluations_dict: Dict[str, EvaluationResult] = {}
 
         for attack_name in config.attacks:
+            atk_start = time.time()
+            print(f"    ▶ Executing attack '{attack_name.upper()}'...", end="", flush=True)
             atk_cfg_raw = config.attack_configs.get(attack_name.lower())
             atk_config_obj = None
             if isinstance(atk_cfg_raw, AttackConfig):
@@ -153,7 +172,9 @@ class AdverScanOrchestrator:
                     "execution_time_seconds": atk_res.metadata.execution_time_seconds,
                     "parameters": atk_res.metadata.parameters,
                 }
+                print(f" Done ({time.time() - atk_start:.2f}s)")
             except Exception as e:
+                print(f" Failed ({time.time() - atk_start:.2f}s)")
                 result.status = "PARTIAL_SUCCESS"
                 result.errors.append({
                     "module": "M3_attack_engine",
@@ -179,7 +200,7 @@ class AdverScanOrchestrator:
                     num_classes=config.num_classes,
                     model_name=config.model_name,
                 )
-                adv_eval_res: EvaluationResult = adv_evaluator.evaluate(output_dir=None)
+                adv_eval_res: EvaluationResult = adv_evaluator.evaluate(output_dir=None, show_progress=False)
                 adv_evaluations_dict[attack_name] = adv_eval_res
                 result.adversarial_evaluations[attack_name] = adv_eval_res.to_dict()
             except Exception as e:
@@ -198,6 +219,8 @@ class AdverScanOrchestrator:
             return result
 
         # Step 5: M5 Vulnerability Analysis
+        step_start = time.time()
+        print("  ⏳ [Step 5/9] M5 Vulnerability Analysis...", end="", flush=True)
         try:
             vuln_engine = VulnerabilityEngine()
             vuln_out = vuln_engine.analyze_pipeline(
@@ -210,7 +233,9 @@ class AdverScanOrchestrator:
                     "assessment": atk_v["assessment"].to_dict(),
                     "scoring": atk_v["scoring"].to_dict(),
                 }
+            print(f" Done ({time.time() - step_start:.2f}s)")
         except Exception as e:
+            print(f" Failed ({time.time() - step_start:.2f}s)")
             result.status = "PARTIAL_SUCCESS"
             result.errors.append({
                 "module": "M5_vulnerability_analysis",
@@ -225,12 +250,16 @@ class AdverScanOrchestrator:
 
         # Step 6: M6 XAI Explainability (Optional)
         if config.enable_xai:
+            step_start = time.time()
+            print(f"\n  ⏳ [Step 6/9] M6 XAI Explainability ({', '.join(config.xai_techniques)})...")
             try:
                 xai_explainer = XAIExplainer()
                 for atk_name, atk_res in attack_results_coll.items():
                     vuln_info = result.vulnerability_analysis.get(atk_name, {})
                     assess_res = vuln_info.get("assessment")
                     for tech in config.xai_techniques:
+                        xai_start = time.time()
+                        print(f"    ▶ Computing {tech.upper()} explanation for attack '{atk_name.upper()}'...", end="", flush=True)
                         exp_res = xai_explainer.explain_attack_result(
                             model=adapter,
                             attack_result=atk_res,
@@ -238,7 +267,9 @@ class AdverScanOrchestrator:
                             technique=tech,
                         )
                         result.xai_results[f"{atk_name}_{tech}"] = exp_res.to_dict()
+                        print(f" Done ({time.time() - xai_start:.2f}s)")
             except Exception as e:
+                print(f"  ❌ M6 XAI Explainability Error ({time.time() - step_start:.2f}s)")
                 result.status = "PARTIAL_SUCCESS"
                 result.errors.append({
                     "module": "M6_explainability",
@@ -249,6 +280,8 @@ class AdverScanOrchestrator:
 
         # Step 7: M7 Hardening Engine (Optional)
         if config.enable_hardening:
+            step_start = time.time()
+            print(f"\n  ⏳ [Step 7/9] M7 Hardening Engine (Defense: '{config.defense}')...", end="", flush=True)
             try:
                 hardening_engine = HardeningEngine()
                 raw_model = adapter.get_model()
@@ -272,7 +305,9 @@ class AdverScanOrchestrator:
                     defense_config=config.defense_config,
                 )
                 result.hardening_results = hard_res.to_dict()
+                print(f" Done ({time.time() - step_start:.2f}s)")
             except Exception as e:
+                print(f" Failed ({time.time() - step_start:.2f}s)")
                 result.status = "PARTIAL_SUCCESS"
                 result.errors.append({
                     "module": "M7_hardening",

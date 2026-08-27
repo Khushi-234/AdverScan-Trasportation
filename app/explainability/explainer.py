@@ -58,7 +58,7 @@ class XAIExplainer:
         else:
             raise TypeError(f"Unsupported input type: {type(inputs)}")
 
-        if hasattr(model, "predict"):
+        if hasattr(model, "predict") and callable(getattr(model, "predict")):
             outputs = model.predict(t_input)
         elif callable(model):
             model_eval = model.eval() if hasattr(model, "eval") else model

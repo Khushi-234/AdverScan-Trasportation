@@ -19,6 +19,7 @@ from app.ingestion import ingest_model
 from app.evaluation.dataset_loader import GTSRBDatasetLoader
 from app.evaluation.metrics import MetricsCalculator
 from app.attack_engine import execute_attack, AttackConfig, get_attack
+from app.utils import get_execution_device_info, load_gtsrb_vit_model
 
 load_dotenv()
 
@@ -40,15 +41,11 @@ def main():
     dataset_name = "bazyl/GTSRB"
     num_classes = 43
 
-    # 1. Device Setup
-    if args.device:
-        device = args.device
-        gpu_available = torch.cuda.is_available() and device.startswith("cuda")
-    else:
-        gpu_available = torch.cuda.is_available()
-        device = "cuda" if gpu_available else "cpu"
-
-    gpu_model = torch.cuda.get_device_name(0) if torch.cuda.is_available() else "N/A"
+    # 1. Device Setup via central utils
+    dev_info = get_execution_device_info(args.device)
+    gpu_available = dev_info["gpu_available"]
+    device = dev_info["device_str"]
+    gpu_model = dev_info["gpu_model"]
 
     print("=" * 64)
     print("AdverScan — GTSRB Adversarial Attack Evaluation")
@@ -63,30 +60,14 @@ def main():
     print(f"Samples:            {args.samples}")
     print(f"Batch Size:         {args.batch_size}")
 
-    if not gpu_available and device.startswith("cuda"):
+    if not gpu_available and args.device and args.device.startswith("cuda"):
         print("⚠️ WARNING: CUDA is unavailable. Falling back to CPU.")
-        device = "cpu"
 
-    # 2. Patch config & load cached HF ViT model with use_safetensors=True
+    # 2. Load cached HF ViT model via central model_utils
     print(f"\n[1/3] Ingesting Model via Module 1 (M1) contract on {device} ...")
     start_time = time.time()
 
-    config_path = hf_hub_download(model_name, "config.json")
-    with open(config_path, "r", encoding="utf-8") as f:
-        cfg_dict = json.load(f)
-
-    if "id2label" in cfg_dict:
-        cfg_dict["id2label"] = {
-            str(k): (str(v) if v is not None else "Unused")
-            for k, v in cfg_dict["id2label"].items()
-        }
-        cfg_dict["label2id"] = {v: int(k) for k, v in cfg_dict["id2label"].items()}
-        cfg_dict["num_labels"] = len(cfg_dict["id2label"])
-
-    model_config = ViTConfig.from_dict(cfg_dict)
-    raw_model = AutoModelForImageClassification.from_pretrained(
-        model_name, config=model_config, use_safetensors=True
-    )
+    raw_model, model_config = load_gtsrb_vit_model(model_name)
 
     # Ingest model through M1 contract
     sample_input = torch.randn(1, 3, 224, 224)

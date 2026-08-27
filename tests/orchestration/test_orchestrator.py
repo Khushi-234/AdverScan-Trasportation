@@ -120,6 +120,9 @@ def test_orchestrator_full_pipeline(dummy_setup):
     assert "fgsm" in res.vulnerability_analysis
     assert res.hardening_results is not None
     assert res.hardening_results["success"] is True
+    assert res.retest_results is not None
+    assert res.report_result is not None
+    assert res.report_result["status"] == "SUCCESS"
 
 
 def test_orchestrator_fatal_m1_failure():

@@ -48,12 +48,15 @@ class BaselineEvaluator:
         self,
         output_dir: Optional[Union[str, Path]] = "results/baseline",
         log_mlflow: bool = False,
+        show_progress: bool = True,
     ) -> EvaluationResult:
         """
         Run baseline evaluation over full dataset split.
 
         Args:
             output_dir: Optional directory to save evaluation result JSON artifact.
+            log_mlflow: Whether to log metrics to MLflow.
+            show_progress: Whether to display a progress bar for batch evaluation.
 
         Returns:
             EvaluationResult dataclass containing full metrics.
@@ -64,32 +67,58 @@ class BaselineEvaluator:
         all_preds: list[int] = []
         all_probs_list: list[np.ndarray] = []
 
-        # Batch inference loop
-        for batch_pixels, batch_targets, _ in self.dataset_loader.iterate_batches():
-            # Perform inference using M1 adapter
-            outputs = self.adapter.predict(batch_pixels)
-            
-            # Support HuggingFace model outputs (ImageClassifierOutput)
-            if hasattr(outputs, "logits"):
-                outputs = outputs.logits
+        # Determine total batches for progress display
+        total_batches = None
+        if hasattr(self.dataset_loader, "__len__"):
+            try:
+                total_batches = len(self.dataset_loader)
+            except Exception:
+                total_batches = None
 
-            # Convert to PyTorch Tensor if outputs are NumPy array
-            if isinstance(outputs, np.ndarray):
-                logits_tensor = torch.from_numpy(outputs)
-            else:
-                logits_tensor = outputs
+        batch_iter = self.dataset_loader.iterate_batches()
+        if show_progress:
+            try:
+                from tqdm import tqdm
+                batch_iter = tqdm(
+                    batch_iter,
+                    total=total_batches,
+                    desc=f"  Evaluating {self.dataset_loader.dataset_name}",
+                    unit="batch",
+                    leave=False,
+                )
+            except ImportError:
+                pass
 
-            # Slice logits to active target classes (e.g. 44 -> 43 for ViT GTSRB)
-            if logits_tensor.shape[-1] > self.num_classes:
-                logits_tensor = logits_tensor[:, : self.num_classes]
+        # Batch inference loop with torch.no_grad() to prevent VRAM memory accumulation
+        with torch.no_grad():
+            for batch_pixels, batch_targets, _ in batch_iter:
+                # Perform inference using M1 adapter
+                outputs = self.adapter.predict(batch_pixels)
+                
+                # Support HuggingFace model outputs (ImageClassifierOutput)
+                if hasattr(outputs, "logits"):
+                    outputs = outputs.logits
 
-            # Compute probabilities & predictions
-            probs_tensor = torch.softmax(logits_tensor, dim=-1)
-            preds_tensor = torch.argmax(probs_tensor, dim=-1)
+                # Convert to PyTorch Tensor if outputs are NumPy array
+                if isinstance(outputs, np.ndarray):
+                    logits_tensor = torch.from_numpy(outputs)
+                else:
+                    logits_tensor = outputs
 
-            all_targets.extend(batch_targets.cpu().numpy().tolist())
-            all_preds.extend(preds_tensor.cpu().numpy().tolist())
-            all_probs_list.append(probs_tensor.cpu().numpy())
+                # Slice logits to active target classes (e.g. 44 -> 43 for ViT GTSRB)
+                if logits_tensor.shape[-1] > self.num_classes:
+                    logits_tensor = logits_tensor[:, : self.num_classes]
+
+                # Compute probabilities & predictions
+                probs_tensor = torch.softmax(logits_tensor, dim=-1)
+                preds_tensor = torch.argmax(probs_tensor, dim=-1)
+
+                all_targets.extend(batch_targets.cpu().numpy().tolist())
+                all_preds.extend(preds_tensor.cpu().numpy().tolist())
+                all_probs_list.append(probs_tensor.cpu().numpy())
+
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
 
         y_true = np.array(all_targets, dtype=np.int64)
         y_pred = np.array(all_preds, dtype=np.int64)

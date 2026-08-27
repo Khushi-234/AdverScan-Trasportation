@@ -44,6 +44,12 @@ class PipelineConfig:
     defense: str = "auto"
     defense_config: Dict[str, Any] = field(default_factory=dict)
 
+    # Re-Test & Comparison Configuration (M8)
+    enable_retest: bool = True
+
+    # Report Generator Configuration (M9)
+    enable_report: bool = True
+
     # Output Configuration
     output_dir: Optional[str] = "results/orchestration"
 
