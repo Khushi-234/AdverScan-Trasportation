@@ -24,11 +24,12 @@ from app.attack_engine import (
     select_attacks,
     list_attacks,
 )
+from app.utils import resolve_device, load_gtsrb_vit_model
 
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="AdverScan Generalized GTSRB Baseline & Adversarial Attack Integration Test"
+        description="AdverScan Generalized GTSRB Baseline & Multi-Attack Evaluation Integration Test"
     )
     parser.add_argument(
         "--attack",
@@ -70,11 +71,8 @@ def main():
     dataset_name = "bazyl/GTSRB"
     num_classes = 43
 
-    # Device selection
-    if args.device:
-        device = args.device
-    else:
-        device = "cuda" if torch.cuda.is_available() else "cpu"
+    # Device selection using central utils
+    device = resolve_device(args.device)
 
     print("=" * 70)
     print("AdverScan — Generalized GTSRB Baseline & Multi-Attack Evaluation")
@@ -97,26 +95,11 @@ def main():
     else:
         selected_attack_classes = select_attacks(args.attack.lower())
 
-    # 2. Patch config & load HF ViT model via Module 1 ingest_model()
+    # 2. Load model via central model_utils and ingest via Module 1
     print(f"\n[1/4] Ingesting Model via Module 1 (M1) contract on {device} ...")
     start_time = time.time()
 
-    config_path = hf_hub_download(model_name, "config.json")
-    with open(config_path, "r", encoding="utf-8") as f:
-        cfg_dict = json.load(f)
-
-    if "id2label" in cfg_dict:
-        cfg_dict["id2label"] = {
-            str(k): (str(v) if v is not None else "Unused")
-            for k, v in cfg_dict["id2label"].items()
-        }
-        cfg_dict["label2id"] = {v: int(k) for k, v in cfg_dict["id2label"].items()}
-        cfg_dict["num_labels"] = len(cfg_dict["id2label"])
-
-    model_config = ViTConfig.from_dict(cfg_dict)
-    raw_model = AutoModelForImageClassification.from_pretrained(
-        model_name, config=model_config, use_safetensors=True
-    )
+    raw_model, model_config = load_gtsrb_vit_model(model_name)
 
     # Ingest model through M1 contract
     sample_input = torch.randn(1, 3, 224, 224)

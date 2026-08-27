@@ -18,6 +18,7 @@ from transformers import AutoModelForImageClassification, ViTConfig
 from app.attack_engine import discover_attacks, list_attacks
 from app.evaluation.dataset_loader import GTSRBDatasetLoader
 from app.orchestration import AdverScanOrchestrator, PipelineConfig
+from app.utils import resolve_device, get_execution_device_info, load_gtsrb_vit_model, patch_hf_config
 
 
 def parse_args():
@@ -201,18 +202,18 @@ def prompt_user_selection():
     }
     selected_mode = mode_map.get(mode_choice, "full")
 
-    # 8. Device Selection
-    cuda_available = torch.cuda.is_available()
+    # 10. Device Selection
+    dev_info = get_execution_device_info("auto")
     print("\nTarget Execution Device:")
-    print("  1. CPU")
-    if cuda_available:
-        print("  2. CUDA (GPU)")
-
-    dev_choice = input(f"Select device [1]: ").strip() or "1"
-    if dev_choice == "2" and cuda_available:
-        selected_device = "cuda"
+    if dev_info["gpu_available"]:
+        print(f"  1. Auto-detect [CUDA / GPU ({dev_info['gpu_model']})] (Default)")
+        print("  2. CPU")
     else:
-        selected_device = "cpu"
+        print("  1. Auto-detect [CPU (CUDA unavailable)] (Default)")
+        print("  2. CPU")
+
+    dev_choice = input("Select device [1]: ").strip() or "1"
+    selected_device = "cpu" if dev_choice == "2" else resolve_device("auto")
 
     return {
         "model_name": model_name,
@@ -270,7 +271,7 @@ def main():
             "enable_hardening": args.enable_hardening,
             "defense": args.defense.lower(),
             "mode": args.mode.lower(),
-            "device": args.device.lower(),
+            "device": resolve_device(args.device),
         }
         print_summary_box(opts)
 
@@ -281,19 +282,17 @@ def main():
 
     print(f"\n[1/3] Ingesting PyTorch model '{model_name}' on device '{device}'...")
     try:
-        config_path = hf_hub_download(model_name, "config.json")
-        with open(config_path, "r", encoding="utf-8") as f:
-            cfg_dict = json.load(f)
-
-        if "id2label" in cfg_dict:
-            cfg_dict["id2label"] = {str(k): (str(v) if v is not None else "Unused") for k, v in cfg_dict["id2label"].items()}
-            cfg_dict["label2id"] = {v: int(k) for k, v in cfg_dict["id2label"].items()}
-            cfg_dict["num_labels"] = len(cfg_dict["id2label"])
-
-        model_config = ViTConfig.from_dict(cfg_dict)
-        raw_model = AutoModelForImageClassification.from_pretrained(
-            model_name, config=model_config, use_safetensors=True
-        )
+        if model_name == "bazyl/gtsrb-model":
+            raw_model, model_config = load_gtsrb_vit_model(model_name)
+        else:
+            config_path = hf_hub_download(model_name, "config.json")
+            with open(config_path, "r", encoding="utf-8") as f:
+                cfg_dict = json.load(f)
+            cfg_dict = patch_hf_config(cfg_dict)
+            model_config = ViTConfig.from_dict(cfg_dict)
+            raw_model = AutoModelForImageClassification.from_pretrained(
+                model_name, config=model_config, use_safetensors=True
+            )
     except Exception as e:
         print(f"  ❌ Error loading model '{model_name}': {e}")
         sys.exit(1)

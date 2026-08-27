@@ -13,6 +13,8 @@ from datasets import load_dataset
 from huggingface_hub import hf_hub_download
 from transformers import AutoImageProcessor, AutoModelForImageClassification, ViTConfig
 
+from app.utils import load_gtsrb_vit_model
+
 # Load environment variables from .env if present
 load_dotenv()
 
@@ -57,23 +59,8 @@ def main():
     model_name = "bazyl/gtsrb-model"
     print(f"\n[STEP 4] Loading Model & Processor from: {model_name} ...")
 
-    # Load and patch config to fix upstream null value in id2label['43']
-    config_path = hf_hub_download(model_name, "config.json")
-    with open(config_path, "r", encoding="utf-8") as f:
-        cfg_dict = json.load(f)
-
-    # Upstream config fix: key '43' is null in JSON; replace with 'Unused' string label
-    if "id2label" in cfg_dict:
-        cfg_dict["id2label"] = {
-            str(k): (str(v) if v is not None else "Unused")
-            for k, v in cfg_dict["id2label"].items()
-        }
-        cfg_dict["label2id"] = {v: int(k) for k, v in cfg_dict["id2label"].items()}
-        cfg_dict["num_labels"] = len(cfg_dict["id2label"])
-
-    model_config = ViTConfig.from_dict(cfg_dict)
     processor = AutoImageProcessor.from_pretrained(model_name)
-    model = AutoModelForImageClassification.from_pretrained(model_name, config=model_config, use_safetensors=True)
+    model, model_config = load_gtsrb_vit_model(model_name)
     model.eval()
 
     print("\n--- Model Specifications ---")
