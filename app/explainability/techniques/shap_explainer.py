@@ -6,7 +6,7 @@ from typing import Any, Dict, Optional
 import numpy as np
 
 try:
-    import shap
+    import shap  # type: ignore
     _SHAP_AVAILABLE = True
 except ImportError:
     shap = None
@@ -149,11 +149,10 @@ class SHAPExplainer:
                     p_tensor = torch.from_numpy(x_patches).float().view(N, 1, gh, gw)
                     # Upsample patch mask to (N, 1, H, W)
                     mask = F.interpolate(p_tensor, size=(H, W), mode="nearest")
-                    # Broadcast mask over batch items
-                    if N == B:
-                        t_in = t_orig * mask
-                    else:
-                        t_in = t_orig.repeat(N // B, 1, 1, 1) * mask
+                    # Broadcast mask over batch items safely for any sample count N
+                    repeats = (N + B - 1) // B
+                    t_expanded = t_orig.repeat(repeats, 1, 1, 1)[:N]
+                    t_in = t_expanded * mask
                     return self._eval_model(model, t_in)
 
                 explainer = shap.KernelExplainer(predict_fn, flat_bg)

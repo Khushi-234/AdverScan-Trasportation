@@ -18,7 +18,6 @@ from app.attack_engine.models import AttackResult, AttackResults
 from app.vulnerability_analysis.vulnerability_engine import VulnerabilityEngine
 from app.explainability.explainer import XAIExplainer
 from app.hardening.hardening_engine import HardeningEngine
-from app.retest.retest_engine import RetestEngine
 from app.report_generator import ReportData, ReportGenerator
 from app.orchestration.dataset_adapter import InMemoryDatasetLoader
 from app.orchestration.orchestration_result import OrchestrationResult
@@ -322,6 +321,7 @@ class AdverScanOrchestrator:
             step_start = time.time()
             print("\n  ⏳ [Step 8/9] M8 Re-Test & Comparison Engine...")
             try:
+                from app.retest.retest_engine import RetestEngine
                 retest_engine = RetestEngine()
                 hardened_model_obj = result.hardening_results.get("hardened_model") or adapter.get_model()
                 retest_res_obj = retest_engine.retest(
