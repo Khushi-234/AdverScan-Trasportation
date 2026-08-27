@@ -2,6 +2,7 @@
 Central AdverScanOrchestrator coordinator module for Module 8 (Orchestration).
 """
 
+from app.report_generator import ReportWriter
 from datetime import datetime
 import time
 from typing import Any, Dict, List, Optional
@@ -359,6 +360,10 @@ class AdverScanOrchestrator:
                 )
                 report_gen = ReportGenerator()
                 report_res = report_gen.generate(report_data)
+
+                writer = ReportWriter()
+                written_files = writer.write(report_res, formats=["md", "json", "csv"])
+                
                 result.report_result = report_res.to_dict()
 
                 if config.output_dir:

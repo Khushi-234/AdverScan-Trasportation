@@ -10,6 +10,8 @@ M1 Model Ingestion -> M2 Baseline Evaluation -> M3 Attack Engine
 import argparse
 import json
 import sys
+import os
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 import time
 from typing import List, Tuple
 import torch
@@ -40,9 +42,9 @@ def parse_args():
     )
     parser.add_argument(
         "--samples",
-        type=int,
-        default=2000,
-        help="Number of samples to evaluate (default: 2000)",
+        type=str,
+        default="2000",
+        help="Number of samples to evaluate (int or 'full' for full dataset).",
     )
     parser.add_argument(
         "--attacks",
@@ -60,8 +62,8 @@ def parse_args():
     parser.add_argument(
         "--device",
         type=str,
-        default="cpu",
-        help="Execution device ('cpu' or 'cuda')",
+        default="auto",
+        help="Execution device ('auto', 'cpu' or 'cuda'). Default auto-detects GPU if available.",
     )
     parser.add_argument(
         "--enable-xai",
@@ -133,14 +135,17 @@ def prompt_user_selection():
 
     # 3. Sample Count
     while True:
-        samples_str = input("\nNumber of samples to evaluate [2000]: ").strip() or "2000"
+        samples_str = input("\nNumber of samples to evaluate [2000] (enter 0 or 'all' for full 12,630 dataset): ").strip().lower() or "2000"
+        if samples_str in ["0", "all", "full"]:
+            samples_count = 0  # 0 indicates full dataset evaluation
+            break
         try:
             samples_count = int(samples_str)
             if samples_count > 0:
                 break
-            print("  ❌ Please enter a positive integer greater than 0.")
+            print("  ❌ Please enter a positive integer greater than 0, or '0'/'all' for full dataset.")
         except ValueError:
-            print("  ❌ Invalid integer. Please try again.")
+            print("  ❌ Invalid input. Please enter a number, '0', or 'all'.")
 
     # 4. Discover Attacks from M3
     discover_attacks()
@@ -278,7 +283,25 @@ def print_summary_box(opts: dict):
 
 
 def main():
+    
+    total_demo_start = time.time()
     args = parse_args()
+
+    # Resolve and display execution device
+    resolved_dev = resolve_device(args.device)
+    print(f"[Debug] Requested device: {args.device} -> Resolved device: {resolved_dev}")
+    args.device = resolved_dev
+    # Convert sample count argument to integer, handling 'full'/'all'/'0' as full dataset
+    if isinstance(args.samples, str):
+        samples_str = args.samples.lower()
+        if samples_str in ("full", "all", "0"):
+            args.samples = 0  # 0 indicates full dataset evaluation
+        else:
+            try:
+                args.samples = int(samples_str)
+            except ValueError:
+                print(f"  ❌ Invalid sample count '{args.samples}', defaulting to 2000.")
+                args.samples = 2000
 
     # Determine whether interactive mode should run
     # Interactive runs if no args are passed or if --interactive flag is explicitly passed
@@ -334,8 +357,11 @@ def main():
         sys.exit(1)
 
     # 2. Setup Dataset Loader for sample count
-    split_str = f"test[:{opts['samples']}]"
-    batch_size = min(32, opts["samples"]) if opts["samples"] > 0 else 32
+    if opts["samples"] <= 0:
+        split_str = "test"  # Full dataset (12,630 samples)
+    else:
+        split_str = f"test[:{opts['samples']}]"
+    batch_size = 32
     print(f"[2/3] Loading dataset split '{split_str}' from '{dataset_name}' (batch size: {batch_size})...")
     try:
         dataset_loader = GTSRBDatasetLoader(
@@ -372,15 +398,20 @@ def main():
     orchestrator = AdverScanOrchestrator()
     result = orchestrator.run(pipeline_config)
 
+    # Calculate Total Script Execution Time
+    total_demo_time = time.time() - total_demo_start
+    mins, secs = divmod(total_demo_time, 60)
+    time_fmt = f"{total_demo_time:.4f} seconds ({int(mins)}m {secs:.2f}s)" if mins > 0 else f"{total_demo_time:.4f} seconds"
+
     # 4. Display Results Summary
     print("=" * 70)
     print("                 ADVERSCAN SECURITY ASSESSMENT RESULTS              ")
     print("=" * 70)
     print(f"Pipeline Status:          {result.status}")
     print(f"Execution Mode:           {result.execution_mode}")
-    print(f"Total Execution Time:     {result.execution_time_seconds:.4f} seconds")
+    print(f"Orchestrator Exec Time:   {result.execution_time_seconds:.4f} seconds")
+    print(f"Total Pipeline Runtime:   {time_fmt}")
     print(f"Timestamp:                {result.timestamp}")
-
     print("\n------------------------------------------------------------")
     print("M2 — BASELINE CLEAN EVALUATION")
     print("------------------------------------------------------------")
