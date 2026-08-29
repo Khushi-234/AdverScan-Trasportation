@@ -14,7 +14,7 @@ from app.evaluation.dataset_loader import GTSRBDatasetLoader
 from app.evaluation.results import EvaluationResult
 from app.attack_engine.attack_engine import AttackEngine
 from app.attack_engine.config import AttackConfig
-from app.attack_engine.models import AttackResult, AttackResults
+from app.attack_engine.models import AttackMetadata, AttackResult, AttackResults
 from app.vulnerability_analysis.vulnerability_engine import VulnerabilityEngine
 from app.explainability.explainer import XAIExplainer
 from app.hardening.hardening_engine import HardeningEngine
@@ -121,13 +121,12 @@ class AdverScanOrchestrator:
             result.execution_time_seconds = round(time.time() - start_time, 4)
             return result
 
-        # Extract sample batch for attack execution
-        sample_batch = None
+        # Collect all dataset loader batches
+        dataset_batches = []
         for batch_pixels, batch_targets, _ in dataset_loader.iterate_batches():
-            sample_batch = (batch_pixels, batch_targets)
-            break
+            dataset_batches.append((batch_pixels, batch_targets))
 
-        if sample_batch is None:
+        if len(dataset_batches) == 0:
             result.status = "FAILED"
             result.errors.append({
                 "module": "dataset_loader",
@@ -138,7 +137,7 @@ class AdverScanOrchestrator:
             result.execution_time_seconds = round(time.time() - start_time, 4)
             return result
 
-        inputs, labels = sample_batch
+        first_batch_inputs, first_batch_labels = dataset_batches[0]
 
         # Step 3: M3 Attack Engine Execution
         step_start = time.time()
@@ -157,19 +156,57 @@ class AdverScanOrchestrator:
             elif isinstance(atk_cfg_raw, dict):
                 atk_config_obj = AttackConfig(**atk_cfg_raw)
 
+            batch_orig_list = []
+            batch_adv_list = []
+            batch_labels_list = []
+            total_atk_time = 0.0
+            last_metadata = None
+
             try:
-                atk_res: AttackResult = attack_engine.run_attack(
-                    attack_name=attack_name,
-                    inputs=inputs,
-                    labels=labels,
-                    config=atk_config_obj,
+                for b_pixels, b_targets in dataset_batches:
+                    atk_res_b: AttackResult = attack_engine.run_attack(
+                        attack_name=attack_name,
+                        inputs=b_pixels,
+                        labels=b_targets,
+                        config=atk_config_obj,
+                    )
+                    batch_orig_list.append(atk_res_b.original_inputs if atk_res_b.original_inputs is not None else b_pixels)
+                    batch_adv_list.append(atk_res_b.adversarial_examples)
+                    b_lbls = atk_res_b.labels if atk_res_b.labels is not None else b_targets
+                    batch_labels_list.append(b_lbls)
+                    total_atk_time += atk_res_b.metadata.execution_time_seconds
+                    last_metadata = atk_res_b.metadata
+
+                # Combine per-batch results across the full dataset
+                if isinstance(batch_adv_list[0], torch.Tensor):
+                    combined_orig = torch.cat(batch_orig_list, dim=0)
+                    combined_adv = torch.cat(batch_adv_list, dim=0)
+                    combined_labels = torch.cat(batch_labels_list, dim=0)
+                else:
+                    combined_orig = np.concatenate(batch_orig_list, axis=0)
+                    combined_adv = np.concatenate(batch_adv_list, axis=0)
+                    combined_labels = np.concatenate(batch_labels_list, axis=0)
+
+                combined_metadata = AttackMetadata(
+                    attack_name=last_metadata.attack_name if last_metadata else attack_name,
+                    attack_class=last_metadata.attack_class if last_metadata else attack_name.upper(),
+                    execution_time_seconds=round(total_atk_time, 4),
+                    parameters=last_metadata.parameters if last_metadata else {},
+                    epsilon=last_metadata.epsilon if last_metadata else None,
                 )
-                attack_results_coll[attack_name] = atk_res
+                combined_atk_res = AttackResult(
+                    adversarial_examples=combined_adv,
+                    metadata=combined_metadata,
+                    original_inputs=combined_orig,
+                    labels=combined_labels,
+                )
+
+                attack_results_coll[attack_name] = combined_atk_res
                 result.attack_results[attack_name] = {
-                    "attack_name": atk_res.metadata.attack_name,
-                    "attack_class": atk_res.metadata.attack_class,
-                    "execution_time_seconds": atk_res.metadata.execution_time_seconds,
-                    "parameters": atk_res.metadata.parameters,
+                    "attack_name": combined_atk_res.metadata.attack_name,
+                    "attack_class": combined_atk_res.metadata.attack_class,
+                    "execution_time_seconds": combined_atk_res.metadata.execution_time_seconds,
+                    "parameters": combined_atk_res.metadata.parameters,
                 }
                 print(f" Done ({time.time() - atk_start:.2f}s)")
             except Exception as e:
@@ -186,9 +223,9 @@ class AdverScanOrchestrator:
 
             # Step 4: M2 Adversarial Evaluation via InMemoryDatasetLoader helper
             try:
-                adv_targets = atk_res.labels if atk_res.labels is not None else labels
+                adv_targets = combined_atk_res.labels
                 in_mem_loader = InMemoryDatasetLoader(
-                    inputs=atk_res.adversarial_examples,
+                    inputs=combined_atk_res.adversarial_examples,
                     targets=adv_targets,
                     dataset_name=f"adv_{attack_name}",
                     batch_size=config.batch_size,
@@ -296,8 +333,8 @@ class AdverScanOrchestrator:
                 hard_res = hardening_engine.harden(
                     model=raw_model,
                     defense=config.defense,
-                    inputs=inputs,
-                    labels=labels,
+                    inputs=first_batch_inputs,
+                    labels=first_batch_labels,
                     attack_name=first_atk,
                     risk_level=risk_lvl,
                     vulnerability_score=score_val,

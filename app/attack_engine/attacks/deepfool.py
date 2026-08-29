@@ -79,6 +79,7 @@ class DeepFool(BaseAttack):
                 x_start = x_orig[idx : idx + 1].clone().detach()
 
                 for _ in range(max_iter):
+                    x_i = x_i.clone().detach()
                     x_i.requires_grad = True
                     outputs = self.raw_model(x_i)
                     logits = outputs.logits if hasattr(outputs, "logits") else outputs
@@ -90,10 +91,13 @@ class DeepFool(BaseAttack):
                     if current_pred != original_label:
                         break
 
-                    # Compute gradients for original predicted class
-                    self.raw_model.zero_grad()
-                    logits[0, current_pred].backward(retain_graph=True)
-                    grad_orig = x_i.grad.data.clone()
+                    # Compute gradients for original predicted class using autograd.grad
+                    grad_orig = torch.autograd.grad(
+                        outputs=logits[0, current_pred],
+                        inputs=x_i,
+                        retain_graph=True,
+                        create_graph=False,
+                    )[0].detach()
 
                     min_dist = float("inf")
                     best_w = None
@@ -102,19 +106,20 @@ class DeepFool(BaseAttack):
                     # Top-K candidate class selection for efficient decision boundary calculation
                     k_limit = min(top_k, num_classes)
                     _, top_indices = torch.topk(logits[0], k=k_limit)
-                    candidate_classes = top_indices.tolist()
+                    candidate_classes = [c for c in top_indices.tolist() if c != current_pred]
+
+                    if not candidate_classes:
+                        break
 
                     # Find closest decision boundary across top candidate classes
-                    for k in candidate_classes:
-                        if k == current_pred:
-                            continue
-
-                        self.raw_model.zero_grad()
-                        if x_i.grad is not None:
-                            x_i.grad.zero_()
-
-                        logits[0, k].backward(retain_graph=True)
-                        grad_k = x_i.grad.data.clone()
+                    for i, k in enumerate(candidate_classes):
+                        is_last = (i == len(candidate_classes) - 1)
+                        grad_k = torch.autograd.grad(
+                            outputs=logits[0, k],
+                            inputs=x_i,
+                            retain_graph=(not is_last),
+                            create_graph=False,
+                        )[0].detach()
 
                         w_k = grad_k - grad_orig
                         f_k = (logits[0, k] - logits[0, current_pred]).item()
@@ -137,16 +142,16 @@ class DeepFool(BaseAttack):
                     r_i = (abs(best_f) / w_norm_sq) * best_w
                     delta = (1.0 + overshoot) * r_i
 
-                    x_i = x_i.detach() + delta
+                    x_i = (x_i.detach() + delta).detach()
 
                     # Check epsilon ball constraints if epsilon is finite
                     if epsilon < float("inf"):
                         perturbation = torch.clamp(x_i - x_start, min=-epsilon, max=epsilon)
-                        x_i = x_start + perturbation
+                        x_i = (x_start + perturbation).detach()
 
                     # Apply clipping bounds
                     if config.clip_min is not None or config.clip_max is not None:
-                        x_i = torch.clamp(x_i, clip_min, clip_max)
+                        x_i = torch.clamp(x_i, clip_min, clip_max).detach()
 
                 adv_samples.append(x_i.detach())
 

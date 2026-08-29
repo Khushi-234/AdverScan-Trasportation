@@ -136,3 +136,36 @@ def test_orchestrator_fatal_m1_failure():
     assert res.status == "FAILED"
     assert len(res.errors) > 0
     assert res.errors[0]["module"] == "M1_ingestion"
+
+
+def test_orchestrator_multi_batch_evaluation():
+    """Verify that multi-batch datasets (5 samples, batch size 2 -> 3 batches) process all 5 samples across all pipeline steps."""
+    model = DummyModel()
+    dataset_loader = DummyDatasetLoader(num_samples=5, batch_size=2)  # 3 batches: [2, 2, 1]
+    sample_input = torch.randn(1, 10)
+
+    config = PipelineConfig(
+        model_path=model,
+        sample_input=sample_input,
+        num_classes=3,
+        mode="full",
+        attacks=["fgsm"],
+        enable_xai=False,
+        enable_hardening=False,
+        custom_dataset_loader=dataset_loader,
+    )
+
+    orchestrator = AdverScanOrchestrator()
+    res: OrchestrationResult = orchestrator.run(config)
+
+    assert res.status == "SUCCESS"
+    # Baseline evaluation must represent all 5 samples
+    assert res.baseline_evaluation["num_samples"] == 5
+
+    # Adversarial evaluation must represent all 5 samples
+    assert res.adversarial_evaluations["fgsm"]["num_samples"] == 5
+
+    # Vulnerability analysis assessment must represent all 5 samples
+    assess_res = res.vulnerability_analysis["fgsm"]["assessment"]
+    assert assess_res["num_samples"] == 5
+

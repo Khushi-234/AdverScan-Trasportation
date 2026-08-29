@@ -107,3 +107,49 @@ def test_4_non_callable_predict_attribute():
     assert res["status"] == "success"
     assert res["executed"] is True
     assert res["attribution"] is not None
+
+
+def test_5_multi_sample_vector_feature_mean_background():
+    model = SimpleVectorModel()
+    # Multi-sample vector batch (3, 4)
+    inputs = torch.tensor([[1.0, 2.0, 3.0, 4.0], [3.0, 4.0, 5.0, 6.0], [5.0, 6.0, 7.0, 8.0]])
+
+    explainer = SHAPExplainer()
+    res = explainer.explain(model, inputs, target_class=0, nsamples=8)
+
+    assert res["status"] == "success"
+    assert res["executed"] is True
+    attr = np.array(res["attribution"])
+    assert attr.shape == (3, 4)
+    assert np.isfinite(attr).all()
+
+
+def test_6_explicit_background_inputs_respected():
+    model = SimpleVectorModel()
+    inputs = torch.randn(1, 4)
+    explicit_bg = torch.tensor([[0.1, 0.2, 0.3, 0.4], [0.5, 0.6, 0.7, 0.8]])
+
+    explainer = SHAPExplainer()
+    res = explainer.explain(model, inputs, target_class=0, background_inputs=explicit_bg, nsamples=8)
+
+    assert res["status"] == "success"
+    assert res["executed"] is True
+    attr = np.array(res["attribution"])
+    assert attr.shape == (1, 4)
+    assert np.isfinite(attr).all()
+
+
+def test_7_image_background_finite_and_shaped():
+    model = HFImageModel()
+    inputs = torch.rand(2, 3, 16, 16)  # 2 sample batch
+
+    explainer = SHAPExplainer()
+    res = explainer.explain(model, inputs, target_class=0, nsamples=8, grid_size=4)
+
+    assert res["status"] == "success"
+    assert res["executed"] is True
+    assert res["technique"] == "shap"
+    attr = np.array(res["attribution"])
+    assert attr.shape == (2, 3, 16, 16)
+    assert np.isfinite(attr).all()
+

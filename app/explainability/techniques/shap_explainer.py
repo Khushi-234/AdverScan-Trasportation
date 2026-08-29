@@ -142,6 +142,8 @@ class SHAPExplainer:
                 flat_bg = np.zeros((1, num_patches), dtype=np.float32)
 
                 t_orig = torch.from_numpy(inputs_np).float()
+                # Compute channel-wise mean background reference image: (B, C, 1, 1)
+                t_bg = t_orig.mean(dim=(-2, -1), keepdim=True)
 
                 def predict_fn(x_patches: np.ndarray) -> np.ndarray:
                     N = x_patches.shape[0]
@@ -152,7 +154,9 @@ class SHAPExplainer:
                     # Broadcast mask over batch items safely for any sample count N
                     repeats = (N + B - 1) // B
                     t_expanded = t_orig.repeat(repeats, 1, 1, 1)[:N]
-                    t_in = t_expanded * mask
+                    t_bg_expanded = t_bg.repeat(repeats, 1, 1, 1)[:N]
+                    # Blend original image with channel-wise mean background reference
+                    t_in = t_expanded * mask + t_bg_expanded * (1.0 - mask)
                     return self._eval_model(model, t_in)
 
                 explainer = shap.KernelExplainer(predict_fn, flat_bg)
@@ -181,7 +185,10 @@ class SHAPExplainer:
                         bg_np = np.asarray(background_inputs)
                     flat_bg = bg_np.reshape(len(bg_np), -1)
                 else:
-                    flat_bg = np.zeros((1, feature_dim), dtype=np.float32)
+                    if flat_inputs.shape[0] > 1:
+                        flat_bg = np.mean(flat_inputs, axis=0, keepdims=True)
+                    else:
+                        flat_bg = np.zeros_like(flat_inputs)
 
                 def predict_fn(x: np.ndarray) -> np.ndarray:
                     x_nd = x.reshape((-1,) + orig_shape[1:])
@@ -190,6 +197,7 @@ class SHAPExplainer:
 
                 explainer = shap.KernelExplainer(predict_fn, flat_bg)
                 shap_values = explainer.shap_values(flat_inputs, nsamples=nsamples)
+
 
                 attr_raw = self._extract_target_attribution(shap_values, target_class, batch_size=B)
                 if attr_raw.ndim == 2:
