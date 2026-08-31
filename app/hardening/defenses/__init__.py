@@ -16,6 +16,9 @@ from app.hardening.defenses.smoothing import (
     RandomizedSmoothingModel,
 )
 from app.hardening.defenses.adversarial_training import AdversarialTrainingDefense
+from app.hardening.defenses.confidence_rejection import ConfidenceRejectionDefense
+from app.hardening.defenses.adversarial_detection import AdversarialDetectionDefense
+from app.hardening.defenses.data_augmentation import DataAugmentationDefense
 from app.hardening.exceptions import DefenseNotFoundError
 
 # Defense Registry mapping string identifiers to defense classes
@@ -28,6 +31,14 @@ DEFENSE_REGISTRY: Dict[str, Type[BaseDefense]] = {
     "randomized_smoothing": RandomizedSmoothingDefense,
     "smoothing": RandomizedSmoothingDefense,
     "adversarial_training": AdversarialTrainingDefense,
+    "confidence_rejection": ConfidenceRejectionDefense,
+    "confidence_rejection_defense": ConfidenceRejectionDefense,
+    "adversarial_detection": AdversarialDetectionDefense,
+    "adversarial_example_detection": AdversarialDetectionDefense,
+    "detection": AdversarialDetectionDefense,
+    "data_augmentation": DataAugmentationDefense,
+    "data_augmentation_defense": DataAugmentationDefense,
+    "augmentation": DataAugmentationDefense,
 }
 
 
@@ -59,6 +70,12 @@ __all__ = [
     "RandomizedSmoothingDefense",
     "RandomizedSmoothingModel",
     "AdversarialTrainingDefense",
+    "ConfidenceRejectionDefense",
+    "AdversarialDetectionDefense",
+    "DataAugmentationDefense",
     "DEFENSE_REGISTRY",
     "get_defense_class",
 ]
+
+
+
