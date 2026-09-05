@@ -31,8 +31,13 @@ class OrchestrationResult:
     retest_results: Optional[Dict[str, Any]] = None
     report_result: Optional[Dict[str, Any]] = None
 
-    # Error Tracking
+    # Error Tracking, Reproducibility, Resource Monitoring & MLflow Tracking Metadata
+    reproducibility_metadata: Optional[Dict[str, Any]] = None
+    resource_summary: Optional[Dict[str, Any]] = None
+    failure_records: List[Dict[str, Any]] = field(default_factory=list)
     errors: List[Dict[str, Any]] = field(default_factory=list)
+    mlflow_run_id: Optional[str] = None
+    mlflow_experiment_name: Optional[str] = None
     metadata: Dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> Dict[str, Any]:

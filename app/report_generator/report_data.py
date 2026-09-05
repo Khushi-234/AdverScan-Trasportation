@@ -206,5 +206,8 @@ class ReportData:
                 "execution_mode": orch_dict.get("execution_mode"),
                 "timestamp": orch_dict.get("timestamp"),
                 "execution_time_seconds": orch_dict.get("execution_time_seconds"),
+                "resource_summary": orch_dict.get("resource_summary"),
+                "failure_records": orch_dict.get("failure_records"),
             },
         )
+

@@ -15,6 +15,12 @@ from app.orchestration.checkpoint_manager import (
     compute_configuration_hash,
 )
 
+from app.orchestration.failure_registry import (
+    FailureRecord,
+    FailureRegistry,
+    FailureSeverity,
+)
+
 __all__ = [
     "InMemoryDatasetLoader",
     "AdverScanOrchestrator",
@@ -26,5 +32,9 @@ __all__ = [
     "CheckpointCorruptedError",
     "CheckpointIncompatibleError",
     "compute_configuration_hash",
+    "FailureRecord",
+    "FailureRegistry",
+    "FailureSeverity",
 ]
+
 

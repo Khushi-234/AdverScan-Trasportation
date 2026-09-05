@@ -19,9 +19,13 @@ from app.vulnerability_analysis.vulnerability_engine import VulnerabilityEngine
 from app.explainability.explainer import XAIExplainer
 from app.hardening.hardening_engine import HardeningEngine
 from app.report_generator import ReportData, ReportGenerator
+from app.utils.reproducibility import ReproducibilityManager
+from app.utils.resource_monitor import ResourceMonitor
+from app.utils.mlflow_tracker import MLflowTracker
 from app.orchestration.dataset_adapter import InMemoryDatasetLoader
 from app.orchestration.orchestration_result import OrchestrationResult
 from app.orchestration.pipeline_config import PipelineConfig
+from app.orchestration.failure_registry import FailureRegistry
 
 
 class AdverScanOrchestrator:
@@ -41,20 +45,80 @@ class AdverScanOrchestrator:
             OrchestrationResult containing aggregated status, timing, and module DTOs.
         """
         config.validate()
+
+        # Initialize Resource Monitor (A4) and Failure Registry (A5)
+        resource_monitor = ResourceMonitor()
+        resource_monitor.start()
+        failure_registry = FailureRegistry()
+
+        # Step 0: Reproducibility Initialization & Environment Metadata Collection (A2)
+        if config.seed is not None:
+            ReproducibilityManager.set_seed(
+                seed=config.seed,
+                deterministic=getattr(config, "deterministic", False),
+            )
+        repro_meta = ReproducibilityManager.collect_environment_metadata(
+            seed=config.seed,
+            deterministic=getattr(config, "deterministic", False),
+        )
+        identity_meta = ReproducibilityManager.collect_identity_metadata(config=config)
+        repro_meta.update(identity_meta)
+
         start_time = time.time()
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         mode = config.mode.lower()
+
+        # MLflow experiment tracking initialization (A3)
+        mlflow_tracker: Optional[MLflowTracker] = None
+        mlflow_run_id: Optional[str] = None
+        mlflow_exp_name: Optional[str] = None
+
+        if getattr(config, "enable_mlflow", False):
+            mlflow_tracker = MLflowTracker()
+            mlflow_exp_name = config.mlflow_experiment_name or config.experiment_name or "Experiment"
+            mlflow_run_id = mlflow_tracker.start_run(
+                experiment_name=mlflow_exp_name,
+                tracking_uri=config.mlflow_tracking_uri,
+                run_name=f"run_{config.model_name}",
+            )
 
         result = OrchestrationResult(
             status="SUCCESS",
             execution_mode=mode,
             timestamp=timestamp,
+            reproducibility_metadata=repro_meta,
+            mlflow_run_id=mlflow_run_id,
+            mlflow_experiment_name=mlflow_exp_name,
         )
 
-        device_info = f"Device: {config.device.upper()}"
-        if config.device.lower() == "cuda" and torch.cuda.is_available():
+        device_info = f"Device: {config.device.upper() if config.device else 'CPU'}"
+        if config.device and config.device.lower() == "cuda" and torch.cuda.is_available():
             device_info += f" ({torch.cuda.get_device_name(0)})"
         print(f"▶ [Pipeline Init] Starting AdverScan Pipeline | Mode: {mode.upper()} | {device_info}")
+
+        def _finish(r: OrchestrationResult) -> OrchestrationResult:
+            r.execution_time_seconds = round(time.time() - start_time, 4)
+            try:
+                r.resource_summary = resource_monitor.stop()
+            except Exception:
+                pass
+            try:
+                r.failure_records = failure_registry.to_dict()
+            except Exception:
+                pass
+            if mlflow_tracker and mlflow_tracker.active_run_id:
+                try:
+                    mlflow_tracker.log_orchestration_run(
+                        result=r,
+                        config=config,
+                        output_dir=config.output_dir,
+                    )
+                    mlflow_tracker.end_run(
+                        status="FINISHED" if r.status != "FAILED" else "FAILED"
+                    )
+                except Exception:
+                    pass
+            return r
 
         # Step 1: M1 Model Ingestion
         step_start = time.time()
@@ -69,18 +133,21 @@ class AdverScanOrchestrator:
                 task_type=config.task_type,
             )
             result.model_metadata = metadata.to_dict() if hasattr(metadata, "to_dict") else metadata
+            resource_monitor.record_stage("M1_ingestion")
             print(f" Done ({time.time() - step_start:.2f}s)")
         except Exception as e:
             print(f" Failed ({time.time() - step_start:.2f}s)")
             result.status = "FAILED"
+            failure_registry.register_exception(
+                e, module="M1_ingestion", operation="ingest_model", recoverable=False
+            )
             result.errors.append({
                 "module": "M1_ingestion",
                 "error_type": type(e).__name__,
                 "message": str(e),
                 "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             })
-            result.execution_time_seconds = round(time.time() - start_time, 4)
-            return result
+            return _finish(result)
 
         # Step 2: M2 Baseline Evaluation
         step_start = time.time()
@@ -104,38 +171,56 @@ class AdverScanOrchestrator:
             )
             baseline_result: EvaluationResult = baseline_evaluator.evaluate(output_dir=None, show_progress=True)
             result.baseline_evaluation = baseline_result.to_dict()
+            resource_monitor.record_stage("M2_baseline")
             print(f"  ✔ M2 Clean Evaluation Completed ({time.time() - step_start:.2f}s) — Accuracy: {baseline_result.accuracy*100:.2f}%")
         except Exception as e:
             print(f"  ❌ M2 Clean Evaluation Failed ({time.time() - step_start:.2f}s)")
             result.status = "FAILED"
+            failure_registry.register_exception(
+                e, module="M2_baseline_evaluation", operation="evaluate_baseline", recoverable=False
+            )
             result.errors.append({
                 "module": "M2_baseline_evaluation",
                 "error_type": type(e).__name__,
                 "message": str(e),
                 "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             })
-            result.execution_time_seconds = round(time.time() - start_time, 4)
-            return result
+            return _finish(result)
 
         if mode == "baseline_only":
-            result.execution_time_seconds = round(time.time() - start_time, 4)
-            return result
+            return _finish(result)
 
-        # Collect all dataset loader batches
+        # Collect dataset loader batches, adhering to sample_count if set (A1.3)
         dataset_batches = []
+        samples_collected = 0
         for batch_pixels, batch_targets, _ in dataset_loader.iterate_batches():
+            if config.sample_count is not None and samples_collected >= config.sample_count:
+                break
+            if config.sample_count is not None and samples_collected + len(batch_targets) > config.sample_count:
+                limit = config.sample_count - samples_collected
+                batch_pixels = batch_pixels[:limit]
+                batch_targets = batch_targets[:limit]
             dataset_batches.append((batch_pixels, batch_targets))
+            samples_collected += len(batch_targets)
+            if config.sample_count is not None and samples_collected >= config.sample_count:
+                break
 
         if len(dataset_batches) == 0:
             result.status = "FAILED"
+            failure_registry.register(
+                module="dataset_loader",
+                operation="iterate_batches",
+                error_type="ValueError",
+                message="Dataset loader produced no batches.",
+                recoverable=False,
+            )
             result.errors.append({
                 "module": "dataset_loader",
                 "error_type": "ValueError",
                 "message": "Dataset loader produced no batches.",
                 "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             })
-            result.execution_time_seconds = round(time.time() - start_time, 4)
-            return result
+            return _finish(result)
 
         first_batch_inputs, first_batch_labels = dataset_batches[0]
 
@@ -212,6 +297,9 @@ class AdverScanOrchestrator:
             except Exception as e:
                 print(f" Failed ({time.time() - atk_start:.2f}s)")
                 result.status = "PARTIAL_SUCCESS"
+                failure_registry.register_exception(
+                    e, module="M3_attack_engine", operation=f"run_attack_{attack_name}", attack_name=attack_name, recoverable=True
+                )
                 result.errors.append({
                     "module": "M3_attack_engine",
                     "attack_name": attack_name,
@@ -241,6 +329,9 @@ class AdverScanOrchestrator:
                 result.adversarial_evaluations[attack_name] = adv_eval_res.to_dict()
             except Exception as e:
                 result.status = "PARTIAL_SUCCESS"
+                failure_registry.register_exception(
+                    e, module="M2_adversarial_evaluation", operation=f"eval_adv_{attack_name}", attack_name=attack_name, recoverable=True
+                )
                 result.errors.append({
                     "module": "M2_adversarial_evaluation",
                     "attack_name": attack_name,
@@ -249,10 +340,11 @@ class AdverScanOrchestrator:
                     "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                 })
 
+        resource_monitor.record_stage("M3_attack_engine")
+
         if len(attack_results_coll) == 0:
             result.status = "FAILED" if result.status != "PARTIAL_SUCCESS" else "PARTIAL_SUCCESS"
-            result.execution_time_seconds = round(time.time() - start_time, 4)
-            return result
+            return _finish(result)
 
         # Step 5: M5 Vulnerability Analysis
         step_start = time.time()
@@ -273,6 +365,9 @@ class AdverScanOrchestrator:
         except Exception as e:
             print(f" Failed ({time.time() - step_start:.2f}s)")
             result.status = "PARTIAL_SUCCESS"
+            failure_registry.register_exception(
+                e, module="M5_vulnerability_analysis", operation="analyze_pipeline", recoverable=True
+            )
             result.errors.append({
                 "module": "M5_vulnerability_analysis",
                 "error_type": type(e).__name__,
@@ -281,8 +376,7 @@ class AdverScanOrchestrator:
             })
 
         if mode == "attack_assessment":
-            result.execution_time_seconds = round(time.time() - start_time, 4)
-            return result
+            return _finish(result)
 
         # Step 6: M6 XAI Explainability (Optional)
         if config.enable_xai:
@@ -307,6 +401,9 @@ class AdverScanOrchestrator:
             except Exception as e:
                 print(f"  ❌ M6 XAI Explainability Error ({time.time() - step_start:.2f}s)")
                 result.status = "PARTIAL_SUCCESS"
+                failure_registry.register_exception(
+                    e, module="M6_explainability", operation="explain_attack_result", recoverable=True
+                )
                 result.errors.append({
                     "module": "M6_explainability",
                     "error_type": type(e).__name__,
@@ -341,10 +438,14 @@ class AdverScanOrchestrator:
                     defense_config=config.defense_config,
                 )
                 result.hardening_results = hard_res.to_dict()
+                resource_monitor.record_stage("M7_hardening")
                 print(f" Done ({time.time() - step_start:.2f}s)")
             except Exception as e:
                 print(f" Failed ({time.time() - step_start:.2f}s)")
                 result.status = "PARTIAL_SUCCESS"
+                failure_registry.register_exception(
+                    e, module="M7_hardening", operation=f"harden_{config.defense}", defense_name=config.defense, recoverable=True
+                )
                 result.errors.append({
                     "module": "M7_hardening",
                     "error_type": type(e).__name__,
@@ -379,6 +480,9 @@ class AdverScanOrchestrator:
             except Exception as e:
                 print(f"  ❌ M8 Re-Test Failed ({time.time() - step_start:.2f}s)")
                 result.status = "PARTIAL_SUCCESS"
+                failure_registry.register_exception(
+                    e, module="M8_retest", operation="retest", recoverable=True
+                )
                 result.errors.append({
                     "module": "M8_retest",
                     "error_type": type(e).__name__,
@@ -410,34 +514,9 @@ class AdverScanOrchestrator:
             except Exception as e:
                 print(f" Failed ({time.time() - step_start:.2f}s)")
                 result.status = "PARTIAL_SUCCESS"
-                result.errors.append({
-                    "module": "M9_report_generator",
-                    "error_type": type(e).__name__,
-                    "message": str(e),
-                    "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                })
-                result.report_result = report_res.to_dict()
-
-                if config.output_dir:
-                    report_res.save_json(f"{config.output_dir}/security_report.json")
-                    report_res.save_text(f"{config.output_dir}/security_report.txt")
-                print(f" Done ({time.time() - step_start:.2f}s)")
-            except Exception as e:
-                print(f" Failed ({time.time() - step_start:.2f}s)")
-                result.status = "PARTIAL_SUCCESS"
-                result.errors.append({
-                    "module": "M9_report_generator",
-                    "error_type": type(e).__name__,
-                    "message": str(e),
-                    "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                })
-                result.report_result = report_res.to_dict()
-
-                if config.output_dir:
-                    report_res.save_json(f"{config.output_dir}/security_report.json")
-                    report_res.save_text(f"{config.output_dir}/security_report.txt")
-            except Exception as e:
-                result.status = "PARTIAL_SUCCESS"
+                failure_registry.register_exception(
+                    e, module="M9_report_generator", operation="generate_report", recoverable=True
+                )
                 result.errors.append({
                     "module": "M9_report_generator",
                     "error_type": type(e).__name__,
@@ -445,5 +524,6 @@ class AdverScanOrchestrator:
                     "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                 })
 
-        result.execution_time_seconds = round(time.time() - start_time, 4)
-        return result
+        return _finish(result)
+
+
