@@ -176,3 +176,96 @@ def test_pipeline_config_hashing():
     assert hash1 == hash2
     assert hash1 != hash3
 
+
+def test_pipeline_config_hashing_sensitivity():
+    """Regression test proving configuration hash sensitivity to experiment parameters and insensitivity to identity metadata."""
+    base = PipelineConfig(
+        model_path="dummy.pt",
+        dataset_name="GTSRB",
+        sample_count=100,
+        attacks=["fgsm"],
+        attack_configs={"fgsm": {"eps": 0.1}},
+        defense="gaussian_blur",
+        defense_config={"kernel_size": 3},
+        evaluation_metrics=["accuracy"],
+        deterministic=False,
+        experiment_id="EXP-1",
+        experiment_name="Base Experiment",
+        description="Base description",
+    )
+    base_hash = base.get_configuration_hash()
+
+    # Changing experiment_id, experiment_name, or description MUST NOT change configuration hash
+    meta_mod = PipelineConfig(
+        model_path="dummy.pt",
+        dataset_name="GTSRB",
+        sample_count=100,
+        attacks=["fgsm"],
+        attack_configs={"fgsm": {"eps": 0.1}},
+        defense="gaussian_blur",
+        defense_config={"kernel_size": 3},
+        evaluation_metrics=["accuracy"],
+        deterministic=False,
+        experiment_id="EXP-999-MODIFIED",
+        experiment_name="Modified Name",
+        description="Modified description",
+    )
+    assert meta_mod.get_configuration_hash() == base_hash
+
+    # Changing attack_configs MUST change hash
+    atk_mod = PipelineConfig(
+        model_path="dummy.pt",
+        dataset_name="GTSRB",
+        sample_count=100,
+        attacks=["fgsm"],
+        attack_configs={"fgsm": {"eps": 0.3}},
+        defense="gaussian_blur",
+        defense_config={"kernel_size": 3},
+        evaluation_metrics=["accuracy"],
+        deterministic=False,
+    )
+    assert atk_mod.get_configuration_hash() != base_hash
+
+    # Changing defense_config MUST change hash
+    def_mod = PipelineConfig(
+        model_path="dummy.pt",
+        dataset_name="GTSRB",
+        sample_count=100,
+        attacks=["fgsm"],
+        attack_configs={"fgsm": {"eps": 0.1}},
+        defense="gaussian_blur",
+        defense_config={"kernel_size": 5},
+        evaluation_metrics=["accuracy"],
+        deterministic=False,
+    )
+    assert def_mod.get_configuration_hash() != base_hash
+
+    # Changing evaluation_metrics MUST change hash
+    eval_mod = PipelineConfig(
+        model_path="dummy.pt",
+        dataset_name="GTSRB",
+        sample_count=100,
+        attacks=["fgsm"],
+        attack_configs={"fgsm": {"eps": 0.1}},
+        defense="gaussian_blur",
+        defense_config={"kernel_size": 3},
+        evaluation_metrics=["accuracy", "f1_macro"],
+        deterministic=False,
+    )
+    assert eval_mod.get_configuration_hash() != base_hash
+
+    # Changing deterministic flag MUST change hash
+    det_mod = PipelineConfig(
+        model_path="dummy.pt",
+        dataset_name="GTSRB",
+        sample_count=100,
+        attacks=["fgsm"],
+        attack_configs={"fgsm": {"eps": 0.1}},
+        defense="gaussian_blur",
+        defense_config={"kernel_size": 3},
+        evaluation_metrics=["accuracy"],
+        deterministic=True,
+    )
+    assert det_mod.get_configuration_hash() != base_hash
+
+

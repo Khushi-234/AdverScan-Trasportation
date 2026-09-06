@@ -169,3 +169,45 @@ def test_orchestrator_multi_batch_evaluation():
     assess_res = res.vulnerability_analysis["fgsm"]["assessment"]
     assert assess_res["num_samples"] == 5
 
+
+def test_orchestrator_module_timings(dummy_setup):
+    """Verify that orchestrator records module timings in metadata and ExecutionSummary populates modules."""
+    from app.report_generator.execution_summary import ExecutionSummary
+
+    model, dataset_loader, sample_input = dummy_setup
+    config = PipelineConfig(
+        model_path=model,
+        sample_input=sample_input,
+        num_classes=3,
+        mode="full",
+        attacks=["fgsm"],
+        enable_xai=False,
+        enable_hardening=True,
+        defense="spatial_smoothing",
+        custom_dataset_loader=dataset_loader,
+    )
+
+    orchestrator = AdverScanOrchestrator()
+    res: OrchestrationResult = orchestrator.run(config)
+
+    assert res.status == "SUCCESS"
+    assert "module_timings" in res.metadata
+    timings = res.metadata["module_timings"]
+    assert "M1_ingestion" in timings
+    assert "M2_baseline" in timings
+    assert "M3_attack_engine" in timings
+    assert "M5_vulnerability_analysis" in timings
+    assert "M7_hardening" in timings
+    assert "M8_retest" in timings
+    assert "M9_report_generator" in timings
+
+    # Verify ExecutionSummary consumes these timings and populates modules
+    exec_summary = ExecutionSummary.from_orchestration_result(res.to_dict())
+    assert len(exec_summary.modules) >= 7
+    module_ids = [m.module_id for m in exec_summary.modules]
+    assert "M1_ingestion" in module_ids
+    assert "M2_baseline" in module_ids
+    assert all(m.status == "SUCCESS" for m in exec_summary.modules)
+    assert exec_summary.total_elapsed_seconds == res.execution_time_seconds
+
+

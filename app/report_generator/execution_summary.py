@@ -2,7 +2,7 @@
 ExecutionSummary — Module 13 of the AdverScan Security Report.
 
 Captures per-module execution timing, status, and performance metrics
-as recorded by the pipeline's ResultTracker. This is the data source
+as recorded by the pipeline's OrchestrationResult. This is the data source
 for the "Execution Performance" section of the final report.
 """
 
@@ -45,8 +45,7 @@ class ExecutionSummary:
     """
     Complete execution performance summary across all pipeline modules.
 
-    Populated from ResultTracker.to_dict() or an OrchestrationResult's
-    module_timings / metadata['tracker'] fields.
+    Populated from OrchestrationResult's module_timings / metadata payload.
     """
 
     run_label: str = "AdverScan Pipeline"
@@ -59,10 +58,10 @@ class ExecutionSummary:
     @classmethod
     def from_tracker_dict(cls, tracker_dict: Dict[str, Any]) -> "ExecutionSummary":
         """
-        Build an ExecutionSummary from a ResultTracker.to_dict() payload.
+        Build an ExecutionSummary from a module timing/tracker dictionary payload.
 
         Args:
-            tracker_dict: Output of ResultTracker.to_dict().
+            tracker_dict: Output dictionary containing module timing records.
 
         Returns:
             ExecutionSummary instance.
@@ -91,7 +90,7 @@ class ExecutionSummary:
     def from_orchestration_result(cls, orch_dict: Dict[str, Any]) -> "ExecutionSummary":
         """
         Build an ExecutionSummary from an OrchestrationResult.to_dict() payload.
-        Falls back to module_timings if full tracker data is unavailable.
+        Reads module_timings from metadata['module_timings'] or root level.
 
         Args:
             orch_dict: Output of OrchestrationResult.to_dict().
@@ -99,18 +98,28 @@ class ExecutionSummary:
         Returns:
             ExecutionSummary instance.
         """
-        # Try full tracker payload first (populated by the updated orchestrator)
-        tracker = (orch_dict.get("metadata") or {}).get("tracker")
+        metadata = orch_dict.get("metadata") or {}
+
+        # Try full tracker payload if present
+        tracker = metadata.get("tracker")
         if isinstance(tracker, dict) and "modules" in tracker:
             return cls.from_tracker_dict(tracker)
 
-        # Fallback — reconstruct from module_timings flat dict
-        module_timings = orch_dict.get("module_timings") or {}
+        # Reconstruct from module_timings dictionary (checked in metadata['module_timings'] or root orch_dict)
+        module_timings = metadata.get("module_timings") or orch_dict.get("module_timings") or {}
+        failed_modules = set()
+        for err in (orch_dict.get("errors") or []):
+            if isinstance(err, dict) and "module" in err:
+                failed_modules.add(err["module"])
+        for fail in (orch_dict.get("failure_records") or []):
+            if isinstance(fail, dict) and "module" in fail:
+                failed_modules.add(fail["module"])
+
         records = [
             ModuleExecutionRecord(
                 module_id=mid,
                 module_name=mid.replace("_", " ").upper(),
-                status="SUCCESS",
+                status="FAILED" if mid in failed_modules else "SUCCESS",
                 elapsed_seconds=float(elapsed),
             )
             for mid, elapsed in module_timings.items()

@@ -47,31 +47,35 @@ class EvaluationResult:
 
     def log_to_mlflow(self, run_name: Optional[str] = None) -> bool:
         """
-        Optionally log evaluation metrics to an MLflow run if MLflow is installed.
-        Returns True if successful, False otherwise.
+        Log evaluation metrics to an active MLflow run if present.
+        Does NOT independently start or manage MLflow run lifecycle.
+        Centralized lifecycle ownership belongs to MLflowTracker in app.utils.mlflow_tracker.
+        Returns True if logged to active run, False otherwise.
         """
         try:
             import mlflow
-            with mlflow.start_run(run_name=run_name or f"baseline_{self.model_name}"):
-                mlflow.log_params({
-                    "dataset_name": self.dataset_name,
-                    "model_name": self.model_name,
-                    "num_samples": self.num_samples,
-                    "num_classes": self.num_classes,
-                    "batch_size": self.batch_size,
-                    "device": self.device,
-                })
-                mlflow.log_metrics({
-                    "accuracy": self.accuracy,
-                    "precision_macro": self.precision_macro,
-                    "recall_macro": self.recall_macro,
-                    "f1_macro": self.f1_macro,
-                    "precision_weighted": self.precision_weighted,
-                    "recall_weighted": self.recall_weighted,
-                    "f1_weighted": self.f1_weighted,
-                    "average_confidence": self.average_confidence,
-                    "average_entropy": self.average_entropy,
-                })
+            if mlflow.active_run() is None:
+                return False
+
+            mlflow.log_params({
+                "dataset_name": self.dataset_name,
+                "model_name": self.model_name,
+                "num_samples": self.num_samples,
+                "num_classes": self.num_classes,
+                "batch_size": self.batch_size,
+                "device": self.device,
+            })
+            mlflow.log_metrics({
+                "accuracy": self.accuracy,
+                "precision_macro": self.precision_macro,
+                "recall_macro": self.recall_macro,
+                "f1_macro": self.f1_macro,
+                "precision_weighted": self.precision_weighted,
+                "recall_weighted": self.recall_weighted,
+                "f1_weighted": self.f1_weighted,
+                "average_confidence": self.average_confidence,
+                "average_entropy": self.average_entropy,
+            })
             return True
         except Exception:
             return False

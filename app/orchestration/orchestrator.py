@@ -67,6 +67,7 @@ class AdverScanOrchestrator:
         start_time = time.time()
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         mode = config.mode.lower()
+        module_timings: Dict[str, float] = {}
 
         # MLflow experiment tracking initialization (A3)
         mlflow_tracker: Optional[MLflowTracker] = None
@@ -90,6 +91,7 @@ class AdverScanOrchestrator:
             mlflow_run_id=mlflow_run_id,
             mlflow_experiment_name=mlflow_exp_name,
         )
+        result.metadata["module_timings"] = module_timings
 
         device_info = f"Device: {config.device.upper() if config.device else 'CPU'}"
         if config.device and config.device.lower() == "cuda" and torch.cuda.is_available():
@@ -98,6 +100,7 @@ class AdverScanOrchestrator:
 
         def _finish(r: OrchestrationResult) -> OrchestrationResult:
             r.execution_time_seconds = round(time.time() - start_time, 4)
+            r.metadata["module_timings"] = module_timings
             try:
                 r.resource_summary = resource_monitor.stop()
             except Exception:
@@ -134,8 +137,10 @@ class AdverScanOrchestrator:
             )
             result.model_metadata = metadata.to_dict() if hasattr(metadata, "to_dict") else metadata
             resource_monitor.record_stage("M1_ingestion")
+            module_timings["M1_ingestion"] = round(time.time() - step_start, 4)
             print(f" Done ({time.time() - step_start:.2f}s)")
         except Exception as e:
+            module_timings["M1_ingestion"] = round(time.time() - step_start, 4)
             print(f" Failed ({time.time() - step_start:.2f}s)")
             result.status = "FAILED"
             failure_registry.register_exception(
@@ -172,8 +177,10 @@ class AdverScanOrchestrator:
             baseline_result: EvaluationResult = baseline_evaluator.evaluate(output_dir=None, show_progress=True)
             result.baseline_evaluation = baseline_result.to_dict()
             resource_monitor.record_stage("M2_baseline")
+            module_timings["M2_baseline"] = round(time.time() - step_start, 4)
             print(f"  ✔ M2 Clean Evaluation Completed ({time.time() - step_start:.2f}s) — Accuracy: {baseline_result.accuracy*100:.2f}%")
         except Exception as e:
+            module_timings["M2_baseline"] = round(time.time() - step_start, 4)
             print(f"  ❌ M2 Clean Evaluation Failed ({time.time() - step_start:.2f}s)")
             result.status = "FAILED"
             failure_registry.register_exception(
@@ -341,6 +348,7 @@ class AdverScanOrchestrator:
                 })
 
         resource_monitor.record_stage("M3_attack_engine")
+        module_timings["M3_attack_engine"] = round(time.time() - step_start, 4)
 
         if len(attack_results_coll) == 0:
             result.status = "FAILED" if result.status != "PARTIAL_SUCCESS" else "PARTIAL_SUCCESS"
@@ -361,8 +369,10 @@ class AdverScanOrchestrator:
                     "assessment": atk_v["assessment"].to_dict(),
                     "scoring": atk_v["scoring"].to_dict(),
                 }
+            module_timings["M5_vulnerability_analysis"] = round(time.time() - step_start, 4)
             print(f" Done ({time.time() - step_start:.2f}s)")
         except Exception as e:
+            module_timings["M5_vulnerability_analysis"] = round(time.time() - step_start, 4)
             print(f" Failed ({time.time() - step_start:.2f}s)")
             result.status = "PARTIAL_SUCCESS"
             failure_registry.register_exception(
@@ -398,7 +408,9 @@ class AdverScanOrchestrator:
                         )
                         result.xai_results[f"{atk_name}_{tech}"] = exp_res.to_dict()
                         print(f" Done ({time.time() - xai_start:.2f}s)")
+                module_timings["M6_explainability"] = round(time.time() - step_start, 4)
             except Exception as e:
+                module_timings["M6_explainability"] = round(time.time() - step_start, 4)
                 print(f"  ❌ M6 XAI Explainability Error ({time.time() - step_start:.2f}s)")
                 result.status = "PARTIAL_SUCCESS"
                 failure_registry.register_exception(
@@ -439,8 +451,10 @@ class AdverScanOrchestrator:
                 )
                 result.hardening_results = hard_res.to_dict()
                 resource_monitor.record_stage("M7_hardening")
+                module_timings["M7_hardening"] = round(time.time() - step_start, 4)
                 print(f" Done ({time.time() - step_start:.2f}s)")
             except Exception as e:
+                module_timings["M7_hardening"] = round(time.time() - step_start, 4)
                 print(f" Failed ({time.time() - step_start:.2f}s)")
                 result.status = "PARTIAL_SUCCESS"
                 failure_registry.register_exception(
@@ -476,8 +490,10 @@ class AdverScanOrchestrator:
                     batch_size=config.batch_size,
                 )
                 result.retest_results = retest_res_obj.to_dict()
+                module_timings["M8_retest"] = round(time.time() - step_start, 4)
                 print(f"  ✔ M8 Re-Test Completed ({time.time() - step_start:.2f}s)")
             except Exception as e:
+                module_timings["M8_retest"] = round(time.time() - step_start, 4)
                 print(f"  ❌ M8 Re-Test Failed ({time.time() - step_start:.2f}s)")
                 result.status = "PARTIAL_SUCCESS"
                 failure_registry.register_exception(
@@ -510,8 +526,10 @@ class AdverScanOrchestrator:
                 if config.output_dir:
                     report_res.save_json(f"{config.output_dir}/security_report.json")
                     report_res.save_text(f"{config.output_dir}/security_report.txt")
+                module_timings["M9_report_generator"] = round(time.time() - step_start, 4)
                 print(f" Done ({time.time() - step_start:.2f}s)")
             except Exception as e:
+                module_timings["M9_report_generator"] = round(time.time() - step_start, 4)
                 print(f" Failed ({time.time() - step_start:.2f}s)")
                 result.status = "PARTIAL_SUCCESS"
                 failure_registry.register_exception(

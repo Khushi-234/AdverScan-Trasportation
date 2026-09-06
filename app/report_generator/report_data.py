@@ -26,7 +26,7 @@ class ReportData:
     - M6  : XAI Findings (feature attribution, attack impact, failure analysis)
     - M7  : Hardening (selected defense, applied defense, hardened model)
     - M8  : Re-Test Results + Before vs After Comparison
-    - M9  : Execution Performance (from ResultTracker / ExecutionSummary)
+    - M9  : Execution Performance (from OrchestrationResult / ExecutionSummary)
     """
 
     # ── M1: Model Information ─────────────────────────────────────────────────

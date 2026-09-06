@@ -32,7 +32,10 @@ dependencies = [
     "mlflow>=2.0.0",
     "jinja2>=3.1.0",
     "datasets>=2.0.0",
-    "transformers>=4.30.0"
+    "transformers>=4.30.0",
+    "adversarial-robustness-toolbox>=1.14.0",
+    "foolbox>=3.3.0",
+    "psutil>=5.9.0"
 ]
 
 [project.optional-dependencies]

@@ -61,3 +61,27 @@ def test_evaluation_result_json_serialization():
 
         assert json_path.is_file()
         assert "accuracy" in json_path.read_text(encoding="utf-8")
+
+
+def test_evaluation_result_log_to_mlflow_no_lifecycle_side_effect():
+    """Verify that log_to_mlflow does not create independent MLflow runs when inactive."""
+    result = EvaluationResult(
+        dataset_name="bazyl/GTSRB",
+        model_name="bazyl/gtsrb-model",
+        num_samples=50,
+        num_classes=43,
+        accuracy=0.98,
+        precision_macro=0.97,
+        recall_macro=0.97,
+        f1_macro=0.97,
+        precision_weighted=0.98,
+        recall_weighted=0.98,
+        f1_weighted=0.98,
+        average_confidence=0.99,
+        average_entropy=0.05,
+    )
+
+    # When no active run exists, log_to_mlflow must return False and NOT start a run
+    logged = result.log_to_mlflow()
+    assert logged is False
+

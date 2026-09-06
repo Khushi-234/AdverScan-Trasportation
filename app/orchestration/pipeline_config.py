@@ -138,15 +138,43 @@ class PipelineConfig:
     def get_configuration_hash(self) -> str:
         """
         Compute a stable, deterministic configuration hash for checkpoint compatibility.
+        Includes all experiment-defining configuration parameters.
+        Excludes volatile identity/metadata fields (experiment_id, experiment_name, description).
         """
         from app.orchestration.checkpoint_manager import compute_configuration_hash
 
         total_samples = self.sample_count if self.sample_count is not None else 0
+
+        # Normalize attack_configs for canonical serialization
+        norm_attack_configs = {}
+        if isinstance(self.attack_configs, dict):
+            for k in sorted(self.attack_configs.keys()):
+                val = self.attack_configs[k]
+                if hasattr(val, "to_dict") and callable(val.to_dict):
+                    norm_attack_configs[str(k).lower().strip()] = val.to_dict()
+                elif isinstance(val, dict):
+                    norm_attack_configs[str(k).lower().strip()] = val
+                else:
+                    norm_attack_configs[str(k).lower().strip()] = str(val)
+
+        # Normalize defense_config
+        norm_defense_config = {}
+        if isinstance(self.defense_config, dict):
+            for k in sorted(self.defense_config.keys()):
+                norm_defense_config[str(k)] = self.defense_config[k]
+
+        # Normalize evaluation_metrics
+        norm_eval_metrics = sorted([str(m).lower().strip() for m in self.evaluation_metrics]) if self.evaluation_metrics else []
+
         extra_params = {
-            "experiment_id": self.experiment_id,
             "seed": self.seed,
-            "mode": self.mode,
+            "deterministic": self.deterministic,
+            "mode": str(self.mode).lower().strip(),
+            "attack_configs": norm_attack_configs,
             "enable_hardening": self.enable_hardening,
+            "defense": str(self.defense).lower().strip() if self.defense else "auto",
+            "defense_config": norm_defense_config,
+            "evaluation_metrics": norm_eval_metrics,
             "enable_xai": self.enable_xai,
         }
         return compute_configuration_hash(
