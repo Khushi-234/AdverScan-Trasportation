@@ -6,6 +6,7 @@ from app.report_generator import ReportWriter
 from datetime import datetime
 import time
 from typing import Any, Dict, List, Optional
+import numpy as np
 import torch
 
 from app.ingestion.pipeline import ingest_model
