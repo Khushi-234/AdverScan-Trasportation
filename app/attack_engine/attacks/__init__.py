@@ -1,9 +1,7 @@
 """
-Attacks module exports.
+Adversarial attacks package for the AdverScan framework.
 """
 
-from app.attack_engine.attacks.fgsm import FGSM
-from app.attack_engine.attacks.pgd import PGD
-from app.attack_engine.attacks.deepfool import DeepFool
+from app.attack_engine.attacks.image import FGSM, PGD, DeepFool, CW, FAB
 
-__all__ = ["FGSM", "PGD", "DeepFool"]
+__all__ = ["FGSM", "PGD", "DeepFool", "CW", "FAB"]
