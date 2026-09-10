@@ -61,11 +61,11 @@ from typing import Any, Optional
 import torch
 import torch.nn as nn
 
-from app.attack_engine.base.base_attack import BaseAttack
-from app.attack_engine.base.attack_metadata import AttackMetadata
+from app.attack_engine.attacks.base_attack import BaseAttack
+from app.attack_engine.models import AttackMetadata
 from app.attack_engine.config import AttackConfig
 from app.attack_engine.exceptions import AttackExecutionError
-from app.attack_engine.registry import register_attack
+from app.attack_engine.attack_registry import register_attack
 from app.attack_engine.utils.tensor_utils import get_device, clip_tensor
 from app.attack_engine.utils.validation import validate_inputs, validate_attack_config
 

@@ -7,7 +7,7 @@ import torch
 import torch.nn as nn
 
 from app.attack_engine.attacks.image.deepfool import DeepFool
-from app.attack_engine.base.base_attack import BaseAttack
+from app.attack_engine.attacks.base_attack import BaseAttack
 from app.attack_engine.config import AttackConfig
 from app.attack_engine.exceptions import AttackExecutionError
 from app.attack_engine.attack_registry import get_attack, list_attacks

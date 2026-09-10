@@ -26,7 +26,7 @@ from app.attack_engine.utils.perturbation import (
     compute_perturbation_metrics,
 )
 from app.attack_engine.config import AttackConfig
-from app.attack_engine.base.attack_metadata import AttackMetadata
+from app.attack_engine.models import AttackMetadata
 from app.attack_engine.exceptions import (
     AttackConfigurationError,
     AttackExecutionError,

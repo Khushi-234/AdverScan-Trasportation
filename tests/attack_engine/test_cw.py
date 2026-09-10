@@ -7,12 +7,12 @@ import torch
 import torch.nn as nn
 
 from app.attack_engine.attacks.image.cw import CW
-from app.attack_engine.base.base_attack import BaseAttack
-from app.attack_engine.base.attack_metadata import AttackMetadata
+from app.attack_engine.attacks.base_attack import BaseAttack
+from app.attack_engine.models import AttackMetadata
 from app.attack_engine.config import AttackConfig
 from app.attack_engine.exceptions import AttackExecutionError, AttackConfigurationError
-from app.attack_engine.registry import get_attack, list_attacks
-from app.attack_engine.discovery import discover_attacks
+from app.attack_engine.attack_registry import get_attack, list_attacks
+from app.attack_engine.attack_discovery import discover_attacks
 
 
 class SimpleClassifier(nn.Module):

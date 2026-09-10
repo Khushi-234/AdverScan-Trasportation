@@ -4,16 +4,16 @@ Attack registry for cataloging and retrieving available adversarial attack class
 
 import inspect
 from typing import Dict, List, Type
-from app.attack_engine.base.base_attack import BaseAttack
+from app.attack_engine.attacks.base_attack import BaseAttack
 from app.attack_engine.exceptions import AttackConfigurationError
 
-# Registry dictionary mapping lowercase attack names to attack classes. Starts empty.
+# Registry dictionary mapping lowercase attack names to attack classes.
 _ATTACK_REGISTRY: Dict[str, Type[BaseAttack]] = {}
 
 
 def register_attack(name: str, attack_cls: Type[BaseAttack]) -> None:
     """
-    Register an attack class under a given name.
+    Register an attack class under a given name identifier.
 
     Args:
         name: String identifier for the attack.
@@ -35,7 +35,7 @@ def get_attack(name: str) -> Type[BaseAttack]:
     Retrieve a registered attack class by identifier name.
 
     Args:
-        name: String identifier of the attack (e.g. 'fgsm').
+        name: String identifier of the attack (e.g. 'fgsm', 'pgd', 'deepfool', 'cw', 'fab').
 
     Returns:
         Registered attack class.
@@ -45,7 +45,7 @@ def get_attack(name: str) -> Type[BaseAttack]:
     """
     name_lower = name.lower()
     if name_lower not in _ATTACK_REGISTRY:
-        available = ", ".join(list_attacks()) if _ATTACK_REGISTRY else "none"
+        available = ", ".join(sorted(list_attacks())) if _ATTACK_REGISTRY else "none"
         raise AttackConfigurationError(
             f"Attack '{name}' is not registered. Available attacks: [{available}]"
         )
@@ -67,5 +67,16 @@ def clear_registry() -> None:
     Clear all registered attacks from the registry and reset discovery state.
     """
     _ATTACK_REGISTRY.clear()
-    from app.attack_engine.attack_discovery import reset_discovery_state
-    reset_discovery_state()
+    try:
+        from app.attack_engine.attack_discovery import reset_discovery_state
+        reset_discovery_state()
+    except ImportError:
+        pass
+
+
+__all__ = [
+    "register_attack",
+    "get_attack",
+    "list_attacks",
+    "clear_registry",
+]

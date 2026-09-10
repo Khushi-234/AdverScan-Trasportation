@@ -10,8 +10,8 @@ from app.attack_engine.attack_registry import (
     clear_registry,
 )
 from app.attack_engine.attack_discovery import discover_attacks
-from app.attack_engine.attacks.fgsm import FGSM
-from app.attack_engine.base.base_attack import BaseAttack
+from app.attack_engine.attacks.image.fgsm import FGSM
+from app.attack_engine.attacks.base_attack import BaseAttack
 from app.attack_engine.exceptions import AttackConfigurationError
 
 

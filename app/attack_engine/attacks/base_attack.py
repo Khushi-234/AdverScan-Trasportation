@@ -3,14 +3,17 @@ Common attack interface for the Adversarial Attack Engine.
 """
 
 from abc import ABC, abstractmethod
-from typing import Any
+from typing import Any, Optional
 from app.ingestion.adapters.base_adapter import BaseModelAdapter
+from app.attack_engine.models import AttackMetadata
 
 
 class BaseAttack(ABC):
     """
-    Abstract base class defining the standardized interface for adversarial attacks.
+    Abstract base class defining the standardized interface for all adversarial attacks.
     """
+
+    metadata: AttackMetadata
 
     def __init__(self, model: Any):
         """
@@ -28,6 +31,28 @@ class BaseAttack(ABC):
         if isinstance(self.model, BaseModelAdapter):
             return self.model.get_model()
         return self.model
+
+    @classmethod
+    def get_metadata(cls) -> AttackMetadata:
+        """
+        Retrieve standardized metadata describing this attack class.
+        """
+        return getattr(cls, "metadata", None)
+
+    @property
+    def attack_metadata(self) -> AttackMetadata:
+        """
+        Instance property shortcut for attack metadata.
+        """
+        return self.get_metadata()
+
+    def validate_config(self, config: Optional[Any] = None) -> None:
+        """
+        Validate attack configuration parameters against this attack's requirements.
+
+        Subclasses may override this to perform attack-specific parameter validation.
+        """
+        pass
 
     @abstractmethod
     def generate(self, inputs: Any, labels: Any, config: Any = None) -> Any:

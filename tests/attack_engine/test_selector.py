@@ -9,7 +9,7 @@ from app.attack_engine.attack_selector import (
     select_attacks,
     select_compatible_attacks,
 )
-from app.attack_engine.base.base_attack import BaseAttack
+from app.attack_engine.attacks.base_attack import BaseAttack
 from app.attack_engine.exceptions import AttackConfigurationError
 
 

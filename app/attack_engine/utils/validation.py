@@ -12,7 +12,7 @@ from app.attack_engine.exceptions import (
     AttackExecutionError,
     UnsupportedModelError,
 )
-from app.attack_engine.base.attack_metadata import AttackMetadata
+from app.attack_engine.models import AttackMetadata
 from app.ingestion.adapters.base_adapter import BaseModelAdapter
 
 
