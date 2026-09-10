@@ -1,5 +1,60 @@
 """
 DeepFool adversarial attack implementation for minimal decision boundary perturbations.
+                 Original image
+                       │
+                       ▼
+                    x_i = x
+                       │
+                       ▼
+                Model prediction
+                       │
+                       ▼
+              Is prediction changed?
+                 /             \
+               YES              NO
+                │                │
+                ▼                ▼
+              STOP        Calculate gradient
+                                  │
+                    ┌─────────────┴─────────────┐
+                    │                           │
+             Current class             Candidate classes
+                    │                           │
+                    ▼                           ▼
+               grad_orig                  grad_k for each
+                    │                           │
+                    └─────────────┬─────────────┘
+                                  ▼
+                         w_k = grad_k - grad_orig
+                                  │
+                                  ▼
+                    Calculate boundary distance
+                                  │
+                                  ▼
+                      Find closest boundary
+                                  │
+                                  ▼
+                    Calculate minimal r_i
+                                  │
+                                  ▼
+                         Add overshoot
+                                  │
+                                  ▼
+                         x_i = x_i + delta
+                                  │
+                                  ▼
+                       Epsilon constraint
+                                  │
+                                  ▼
+                         Input clipping
+                                  │
+                                  ▼
+                         Next iteration
+                                  │
+                                  └───────────────┐
+                                                  │
+                                                  ▼
+                                         Check prediction
 """
 
 from typing import Any, Optional
