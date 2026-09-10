@@ -20,6 +20,7 @@ def compute_l0_norm(
 ) -> float:
     """
     Compute average L0 norm (fraction or count of altered elements per sample).
+    How many elements changed?
     """
     delta = (x_adv - x_orig).abs()
     batch_size = x_orig.size(0)
@@ -30,6 +31,7 @@ def compute_l0_norm(
 def compute_l2_norm(x_orig: torch.Tensor, x_adv: torch.Tensor) -> float:
     """
     Compute average L2 perturbation norm per sample.
+    How large is the overall perturbation?
     """
     delta = (x_adv - x_orig).view(x_orig.size(0), -1)
     l2 = torch.norm(delta, p=2, dim=1)
@@ -39,6 +41,7 @@ def compute_l2_norm(x_orig: torch.Tensor, x_adv: torch.Tensor) -> float:
 def compute_linf_norm(x_orig: torch.Tensor, x_adv: torch.Tensor) -> float:
     """
     Compute average L_infinity perturbation norm per sample.
+    What was the largest individual change?
     """
     delta = (x_adv - x_orig).abs().view(x_orig.size(0), -1)
     linf = torch.max(delta, dim=1)[0]
