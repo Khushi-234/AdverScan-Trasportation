@@ -19,14 +19,13 @@ from app.hardening.exceptions import (
 from app.hardening.defenses import (
     BaseDefense,
     SpatialSmoothingDefense,
-    BitDepthReductionDefense,
+    FeatureSqueezingDefense,
     JPEGCompressionDefense,
     PreprocessingDefense,
     RandomizedSmoothingDefense,
     AdversarialTrainingDefense,
     ConfidenceRejectionDefense,
     AdversarialDetectionDefense,
-    DataAugmentationDefense,
 )
 
 __all__ = [
@@ -43,14 +42,13 @@ __all__ = [
     "DefenseExecutionError",
     "BaseDefense",
     "SpatialSmoothingDefense",
-    "BitDepthReductionDefense",
+    "FeatureSqueezingDefense",
     "JPEGCompressionDefense",
     "PreprocessingDefense",
     "RandomizedSmoothingDefense",
     "AdversarialTrainingDefense",
     "ConfidenceRejectionDefense",
     "AdversarialDetectionDefense",
-    "DataAugmentationDefense",
 ]
 
 

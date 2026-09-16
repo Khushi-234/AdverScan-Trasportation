@@ -142,14 +142,36 @@ class DefenseSelector:
     def _suggest_parameters(self, defense_key: str, context: HardeningContext) -> Dict[str, Any]:
         """Generate suggested parameters for recommended primary defense."""
         eps = context.epsilon or 0.03
-        if defense_key == "spatial_smoothing":
+        if defense_key in ("spatial_smoothing", "gaussian_filter"):
             return {"kernel_size": 3, "sigma": 1.0 if eps <= 0.03 else 1.5}
-        elif defense_key == "bit_depth_reduction":
+        elif defense_key == "feature_squeezing":
             return {"bit_depth": 4 if eps <= 0.03 else 3}
+        elif defense_key == "normalization":
+            return {"norm_type": "mean_std"}
+        elif defense_key == "median_filter":
+            return {"kernel_size": 3}
+        elif defense_key == "image_denoising":
+            return {"method": "tv", "strength": 0.05}
         elif defense_key == "jpeg_compression":
             return {"quality": 75 if eps <= 0.03 else 50}
-        elif defense_key == "data_augmentation":
-            return {"noise_std": max(eps * 0.5, 0.02), "flip_prob": 0.5, "brightness_jitter": 0.1}
+        elif defense_key == "random_resize":
+            return {"min_scale": 0.9, "max_scale": 1.1}
+        elif defense_key == "random_crop":
+            return {"pad_size": 4, "padding_mode": "reflect"}
+        elif defense_key == "padding":
+            return {"pad_size": 4, "padding_mode": "reflect"}
+        elif defense_key == "rotation":
+            return {"max_angle": 10.0}
+        elif defense_key == "translation":
+            return {"max_dx": 0.08, "max_dy": 0.08}
+        elif defense_key == "feature_denoising":
+            return {"method": "mean", "strength": 0.2}
+        elif defense_key == "feature_alignment":
+            return {"alignment_weight": 0.5, "noise_std": max(eps * 0.5, 0.02)}
+        elif defense_key == "model_ensemble":
+            return {"aggregation": "mean"}
+        elif defense_key == "prediction_ensemble":
+            return {"voting": "soft", "num_views": 3}
         elif defense_key == "randomized_smoothing":
             return {"sigma": max(eps * 1.5, 0.1), "num_samples": 10 if context.latency_sensitive else 20}
         elif defense_key == "adversarial_training":
