@@ -6,8 +6,8 @@ import pytest
 import torch
 import torch.nn as nn
 
-from app.hardening.defenses.adversarial_detection import AdversarialDetectionDefense
-from app.hardening.defenses.confidence_rejection import ConfidenceRejectionDefense
+from app.hardening.defenses.detection.adversarial_detection import AdversarialDetectionDefense
+from app.hardening.defenses.detection.confidence_rejection import ConfidenceRejectionDefense
 from app.hardening.hardening_engine import HardeningEngine
 from app.hardening.hardening_result import HardeningResult
 from app.hardening.defenses import get_defense_class
