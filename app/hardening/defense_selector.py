@@ -3,6 +3,7 @@ Context-Aware Dynamic Defense Selector for Module 7 (Hardening) in AdverScan.
 
 Analyzes attack parameters, perturbation scale, risk levels, and model details to select
 and recommend appropriate defensive strategies, rank candidate defenses, and provide hyperparameters.
+Supports Stage 1 (heuristic recommendation) and Stage 2 (empirical candidate evaluation).
 """
 
 from typing import Any, Dict, List, Optional, Tuple, Union
@@ -17,7 +18,7 @@ from app.hardening.exceptions import DefenseNotFoundError
 class DefenseSelector:
     """
     Selects and recommends optimal defense implementations based on vulnerability analysis output.
-    Supports candidate ranking for iterative defense evaluation.
+    Supports candidate ranking for iterative defense evaluation and empirical post-test selection.
     """
 
     def __init__(
@@ -37,70 +38,150 @@ class DefenseSelector:
             eval_weights: Optional override weights for empirical evaluation (robustness, performance, latency).
         """
         self.default_defense = default_defense
+        self.capabilities = capabilities if capabilities is not None else DEFENSE_CAPABILITIES
+        self.weights = weights if weights is not None else SCORING_WEIGHTS
+        self.eval_weights = eval_weights if eval_weights is not None else {
+            "robustness": 0.50,
+            "accuracy_preservation": 0.35,
+            "latency": 0.15,
+        }
 
-    def _suggest_params(
-        self,
-        defense_name: str,
-        attack: str,
-        eps: float,
-        risk: str,
-        score: float,
-        latency_sensitive: bool = False,
-    ) -> Dict[str, Any]:
-        """Generate default hyperparameters for a given candidate defense."""
-        def_key = defense_name.lower().strip()
-        if def_key in ("spatial_smoothing",):
-            return {"kernel_size": 3, "sigma": 1.0}
-        elif def_key in ("bit_depth_reduction", "feature_squeezing"):
-            return {"bit_depth": 4 if eps <= 0.03 else 3}
-        elif def_key in ("jpeg_compression",):
-            return {"quality": 75 if eps <= 0.03 else 50}
-        elif def_key in ("randomized_smoothing", "smoothing"):
-            return {"sigma": max(eps * 1.5, 0.1), "num_samples": 5 if latency_sensitive else 10}
-        elif def_key in ("adversarial_training",):
-            return {
-                "epochs": 2,
-                "lr": 1e-4,
-                "epsilon": max(eps, 0.03),
-                "attack_type": "pgd" if attack in ("pgd", "bim", "") else "fgsm",
-            }
-        elif def_key in ("preprocessing",):
-            return {"strategy": "spatial_smoothing", "kernel_size": 3}
-        return {}
+    def _build_context(self, context: Optional[HardeningContext] = None, **kwargs: Any) -> HardeningContext:
+        """Construct or normalize a HardeningContext instance from arguments."""
+        if context is not None:
+            return context
 
-    def get_candidate_defenses(
+        valid_fields = {
+            "attack_name",
+            "is_iterative",
+            "perturbation_norm",
+            "epsilon",
+            "attack_success_rate",
+            "parameter_count",
+            "architecture_type",
+            "has_training_data",
+            "device",
+            "supports_gradients",
+            "input_domain",
+            "latency_sensitive",
+            "resource_limits",
+            "max_hardening_time",
+            "allow_retraining",
+            "has_labels",
+            "risk_level",
+            "vulnerability_score",
+            "accuracy_drop",
+            "confidence_drop",
+            "perturbation_magnitude",
+        }
+        ctx_kwargs = {k: v for k, v in kwargs.items() if k in valid_fields and v is not None}
+        return HardeningContext(**ctx_kwargs)
+
+    def filter_incompatible(self, context: HardeningContext) -> Tuple[List[str], Dict[str, str]]:
+        """
+        Filter out defense strategies incompatible with given context and constraints.
+
+        Returns:
+            Tuple of (eligible_defense_keys, rejected_defenses_dict_with_reasons)
+        """
+        eligible: List[str] = []
+        rejected: Dict[str, str] = {}
+
+        for def_key, meta in self.capabilities.items():
+            # 1. Operational Retraining constraints
+            requires_retraining = meta.get("requires_retraining", False)
+            if requires_retraining:
+                if not context.allow_retraining:
+                    rejected[def_key] = "Retraining is disabled by operational constraints"
+                    continue
+                if not context.has_training_data:
+                    rejected[def_key] = "Training dataset is unavailable"
+                    continue
+                if not context.has_labels:
+                    rejected[def_key] = "Ground truth labels are unavailable"
+                    continue
+
+            # 2. Input domain check
+            supported_domains = meta.get("supported_domains", ["image"])
+            if "*" not in supported_domains and context.input_domain not in supported_domains:
+                rejected[def_key] = f"Input domain '{context.input_domain}' not supported"
+                continue
+
+            # 3. Latency constraints
+            latency_cost = meta.get("latency_cost", 10.0)
+            if context.latency_sensitive and latency_cost >= 30.0:
+                rejected[def_key] = "High inference latency overhead"
+                continue
+
+            eligible.append(def_key)
+
+        return eligible, rejected
+
+    def score_defense(self, defense_name: str, context: HardeningContext) -> float:
+        """Compute multi-criteria heuristic score for a candidate defense."""
+        meta = self.capabilities.get(defense_name, {})
+        w = self.weights
+
+        # Robustness based on attack nature
+        if context.is_iterative:
+            expected_rob = meta.get("robustness_against_iterative", 50.0)
+        else:
+            expected_rob = meta.get("robustness_against_single_step", 50.0)
+
+        # Domain compatibility
+        supported_domains = meta.get("supported_domains", ["image"])
+        domain_compat = 1.0 if ("*" in supported_domains or context.input_domain in supported_domains) else 0.0
+
+        # Operational resource suitability
+        requires_retraining = meta.get("requires_retraining", False)
+        resource_compat = 0.0 if (requires_retraining and not context.allow_retraining) else 1.0
+
+        # Latency & training costs
+        latency_cost = meta.get("latency_cost", 10.0)
+        training_cost = meta.get("training_cost", 0.0)
+
+        # Attack compatibility bonus
+        attack = (context.attack_name or "").lower().strip()
+        attack_compat = 0.0
+        if attack in ("fgsm", "single_step", "fast_gradient") and meta.get("defense_type") == "preprocessing":
+            attack_compat = 20.0
+        elif attack in ("pgd", "bim", "iterative") and (expected_rob >= 60.0 or meta.get("defense_family") in ("smoothing", "feature", "detection")):
+            attack_compat = 25.0
+        elif attack in ("cw", "carlini_wagner") and meta.get("defense_family") in ("feature", "detection", "smoothing"):
+            attack_compat = 20.0
+        elif attack == "deepfool" and meta.get("defense_family") in ("smoothing", "feature", "detection"):
+            attack_compat = 20.0
+
+        # Risk suitability bonus
+        risk_bonus = 0.0
+        if context.risk_level in ("CRITICAL", "HIGH") or context.vulnerability_score >= 70.0:
+            risk_bonus = expected_rob * 0.5
+        elif context.risk_level == "LOW" or context.vulnerability_score < 40.0:
+            risk_bonus = (50.0 - latency_cost) * 0.2
+
+        # Latency penalty multiplier if latency sensitive
+        lat_weight = w.get("latency_cost", 0.5) * (3.0 if context.latency_sensitive else 1.0)
+
+        score = (
+            attack_compat * w.get("attack_compatibility", 1.0)
+            + expected_rob * w.get("expected_robustness", 0.3)
+            + domain_compat * w.get("domain_compatibility", 10.0)
+            + resource_compat * w.get("resource_suitability", 10.0)
+            + risk_bonus * w.get("risk_suitability", 0.2)
+            - latency_cost * lat_weight
+            - training_cost * w.get("training_cost", 0.8)
+        )
+        return round(score, 4)
+
+    def rank_candidates(
         self,
-        attack_name: Optional[str] = None,
-        risk_level: Optional[str] = None,
-        epsilon: Optional[float] = None,
-        vulnerability_score: Optional[float] = None,
-        latency_sensitive: bool = False,
-        **kwargs: Any,
+        context: HardeningContext,
+        eligible_defenses: Optional[List[str]] = None,
+        min_candidates: int = 3,
+        max_candidates: int = 5,
     ) -> List[str]:
         """
-        Return ordered list of ranked candidate defenses for iterative evaluation.
-        """
-        rec = self.recommend(
-            attack_name=attack_name,
-            risk_level=risk_level,
-            epsilon=epsilon,
-            vulnerability_score=vulnerability_score,
-            latency_sensitive=latency_sensitive,
-            **kwargs,
-        )
-        return rec.get("candidate_defenses", [])
-
-    def select(
-        self,
-        attack_name: Optional[str] = None,
-        risk_level: Optional[str] = None,
-        epsilon: Optional[float] = None,
-        vulnerability_score: Optional[float] = None,
-        latency_sensitive: bool = False,
-        **kwargs: Any,
-    ) -> BaseDefense:
-        """
-        Select and instantiate an appropriate defense instance based on provided attributes.
+        Rank candidate defenses for iterative evaluation based on context.
 
         Args:
             context: HardeningContext describing attack, model, and operational constraints.
@@ -121,7 +202,7 @@ class DefenseSelector:
 
         attack = (context.attack_name or "").lower().strip()
 
-        # Problem 1 Fix: Attack-specific prioritization takes precedence over generic epsilon intervals
+        # Attack-specific prioritization takes precedence over generic epsilon intervals
         if attack in ("fgsm", "single_step", "fast_gradient"):
             # Single-step gradient attacks: preprocessing and spatial filters excel
             primary_pool = [
@@ -182,7 +263,7 @@ class DefenseSelector:
         # Filter primary pool to only eligible defenses
         candidates = [d for d in primary_pool if d in eligible_pool]
 
-        # Problem 3 Fix: Latency sensitivity sorts lightweight defenses forward without blindly overriding attack severity
+        # Latency sensitivity sorts lightweight defenses forward without blindly overriding attack severity
         if context.latency_sensitive:
             candidates.sort(key=lambda d: self.capabilities.get(d, {}).get("latency_cost", 10.0))
         else:
@@ -198,8 +279,10 @@ class DefenseSelector:
             remaining.sort(key=lambda d: self.score_defense(d, context), reverse=True)
             candidates.extend(remaining[: min_candidates - len(candidates)])
 
-        # Clamp to max_candidates (keeping 3-5 candidates for practical re-testing)
-        return candidates[:max_candidates]
+        # Sort candidate list so candidates[0] has top composite score among candidates
+        candidates = candidates[:max_candidates]
+        candidates.sort(key=lambda d: self.score_defense(d, context), reverse=True)
+        return candidates
 
     def _suggest_parameters(self, defense_key: str, context: HardeningContext) -> Dict[str, Any]:
         """Generate suggested parameters for recommended defense."""
@@ -237,21 +320,62 @@ class DefenseSelector:
         elif defense_key == "randomized_smoothing":
             return {"sigma": max(eps * 1.5, 0.1), "num_samples": 10 if context.latency_sensitive else 20}
         elif defense_key == "adversarial_training":
-            return {"epochs": 2 if context.max_hardening_time < 120.0 else 3, "lr": 1e-4, "epsilon": max(eps, 0.03), "attack_type": "pgd" if context.is_iterative else "fgsm"}
+            return {
+                "epochs": 2 if context.max_hardening_time < 120.0 else 3,
+                "lr": 1e-4,
+                "epsilon": max(eps, 0.03),
+                "attack_type": "pgd" if context.is_iterative else "fgsm",
+            }
         elif defense_key == "confidence_rejection":
             return {"threshold": 0.6 if context.risk_level in ("CRITICAL", "HIGH") else 0.5}
         elif defense_key == "adversarial_detection":
             return {"threshold": 0.5, "method": "sensitivity" if context.is_iterative else "margin"}
         return {}
 
-    def recommend(self, **kwargs: Any) -> Dict[str, Any]:
+    def _suggest_params(
+        self,
+        defense_name: str,
+        attack: str,
+        eps: float,
+        risk: str,
+        score: float,
+        latency_sensitive: bool = False,
+    ) -> Dict[str, Any]:
+        """Legacy helper for default hyperparameters generation."""
+        ctx = HardeningContext(
+            attack_name=attack,
+            epsilon=eps,
+            risk_level=risk,
+            vulnerability_score=score,
+            latency_sensitive=latency_sensitive,
+        )
+        return self._suggest_parameters(defense_name, ctx)
+
+    def recommend(
+        self,
+        attack_name: Optional[str] = None,
+        risk_level: Optional[str] = None,
+        epsilon: Optional[float] = None,
+        vulnerability_score: Optional[float] = None,
+        latency_sensitive: bool = False,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
         """
         Generate context-aware dynamic defense recommendations (Stage 1).
 
         Returns:
-            BaseDefense: Instantiated defense instance ready for execution.
+            Dict containing:
+                - primary_defense: Recommended defense identifier
+                - secondary_defenses: Alternative candidate options
+                - candidate_defenses: Complete ordered candidate pool for iterative evaluation
+                - candidate_scores: Score mapping for candidates
+                - rejected_defenses: Defenses rejected by constraints with explanations
+                - suggested_params: Parameter dictionary for primary defense
+                - all_candidate_params: Parameter dictionary for all candidate defenses
+                - rationale: Explanation of defense selection reasoning
+                - selection_basis: Contextual metrics used during selection
         """
-        recommendation = self.recommend(
+        context = self._build_context(
             attack_name=attack_name,
             risk_level=risk_level,
             epsilon=epsilon,
@@ -260,10 +384,119 @@ class DefenseSelector:
             **kwargs,
         )
 
-        defense_name = recommendation["primary_defense"]
-        params = recommendation.get("suggested_params", {})
+        eligible_defenses, rejected_defenses = self.filter_incompatible(context)
+        candidates = self.rank_candidates(context, eligible_defenses=eligible_defenses)
+
+        if not candidates:
+            # Fallback to default defense if provided and eligible
+            if self.default_defense and self.default_defense in self.capabilities:
+                primary = self.default_defense
+                secondaries = []
+                candidates = [primary]
+                candidate_scores = {primary: self.score_defense(primary, context)}
+            else:
+                return {
+                    "primary_defense": None,
+                    "secondary_defenses": [],
+                    "candidate_defenses": [],
+                    "candidate_scores": {},
+                    "rejected_defenses": rejected_defenses,
+                    "suggested_params": {},
+                    "all_candidate_params": {},
+                    "rationale": "No compatible defenses found matching the context and constraints.",
+                    "selection_basis": {
+                        "attack": context.attack_name,
+                        "risk_level": context.risk_level,
+                        "epsilon": context.epsilon,
+                        "vulnerability_score": context.vulnerability_score,
+                        "latency_sensitive": context.latency_sensitive,
+                    },
+                }
+        else:
+            primary = candidates[0]
+            secondaries = candidates[1:]
+            candidate_scores = {d: self.score_defense(d, context) for d in candidates}
+
+        suggested_params = self._suggest_parameters(primary, context) if primary else {}
+        all_candidate_params = {d: self._suggest_parameters(d, context) for d in candidates}
+
+        rationale = (
+            f"Selected primary defense '{primary}' for {context.risk_level} risk {context.attack_name.upper()} attack "
+            f"(vulnerability score: {context.vulnerability_score:.1f}, eps: {context.epsilon:.4f}). "
+            f"Evaluated {len(candidates)} compatible candidates."
+        )
+
+        return {
+            "primary_defense": primary,
+            "secondary_defenses": secondaries,
+            "candidate_defenses": candidates,
+            "candidate_scores": candidate_scores,
+            "rejected_defenses": rejected_defenses,
+            "suggested_params": suggested_params,
+            "all_candidate_params": all_candidate_params,
+            "rationale": rationale,
+            "selection_basis": {
+                "attack": context.attack_name,
+                "risk_level": context.risk_level,
+                "epsilon": context.epsilon,
+                "vulnerability_score": context.vulnerability_score,
+                "latency_sensitive": context.latency_sensitive,
+            },
+        }
+
+    def select(
+        self,
+        attack_name: Optional[str] = None,
+        risk_level: Optional[str] = None,
+        epsilon: Optional[float] = None,
+        vulnerability_score: Optional[float] = None,
+        latency_sensitive: bool = False,
+        **kwargs: Any,
+    ) -> BaseDefense:
+        """
+        Select and instantiate an appropriate defense instance based on provided attributes.
+
+        Returns:
+            BaseDefense: Instantiated defense instance ready for execution.
+        """
+        rec = self.recommend(
+            attack_name=attack_name,
+            risk_level=risk_level,
+            epsilon=epsilon,
+            vulnerability_score=vulnerability_score,
+            latency_sensitive=latency_sensitive,
+            **kwargs,
+        )
+
+        defense_name = rec.get("primary_defense")
+        if not defense_name:
+            raise DefenseNotFoundError("No compatible defense could be selected for the given context.")
+
+        params = rec.get("suggested_params", {})
         defense_cls = get_defense_class(defense_name)
         return defense_cls(**params)
+
+    def get_candidate_defenses(
+        self,
+        attack_name: Optional[str] = None,
+        risk_level: Optional[str] = None,
+        epsilon: Optional[float] = None,
+        vulnerability_score: Optional[float] = None,
+        latency_sensitive: bool = False,
+        **kwargs: Any,
+    ) -> List[str]:
+        """
+        Return ordered list of ranked candidate defenses for iterative evaluation.
+        """
+        rec = self.recommend(
+            attack_name=attack_name,
+            risk_level=risk_level,
+            epsilon=epsilon,
+            vulnerability_score=vulnerability_score,
+            latency_sensitive=latency_sensitive,
+            **kwargs,
+        )
+        return rec.get("candidate_defenses", [])
 
     def _extract_metric(self, source: Dict[str, Any], *keys: str) -> Optional[float]:
         """Safely extract float metric without boolean or-skipping of 0.0."""
@@ -296,87 +529,154 @@ class DefenseSelector:
 
     def evaluate_candidate_results(
         self,
-        attack_name: Optional[str] = None,
-        risk_level: Optional[str] = None,
-        epsilon: Optional[float] = None,
-        vulnerability_score: Optional[float] = None,
-        latency_sensitive: bool = False,
-        **kwargs: Any,
-    ) -> Dict[str, Any]:
+        candidate_metrics: Dict[str, Dict[str, Any]],
+        baseline_metrics: Dict[str, Any],
+    ) -> Dict[str, Dict[str, Any]]:
         """
-        Generate detailed defensive recommendations, candidate rankings, and parameter suggestions.
+        Stage 2: Empirically evaluate re-testing results for each candidate defense.
+
+        Args:
+            candidate_metrics: Dictionary mapping candidate defense key to its re-tested metrics.
+            baseline_metrics: Baseline metrics before hardening.
 
         Returns:
-            Dict containing:
-                - primary_defense: Recommended defense identifier
-                - secondary_defenses: Alternative options
-                - candidate_defenses: Complete ordered candidate pool for iterative selection
-                - suggested_params: Dictionary of parameters for primary defense
-                - all_candidate_params: Dictionary of parameters for all candidate defenses
-                - rationale: Explanation of defense selection reasoning
+            Dictionary mapping candidate defense key to detailed empirical evaluation metrics.
         """
-        attack = (attack_name or "").lower().strip()
-        risk = (risk_level or "").upper().strip()
-        eps = epsilon if epsilon is not None else 0.0
-        score = vulnerability_score if vulnerability_score is not None else 0.0
+        evaluations: Dict[str, Dict[str, Any]] = {}
 
-        # Decision Tree Logic
-        if latency_sensitive:
-            primary = "spatial_smoothing"
-            secondary = ["bit_depth_reduction", "jpeg_compression"]
-            params = {"kernel_size": 3, "sigma": 1.0}
-            rationale = "Latency sensitive constraint specified. Selecting low-overhead Spatial Smoothing preprocessing defense."
+        base_acc = self._extract_metric(baseline_metrics, "clean_accuracy", "accuracy")
+        base_asr = self._extract_metric(baseline_metrics, "attack_success_rate", "asr")
+        base_lat = self._extract_latency_ms(baseline_metrics) or 0.0
 
-        elif attack in ("pgd", "bim") or risk in ("CRITICAL", "HIGH") or score >= 70.0:
-            primary = "adversarial_training"
-            secondary = ["randomized_smoothing", "preprocessing", "spatial_smoothing"]
-            params = {
-                "epochs": 2,
-                "lr": 1e-4,
-                "epsilon": max(eps, 0.03),
-                "attack_type": "pgd" if attack in ("pgd", "") else "fgsm",
-            }
-            rationale = f"High severity risk level ({risk or 'HIGH'}) or iterative gradient attack ('{attack}'). Recommending robust Adversarial Training fine-tuning."
+        for cand_name, cand_m in candidate_metrics.items():
+            cand_acc = self._extract_metric(cand_m, "clean_accuracy", "accuracy")
+            cand_asr = self._extract_metric(cand_m, "attack_success_rate", "asr")
+            cand_lat = self._extract_latency_ms(cand_m)
+            defended_lat = cand_lat if cand_lat is not None else base_lat
 
-        elif attack == "deepfool" or (0.01 < eps <= 0.05):
-            primary = "randomized_smoothing"
-            secondary = ["spatial_smoothing", "bit_depth_reduction", "adversarial_training"]
-            params = {"sigma": max(eps * 1.5, 0.1), "num_samples": 10}
-            rationale = f"Small decision boundary perturbation attack ('{attack}', eps={eps:.4f}). Recommending Randomized Smoothing for provable noise robustness."
-
-        elif attack == "fgsm" or risk in ("MEDIUM", "LOW") or score < 40.0:
-            primary = "spatial_smoothing"
-            secondary = ["bit_depth_reduction", "jpeg_compression", "randomized_smoothing"]
-            params = {"kernel_size": 3, "sigma": 1.0}
-            rationale = f"Single-step or moderate risk attack ('{attack}'). Recommending Spatial Smoothing input preprocessing."
-
-        else:
-            primary = self.default_defense
-            secondary = ["spatial_smoothing", "randomized_smoothing", "bit_depth_reduction"]
-            params = self._suggest_params(primary, attack, eps, risk, score, latency_sensitive)
-            rationale = f"Fallback selection to default defense '{primary}'."
-
-        # Complete ranked candidate pool
-        candidates: List[str] = [primary]
-        for s in secondary:
-            if s not in candidates:
-                candidates.append(s)
-
-        # Build parameters dictionary for all candidates
-        all_params: Dict[str, Dict[str, Any]] = {}
-        for c in candidates:
-            if c == primary and params:
-                all_params[c] = params
+            # Latency overhead calculation
+            latency_overhead = round(max(0.0, defended_lat - base_lat), 4) if base_lat is not None else 0.0
+            if latency_overhead <= 0.0:
+                latency_efficiency_score = 1.0
             else:
-                all_params[c] = self._suggest_params(c, attack, eps, risk, score, latency_sensitive)
+                latency_efficiency_score = round(max(0.0, 1.0 / (1.0 + latency_overhead / 20.0)), 4)
+
+            # Clean accuracy drop calculation
+            if base_acc is None or base_acc <= 0.0 or cand_acc is None:
+                acc_drop = 0.0
+                acc_drop_pct_points = 0.0
+                clean_preservation_score = 1.0
+            else:
+                acc_drop = round(max(0.0, base_acc - cand_acc), 4)
+                acc_drop_pct_points = round(acc_drop * 100.0, 4)
+                if acc_drop_pct_points <= 5.0:
+                    clean_preservation_score = max(0.0, 1.0 - (acc_drop_pct_points / 20.0))
+                else:
+                    clean_preservation_score = max(0.0, 0.75 - ((acc_drop_pct_points - 5.0) / 25.0))
+
+            # Robustness evaluation
+            if base_asr is None or cand_asr is None:
+                robustness_available = False
+                robustness_improvement = None
+                is_effective = None
+                status = "partial_evaluation_no_asr"
+                composite_score = round(
+                    clean_preservation_score * 0.70 + latency_efficiency_score * 0.30,
+                    4,
+                )
+            else:
+                robustness_available = True
+                robustness_improvement = round(base_asr - cand_asr, 4)
+                is_effective = robustness_improvement > 0.0
+
+                if not is_effective:
+                    status = "ineffective_defense"
+                    # Penalize composite score heavily for ineffective defenses (< 0.40)
+                    composite_score = round(
+                        max(0.0, (robustness_improvement * 0.50 + clean_preservation_score * 0.35 + latency_efficiency_score * 0.15) * 0.5),
+                        4,
+                    )
+                else:
+                    status = "robustness_verified"
+                    rob_norm = max(0.0, min(1.0, robustness_improvement))
+                    composite_score = round(
+                        rob_norm * self.eval_weights.get("robustness", 0.50)
+                        + clean_preservation_score * self.eval_weights.get("accuracy_preservation", 0.35)
+                        + latency_efficiency_score * self.eval_weights.get("latency", 0.15),
+                        4,
+                    )
+
+            evaluations[cand_name] = {
+                "defense_name": cand_name,
+                "baseline_clean_accuracy": base_acc,
+                "defended_clean_accuracy": cand_acc,
+                "clean_accuracy_drop": acc_drop,
+                "clean_accuracy_drop_pct_points": acc_drop_pct_points,
+                "clean_preservation_score": clean_preservation_score,
+                "baseline_asr": base_asr,
+                "defended_asr": cand_asr,
+                "robustness_available": robustness_available,
+                "robustness_improvement": robustness_improvement,
+                "is_effective": is_effective,
+                "baseline_latency_ms": base_lat,
+                "defended_latency_ms": defended_lat,
+                "latency_overhead_ms": latency_overhead,
+                "latency_efficiency_score": latency_efficiency_score,
+                "composite_score": composite_score,
+                "status": status,
+            }
+
+        return evaluations
+
+    def select_best_evaluated(self, evaluations: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
+        """
+        Select the winning defense based on empirical evaluation results.
+        """
+        if not evaluations:
+            return {
+                "best_defense": None,
+                "selection_status": "no_candidates",
+                "ranked_defenses": [],
+                "selection_rationale": "No evaluated candidate defenses provided.",
+            }
+
+        # Sort candidates by composite_score descending
+        ranked = sorted(
+            evaluations.keys(),
+            key=lambda k: evaluations[k].get("composite_score", 0.0),
+            reverse=True,
+        )
+        winner_key = ranked[0]
+        winner_info = evaluations[winner_key]
+        status = winner_info.get("status", "evaluated")
+
+        # Construct data-supported rationale
+        if status == "partial_evaluation_no_asr":
+            rationale = (
+                f"Selected '{winner_key}' based on clean accuracy preservation and latency overhead. "
+                f"However, baseline ASR was unavailable, leaving empirical robustness unverified."
+            )
+        elif status == "ineffective_defense":
+            rationale = (
+                f"Warning: Defense failed to improve robustness for '{winner_key}' "
+                f"(ASR increased or remained unchanged by {winner_info.get('robustness_improvement')})."
+            )
+        else:
+            rob_imp = winner_info.get("robustness_improvement", 0.0) or 0.0
+            rob_pct = rob_imp * 100.0
+            acc_drop_pct = winner_info.get("clean_accuracy_drop_pct_points", 0.0) or 0.0
+            lat_ovh = winner_info.get("latency_overhead_ms", 0.0) or 0.0
+
+            rationale = (
+                f"Empirically selected '{winner_key}' as best defense (composite score: {winner_info.get('composite_score', 0.0):.4f}). "
+                f"It reduced ASR by {rob_pct:.1f}% with {acc_drop_pct:.1f} percentage points clean accuracy drop "
+                f"and {lat_ovh:.1f} ms latency overhead. Defense successfully reinforced model robustness."
+            )
 
         return {
-            "primary_defense": primary,
-            "secondary_defenses": [s for s in candidates if s != primary],
-            "candidate_defenses": candidates,
-            "suggested_params": params,
-            "all_candidate_params": all_params,
-            "rationale": rationale,
+            "best_defense": winner_key,
+            "selection_status": status,
+            "ranked_defenses": ranked,
+            "winner_evaluation": winner_info,
+            "selection_rationale": rationale,
         }
-
-
