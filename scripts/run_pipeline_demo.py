@@ -86,7 +86,7 @@ def parse_args():
     parser.add_argument(
         "--defense",
         type=str,
-        default="spatial_smoothing",
+        default="auto",
         help="Hardening defense type (spatial_smoothing, randomized_smoothing, adversarial_training, auto)",
     )
     parser.add_argument(

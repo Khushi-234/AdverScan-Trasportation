@@ -281,6 +281,7 @@ class AdverScanOrchestrator:
                     combined_labels = np.concatenate(batch_labels_list, axis=0)
 
                 combined_metadata = AttackMetadata(
+                    name=attack_name,
                     attack_name=last_metadata.attack_name if last_metadata else attack_name,
                     attack_class=last_metadata.attack_class if last_metadata else attack_name.upper(),
                     execution_time_seconds=round(total_atk_time, 4),
