@@ -46,16 +46,26 @@ def test_attack_engine_run_pipeline():
     engine = AttackEngine(model)
     inputs = torch.randn(3, 4)
     labels = torch.tensor([0, 1, 0])
-    configs = {"fgsm": AttackConfig(epsilon=0.2)}
+    configs = {
+        "fgsm": AttackConfig(epsilon=0.2),
+        "cw": AttackConfig(params={"max_iterations": 5}),
+        "fab": AttackConfig(params={"max_iter": 5}),
+    }
 
-    results = engine.run_pipeline(["fgsm", "pgd", "deepfool"], inputs, labels, configs=configs)
+    results = engine.run_pipeline(["fgsm", "pgd", "deepfool", "cw", "fab"], inputs, labels, configs=configs)
     assert isinstance(results, AttackResults)
     assert "fgsm" in results
     assert "pgd" in results
     assert "deepfool" in results
+    assert "cw" in results
+    assert "fab" in results
     assert isinstance(results["fgsm"], AttackResult)
     assert isinstance(results["pgd"], AttackResult)
     assert isinstance(results["deepfool"], AttackResult)
+    assert isinstance(results["cw"], AttackResult)
+    assert isinstance(results["fab"], AttackResult)
+    assert results["cw"].perturbation_metrics is not None
+    assert results["fab"].perturbation_metrics is not None
 
 
 def test_run_attack_pipeline_helper():
@@ -74,6 +84,8 @@ def test_package_exports():
     assert hasattr(attack_module, "FGSM")
     assert hasattr(attack_module, "PGD")
     assert hasattr(attack_module, "DeepFool")
+    assert hasattr(attack_module, "CW")
+    assert hasattr(attack_module, "FAB")
     assert hasattr(attack_module, "AttackConfig")
     assert hasattr(attack_module, "AttackResult")
     assert hasattr(attack_module, "AttackResults")

@@ -2,10 +2,12 @@
 Adversarial Attack Engine Module for AdverScan.
 """
 
-from app.attack_engine.base.base_attack import BaseAttack
-from app.attack_engine.attacks.fgsm import FGSM
-from app.attack_engine.attacks.pgd import PGD
-from app.attack_engine.attacks.deepfool import DeepFool
+from app.attack_engine.attacks.base_attack import BaseAttack
+from app.attack_engine.attacks.image.fgsm import FGSM
+from app.attack_engine.attacks.image.pgd import PGD
+from app.attack_engine.attacks.image.deepfool import DeepFool
+from app.attack_engine.attacks.image.cw import CW
+from app.attack_engine.attacks.image.fab import FAB
 from app.attack_engine.config import AttackConfig
 from app.attack_engine.models import AttackMetadata, AttackResult, AttackResults
 from app.attack_engine.exceptions import (
@@ -30,11 +32,13 @@ from app.attack_engine.attack_engine import AttackEngine, run_attack_pipeline
 
 __all__ = [
     "BaseAttack",
+    "AttackMetadata",
     "FGSM",
     "PGD",
     "DeepFool",
+    "CW",
+    "FAB",
     "AttackConfig",
-    "AttackMetadata",
     "AttackResult",
     "AttackResults",
     "AttackError",

@@ -16,3 +16,7 @@ def test_discover_attacks():
 
     registered = list_attacks()
     assert "fgsm" in registered
+    assert "pgd" in registered
+    assert "deepfool" in registered
+    assert "cw" in registered
+    assert "fab" in registered

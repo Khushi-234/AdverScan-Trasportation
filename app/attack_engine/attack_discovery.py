@@ -1,5 +1,5 @@
 """
-Attack discovery module for scanning and dynamically importing attack implementations.
+Attack discovery module for scanning and dynamically importing attack implementations across domains.
 """
 
 import importlib
@@ -9,26 +9,23 @@ from typing import List, Set
 import app.attack_engine.attacks as attacks_package
 from app.attack_engine.exceptions import AttackError
 
-# Set of full module names that have been discovered and imported by discovery
+# Set of full module names that have been discovered and imported
 _DISCOVERED_MODULES: Set[str] = set()
 
 
 def reset_discovery_state() -> None:
     """
     Reset the internal discovered modules tracker.
-
-    Called when the registry is cleared to allow subsequent discovery calls
-    to re-import/reload attack modules and re-trigger self-registration.
     """
     _DISCOVERED_MODULES.clear()
 
 
 def discover_attacks(force_reload: bool = False) -> List[str]:
     """
-    Automatically discover and import all attack modules in the `attacks` package.
+    Automatically discover and import all attack modules under `app.attack_engine.attacks` recursively.
 
-    Importing each attack module triggers its self-registration via `register_attack()`.
-    Discovery tracks imported modules independently of filenames or registered attack names.
+    Using pkgutil.walk_packages, this traverses all domain packages (e.g. image, text, tabular)
+    and submodules, importing each module and triggering its self-registration via `register_attack()`.
 
     Args:
         force_reload: If True, re-imports/reloads all discovered modules.
@@ -38,16 +35,21 @@ def discover_attacks(force_reload: bool = False) -> List[str]:
     """
     discovered_now: List[str] = []
     package_path = attacks_package.__path__
-    package_name = attacks_package.__name__
+    package_prefix = attacks_package.__name__ + "."
 
-    for _, module_name, is_pkg in pkgutil.iter_modules(package_path):
-        # Skip package directories or private/internal modules starting with '_'
-        if is_pkg or module_name.startswith("_"):
+    for module_info in pkgutil.walk_packages(package_path, prefix=package_prefix):
+        full_module_name = module_info.name
+        is_pkg = module_info.ispkg
+
+        # Skip package containers themselves; only import leaf modules
+        if is_pkg:
             continue
 
-        full_module_name = f"{package_name}.{module_name}"
+        # Skip private/internal modules starting with '_' or base classes
+        short_name = full_module_name.split(".")[-1]
+        if short_name.startswith("_") or short_name == "base_attack":
+            continue
 
-        # Determine if module needs to be imported or reloaded
         is_imported = full_module_name in _DISCOVERED_MODULES
 
         if not is_imported or force_reload:
@@ -66,3 +68,6 @@ def discover_attacks(force_reload: bool = False) -> List[str]:
                 ) from e
 
     return discovered_now
+
+
+__all__ = ["discover_attacks", "reset_discovery_state"]

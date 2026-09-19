@@ -6,8 +6,8 @@ import pytest
 import torch
 import torch.nn as nn
 
-from app.attack_engine.attacks.deepfool import DeepFool
-from app.attack_engine.base.base_attack import BaseAttack
+from app.attack_engine.attacks.image.deepfool import DeepFool
+from app.attack_engine.attacks.base_attack import BaseAttack
 from app.attack_engine.config import AttackConfig
 from app.attack_engine.exceptions import AttackExecutionError
 from app.attack_engine.attack_registry import get_attack, list_attacks
@@ -61,3 +61,53 @@ def test_deepfool_invalid_input_type():
 
     with pytest.raises(AttackExecutionError):
         attack.generate(inputs="not_a_tensor", labels=[0])
+
+
+def test_deepfool_model_state_restoration():
+    model = SimpleClassifier()
+    attack = DeepFool(model)
+    inputs = torch.full((2, 4), 0.5)
+    labels = torch.tensor([0, 0])
+
+    model.train()
+    assert model.training is True
+    attack.generate(inputs, labels)
+    assert model.training is True
+
+    model.eval()
+    assert model.training is False
+    attack.generate(inputs, labels)
+    assert model.training is False
+
+
+def test_deepfool_no_parameter_gradients_accumulated():
+    model = SimpleClassifier()
+    attack = DeepFool(model)
+    inputs = torch.full((2, 4), 0.5)
+    labels = torch.tensor([0, 0])
+
+    attack.generate(inputs, labels)
+    for param in model.parameters():
+        assert param.grad is None
+
+
+def test_deepfool_parameter_validation():
+    model = SimpleClassifier()
+    attack = DeepFool(model)
+    inputs = torch.full((2, 4), 0.5)
+    labels = torch.tensor([0, 0])
+
+    # Test max_iter validation
+    with pytest.raises(AttackExecutionError, match="DeepFool max_iter must be greater than 0"):
+        attack.generate(inputs, labels, AttackConfig(params={"max_iter": 0}))
+
+    with pytest.raises(AttackExecutionError, match="DeepFool max_iter must be greater than 0"):
+        attack.generate(inputs, labels, AttackConfig(params={"max_iter": -1}))
+
+    # Test top_k validation
+    with pytest.raises(AttackExecutionError, match="DeepFool top_k must be greater than 0"):
+        attack.generate(inputs, labels, AttackConfig(params={"top_k": 0}))
+
+    with pytest.raises(AttackExecutionError, match="DeepFool top_k must be greater than 0"):
+        attack.generate(inputs, labels, AttackConfig(params={"top_k": -3}))
+
