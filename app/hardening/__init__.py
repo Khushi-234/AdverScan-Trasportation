@@ -7,6 +7,8 @@ result DTOs, and exception handling.
 
 from app.hardening.hardening_engine import HardeningEngine
 from app.hardening.defense_selector import DefenseSelector
+from app.hardening.hardening_context import HardeningContext
+from app.hardening.defense_capabilities import DEFENSE_CAPABILITIES, SCORING_WEIGHTS
 from app.hardening.hardening_result import HardeningResult, HardeningMetadata
 from app.hardening.exceptions import (
     HardeningError,
@@ -17,16 +19,21 @@ from app.hardening.exceptions import (
 from app.hardening.defenses import (
     BaseDefense,
     SpatialSmoothingDefense,
-    BitDepthReductionDefense,
+    FeatureSqueezingDefense,
     JPEGCompressionDefense,
     PreprocessingDefense,
     RandomizedSmoothingDefense,
     AdversarialTrainingDefense,
+    ConfidenceRejectionDefense,
+    AdversarialDetectionDefense,
 )
 
 __all__ = [
     "HardeningEngine",
     "DefenseSelector",
+    "HardeningContext",
+    "DEFENSE_CAPABILITIES",
+    "SCORING_WEIGHTS",
     "HardeningResult",
     "HardeningMetadata",
     "HardeningError",
@@ -35,9 +42,15 @@ __all__ = [
     "DefenseExecutionError",
     "BaseDefense",
     "SpatialSmoothingDefense",
-    "BitDepthReductionDefense",
+    "FeatureSqueezingDefense",
     "JPEGCompressionDefense",
     "PreprocessingDefense",
     "RandomizedSmoothingDefense",
     "AdversarialTrainingDefense",
+    "ConfidenceRejectionDefense",
+    "AdversarialDetectionDefense",
 ]
+
+
+
+

@@ -8,7 +8,7 @@ import torch.nn as nn
 
 from app.hardening.defenses import (
     SpatialSmoothingDefense,
-    BitDepthReductionDefense,
+    FeatureSqueezingDefense,
     JPEGCompressionDefense,
     PreprocessingDefense,
     RandomizedSmoothingDefense,
@@ -83,7 +83,7 @@ def test_spatial_smoothing_defense():
 def test_bit_depth_reduction_defense():
     model = DummyClassifier(in_features=12, num_classes=2)
     inputs = torch.rand(3, 12)
-    defense = BitDepthReductionDefense(bit_depth=4)
+    defense = FeatureSqueezingDefense(bit_depth=4)
 
     result = defense.apply(model=model, inputs=inputs)
     assert result.success is True
@@ -107,7 +107,7 @@ def test_jpeg_compression_defense():
 def test_preprocessing_defense_pipeline():
     model = DummyConvClassifier()
     inputs = torch.rand(2, 3, 8, 8)
-    defense = PreprocessingDefense(methods=["spatial_smoothing", "bit_depth_reduction"])
+    defense = PreprocessingDefense(methods=["spatial_smoothing", "feature_squeezing"])
 
     result = defense.apply(model=model, inputs=inputs)
     assert result.success is True
@@ -152,3 +152,42 @@ def test_adversarial_training_missing_inputs_error():
     defense = AdversarialTrainingDefense()
     with pytest.raises(HardeningConfigurationError):
         defense.apply(model=model, inputs=None, labels=None)
+
+
+def test_reduce_bit_depth_supports_16_bit():
+    inputs = torch.linspace(0.0, 1.0, 500)
+    # 12-bit quantizes into 4095 levels; 500 distinct values in [0, 1] will retain their unique bins
+    squeezed_12 = reduce_bit_depth(inputs, bit_depth=12)
+    squeezed_8 = reduce_bit_depth(inputs, bit_depth=8)
+    # Squeezed 12 has higher precision than squeezed 8 (not clamped to 8)
+    assert not torch.allclose(squeezed_12, squeezed_8)
+
+    defense = FeatureSqueezingDefense(bit_depth=12)
+    res = defense.apply(model=DummyClassifier(in_features=500, num_classes=2), inputs=inputs.unsqueeze(0))
+    assert res.success is True
+    assert res.metadata.parameters["bit_depth"] == 12
+
+
+def test_preprocessing_wrapper_prevents_double_application():
+    from app.hardening.defenses.preprocessing import SpatialSmoothingDefense
+    from app.hardening.defenses.wrapper import HardenedModelWrapper
+
+    model = DummyConvClassifier()
+    inputs = torch.rand(2, 3, 8, 8)
+    defense = SpatialSmoothingDefense(kernel_size=3, sigma=1.0)
+    result = defense.apply(model=model, inputs=inputs)
+    assert isinstance(result.hardened_model, HardenedModelWrapper)
+
+    # Output from passing raw inputs (filter applied once inside wrapped model)
+    out_raw = result.hardened_model(inputs)
+
+    # Output from passing hardened_inputs (guard prevents filter from running a second time)
+    out_hardened = result.hardened_model(result.hardened_inputs)
+
+    # Both must match exactly since filter was applied once in both paths
+    assert torch.allclose(out_raw, out_hardened, atol=1e-6)
+
+    # Explicit flag already_preprocessed=True also bypasses re-filtering
+    out_flag = result.hardened_model(result.hardened_inputs, already_preprocessed=True)
+    assert torch.allclose(out_raw, out_flag, atol=1e-6)
+

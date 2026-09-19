@@ -39,6 +39,7 @@ class HardeningResult:
         hardened_model: Hardened or wrapped model object (PyTorch module or defense wrapper).
         metadata: HardeningMetadata instance.
         hardened_inputs: Optional preprocessed input tensor or batch (for input-preprocessing defenses).
+        hardened_labels: Optional filtered or transformed ground truth labels aligned with hardened_inputs.
         success: Boolean flag indicating if defense execution completed without errors.
         metrics_before: Optional metric mapping before hardening (e.g., baseline/adversarial accuracy).
         metrics_after: Optional metric mapping after hardening (e.g., hardened adversarial accuracy).
@@ -48,6 +49,7 @@ class HardeningResult:
     hardened_model: Any
     metadata: HardeningMetadata
     hardened_inputs: Optional[Any] = None
+    hardened_labels: Optional[Any] = None
     success: bool = True
     metrics_before: Dict[str, Any] = field(default_factory=dict)
     metrics_after: Dict[str, Any] = field(default_factory=dict)

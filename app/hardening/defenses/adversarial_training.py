@@ -14,6 +14,7 @@ Update model weights
 Model becomes more resistant
 """
 
+import copy
 import time
 from datetime import datetime
 from typing import Any, Dict, Optional, Tuple
@@ -23,8 +24,21 @@ import torch.optim as optim
 
 from app.hardening.defenses.base import BaseDefense
 from app.hardening.hardening_result import HardeningMetadata, HardeningResult
-from app.hardening.utils import clone_model
 from app.hardening.exceptions import DefenseExecutionError, HardeningConfigurationError
+
+
+def clone_model(model: nn.Module) -> nn.Module:
+    """
+    Deep copy a PyTorch model to preserve original state during hardening operations.
+
+    Args:
+        model: Source PyTorch model.
+
+    Returns:
+        nn.Module: Deep copied model instance.
+    """
+    return copy.deepcopy(model)
+
 
 
 def generate_fgsm_batch(
