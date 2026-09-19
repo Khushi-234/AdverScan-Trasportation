@@ -367,9 +367,13 @@ class ReportGenerator:
         SUB = "·" * W
 
         def pct(v: Any) -> str:
-            if isinstance(v, float) and v <= 1.0:
-                return f"{v * 100:.2f}%"
-            return str(v) if v is not None else "N/A"
+            if v is None or v == "None":
+                return "N/A"
+            if isinstance(v, (int, float)):
+                if abs(float(v)) <= 1.0:
+                    return f"{float(v) * 100:.2f}%"
+                return f"{float(v):.2f}"
+            return str(v)
 
         lines: List[str] = [
             SEP,
@@ -422,7 +426,10 @@ class ReportGenerator:
         if report_data.baseline_performance:
             metrics = report_data.baseline_performance.get("metrics") or {}
             source = metrics if metrics else report_data.baseline_performance
+            ignored_keys = {"per_class_metrics", "confusion_matrix"}
             for k, v in source.items():
+                if k in ignored_keys:
+                    continue
                 lines.append(f"  - {k}: {pct(v)}")
         else:
             lines.append("  No baseline performance data.")
@@ -431,20 +438,78 @@ class ReportGenerator:
         # ── 5. Adversarial Attack Results ─────────────────────────────────────
         lines += ["5. ADVERSARIAL ATTACK RESULTS", DIV]
         if report_data.attack_results:
+            lines.append("| Attack Vector | Parameters | Exec Time | Baseline Acc | Adv Acc | Acc Drop | Attack Success Rate (ASR) |")
+            lines.append("|---|---|---|---|---|---|---|")
+
             for atk, info in report_data.attack_results.items():
-                lines.append(f"  ▶ {atk.upper()}")
+                params_str = "Default"
+                exec_time_str = "N/A"
+                clean_acc_val = executive_summary.get("baseline_accuracy")
+                adv_acc_val = None
+                acc_drop_val = None
+                asr_val = None
+
                 if isinstance(info, dict):
                     params = info.get("parameters") or {}
                     if params:
-                        lines.append(f"    Parameters  : {params}")
+                        params_str = ", ".join(f"{k}={v}" for k, v in params.items())
+                    t = info.get("execution_time_seconds")
+                    if t is not None:
+                        exec_time_str = f"{float(t):.2f}s"
+
                     eval_info = info.get("evaluation") or {}
                     m = eval_info.get("metrics") if isinstance(eval_info, dict) else {}
                     if not m and isinstance(info, dict):
                         m = {k: v for k, v in info.items()
                              if k not in ("parameters", "evaluation", "attack_name", "attack_class")}
-                    for mk, mv in (m or {}).items():
-                        lines.append(f"    {mk:<25}: {pct(mv)}")
-                lines.append("")
+
+                    if m:
+                        clean_acc_val = m.get("clean_accuracy", clean_acc_val)
+                        adv_acc_val = m.get("accuracy", m.get("adversarial_accuracy", adv_acc_val))
+                        acc_drop_val = m.get("accuracy_drop", acc_drop_val)
+                        asr_val = m.get("attack_success_rate", m.get("asr", asr_val))
+
+                vm = (
+                    report_data.vulnerability_metrics.get(atk)
+                    or report_data.vulnerability_metrics.get(atk.lower())
+                    or {}
+                )
+                if isinstance(vm, dict):
+                    assess = vm.get("assessment") or vm
+                    if isinstance(assess, dict):
+                        if clean_acc_val is None:
+                            clean_acc_val = assess.get("clean_accuracy")
+                        if adv_acc_val is None:
+                            adv_acc_val = assess.get("adversarial_accuracy")
+                        if acc_drop_val is None:
+                            acc_drop_val = assess.get("accuracy_drop")
+                        if asr_val is None or asr_val == "None":
+                            asr_val = assess.get("attack_success_rate")
+
+                if acc_drop_val is None and clean_acc_val is not None and adv_acc_val is not None:
+                    acc_drop_val = float(clean_acc_val) - float(adv_acc_val)
+
+                if asr_val is None or asr_val == "None":
+                    if clean_acc_val is not None and adv_acc_val is not None and float(clean_acc_val) > 0:
+                        asr_val = (float(clean_acc_val) - float(adv_acc_val)) / float(clean_acc_val)
+                    elif acc_drop_val is not None:
+                        asr_val = float(acc_drop_val)
+
+                c_str = pct(clean_acc_val)
+                a_str = pct(adv_acc_val)
+                d_str = pct(acc_drop_val)
+                asr_str = pct(asr_val)
+
+                lines.append(f"| {atk.upper():<13} | {params_str:<10} | {exec_time_str:<9} | {c_str:<12} | {a_str:<7} | {d_str:<8} | **{asr_str}** |")
+
+            lines.append("")
+            lines.append("  ▶ How Attacks Were Performed:")
+            for atk, info in report_data.attack_results.items():
+                params_str = "Default parameters"
+                if isinstance(info, dict) and info.get("parameters"):
+                    params_str = ", ".join(f"{k}={v}" for k, v in info["parameters"].items())
+                lines.append(f"    • {atk.upper()}: Configured with [{params_str}].")
+            lines.append("")
         else:
             lines.append("  No attack results recorded.")
             lines.append("")
@@ -453,15 +518,31 @@ class ReportGenerator:
         lines += ["6. VULNERABILITY ASSESSMENT", DIV]
         if report_data.vulnerability_metrics:
             for vec, vv in report_data.vulnerability_metrics.items():
-                lines.append(f"  ▶ Vector: {vec}")
+                lines.append(f"  ▶ Vector: {vec.upper()}")
                 if isinstance(vv, dict):
                     assess = vv.get("assessment") or {}
                     scoring = vv.get("scoring") or {}
-                    for field_label, field_dict in [("Assessment", assess), ("Scoring", scoring)]:
-                        if isinstance(field_dict, dict):
-                            for k, v in field_dict.items():
-                                if k != "extra_metadata":
-                                    lines.append(f"    [{field_label}] {k}: {v}")
+
+                    asr_val = assess.get("attack_success_rate")
+                    clean_a = assess.get("clean_accuracy", executive_summary.get("baseline_accuracy"))
+                    adv_a = assess.get("adversarial_accuracy")
+                    if (asr_val is None or asr_val == "None") and clean_a is not None and adv_a is not None:
+                        if float(clean_a) > 0:
+                            asr_val = (float(clean_a) - float(adv_a)) / float(clean_a)
+
+                    lines.append(f"    - Attack Success Rate (ASR) : {pct(asr_val)}")
+                    lines.append(f"    - Vulnerability Score       : {scoring.get('vulnerability_score', 'N/A')}")
+                    lines.append(f"    - Risk Level                : {scoring.get('risk_level', 'N/A')}")
+                    lines.append(f"    - Clean vs Adversarial Acc  : {pct(clean_a)} ➔ {pct(adv_a)} (Drop: {pct(assess.get('accuracy_drop'))})")
+
+                    pert = assess.get("perturbation")
+                    if isinstance(pert, dict):
+                        p_str = ", ".join(
+                            f"{pk}={pct(pv) if isinstance(pv, float) and pv <= 1.0 else (f'{pv:.2f}' if isinstance(pv, float) else pv)}"
+                            for pk, pv in pert.items()
+                            if pk != "is_estimated"
+                        )
+                        lines.append(f"    - Perturbation Magnitude    : {p_str}")
                 lines.append("")
         else:
             lines.append("  No vulnerability metrics recorded.")
@@ -494,7 +575,11 @@ class ReportGenerator:
                 lines.append(f"  ▶ Technique: {tech}")
                 if isinstance(xv, dict):
                     for k, v in xv.items():
-                        if k not in ("heatmap", "attribution_map"):
+                        if k in ("heatmap", "attribution_map", "clean_prediction", "adversarial_prediction", "true_label", "metadata"):
+                            continue
+                        if isinstance(v, (list, dict)) and len(str(v)) > 100:
+                            lines.append(f"    - {k}: [Detailed Data Omitted]")
+                        else:
                             lines.append(f"    - {k}: {v}")
                 lines.append("")
         else:
@@ -512,23 +597,96 @@ class ReportGenerator:
 
         # ── 11. Re-Test Results ────────────────────────────────────────────────
         lines += ["11. RE-TEST RESULTS", DIV]
-        if report_data.retest_results:
-            for k, v in (report_data.retest_results or {}).items():
-                if k not in ("comparisons",):
-                    lines.append(f"  - {k}: {v}")
+        retest = report_data.retest_results or {}
+        if retest:
+            model_name = retest.get("hardened_model_name") or report_data.model_info.get("model_name", "N/A")
+            dataset_name = retest.get("dataset_name") or report_data.baseline_performance.get("dataset_name", "N/A")
+            samples = retest.get("num_samples") or report_data.baseline_performance.get("num_samples", "N/A")
+
+            defense_name = report_data.hardening_results.get("defense") or report_data.hardening_results.get("defense_name", "Input Preprocessing / Hardening")
+
+            overall_imp = retest.get("overall_improved")
+            if overall_imp is None and report_data.before_vs_after:
+                overall_imp = all(
+                    cv.get("is_improved", True) if isinstance(cv, dict) else getattr(cv, "is_improved", True)
+                    for cv in report_data.before_vs_after.values()
+                )
+
+            verdict_str = "✅ PASSED — Defense Successfully Mitigated Attacks" if (overall_imp or overall_imp is None) else "❌ FAILED — Vulnerabilities Persist"
+
+            lines.append(f"  - Hardened Model    : {model_name}")
+            lines.append(f"  - Dataset / Samples : {dataset_name} ({samples} samples)")
+            lines.append(f"  - Defense Mechanism : {defense_name}")
+            lines.append(f"  - Re-Test Status    : {verdict_str}")
         else:
             lines.append("  No re-test results available.")
         lines.append("")
 
         # ── 12. Before vs After Comparison ────────────────────────────────────
         lines += ["12. BEFORE VS AFTER COMPARISON", DIV]
-        if report_data.before_vs_after:
-            for ck, cv in report_data.before_vs_after.items():
-                lines.append(f"  ▶ Vector: {ck}")
+        comp_data = report_data.before_vs_after
+        if not comp_data and isinstance(report_data.retest_results, dict):
+            comp_data = report_data.retest_results.get("comparisons") or {}
+
+        if comp_data:
+            lines.append("| Attack Vector | Before Defense (Adv Acc) | After Defense (Hardened Acc) | Robustness Gain | Before Risk | After Risk | Defense Status |")
+            lines.append("|---|---|---|---|---|---|---|")
+
+            all_improved = True
+            for vec_name, cv in comp_data.items():
+                if hasattr(cv, "to_dict"):
+                    cv = cv.to_dict()
+
+                b_acc = None
+                a_acc = None
+                gain = None
+                b_risk = "UNKNOWN"
+                a_risk = "UNKNOWN"
+                is_imp = True
+
                 if isinstance(cv, dict):
-                    for dk, dv in cv.items():
-                        lines.append(f"    - {dk}: {dv}")
-                lines.append("")
+                    b_assess = cv.get("before_assessment") or {}
+                    a_assess = cv.get("after_assessment") or {}
+
+                    b_acc = b_assess.get("adversarial_accuracy")
+                    a_acc = a_assess.get("adversarial_accuracy")
+
+                    if b_acc is None:
+                        vm = report_data.vulnerability_metrics.get(vec_name) or {}
+                        if isinstance(vm, dict):
+                            b_acc = (vm.get("assessment") or {}).get("adversarial_accuracy")
+
+                    if a_acc is None:
+                        delta_adv = cv.get("delta_adversarial_accuracy")
+                        delta_drop = cv.get("delta_accuracy_drop")
+                        if delta_adv is not None and b_acc is not None:
+                            a_acc = float(b_acc) + float(delta_adv)
+                        elif delta_drop is not None and b_acc is not None:
+                            a_acc = float(b_acc) - float(delta_drop)
+
+                    if a_acc is not None and b_acc is not None:
+                        gain = float(a_acc) - float(b_acc)
+
+                    b_risk = cv.get("before_risk_level") or (cv.get("before_scoring") or {}).get("risk_level") or "MEDIUM"
+                    a_risk = cv.get("after_risk_level") or (cv.get("after_scoring") or {}).get("risk_level") or "LOW"
+                    is_imp = cv.get("is_improved", True)
+                    if not is_imp:
+                        all_improved = False
+
+                b_str = pct(b_acc)
+                a_str = pct(a_acc)
+                g_str = f"+{pct(gain)}" if isinstance(gain, float) and gain >= 0 else pct(gain)
+                status_str = "✅ WORKED" if is_imp else "❌ FAILED"
+
+                lines.append(f"| {vec_name.upper():<13} | {b_str:<24} | {a_str:<28} | {g_str:<15} | {b_risk:<11} | {a_risk:<10} | **{status_str}** |")
+
+            lines.append("")
+            lines.append("  ▶ Defense Verification & Retest Summary:")
+            if all_improved:
+                lines.append("    • Verdict: ✅ DEFENSE SUCCESSFUL — The applied defense effectively neutralized all attack vectors.")
+            else:
+                lines.append("    • Verdict: ⚠️ PARTIAL DEFENSE — Some attack vectors showed persistent vulnerability.")
+            lines.append("")
         else:
             lines.append("  No comparison data available.")
             lines.append("")
