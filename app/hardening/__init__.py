@@ -7,9 +7,7 @@ result DTOs, and exception handling.
 
 from app.hardening.hardening_engine import HardeningEngine
 from app.hardening.defense_selector import DefenseSelector
-from app.hardening.hardening_context import HardeningContext
-from app.hardening.defense_capabilities import DEFENSE_CAPABILITIES, SCORING_WEIGHTS
-from app.hardening.hardening_result import HardeningResult, HardeningMetadata
+from app.hardening.hardening_result import HardeningResult, HardeningMetadata, DefenseAttemptResult
 from app.hardening.exceptions import (
     HardeningError,
     DefenseNotFoundError,
@@ -36,6 +34,7 @@ __all__ = [
     "SCORING_WEIGHTS",
     "HardeningResult",
     "HardeningMetadata",
+    "DefenseAttemptResult",
     "HardeningError",
     "DefenseNotFoundError",
     "HardeningConfigurationError",
@@ -50,7 +49,4 @@ __all__ = [
     "ConfidenceRejectionDefense",
     "AdversarialDetectionDefense",
 ]
-
-
-
 
