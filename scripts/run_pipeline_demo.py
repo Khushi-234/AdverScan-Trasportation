@@ -11,6 +11,9 @@ import argparse
 import json
 import sys
 import os
+import warnings
+warnings.filterwarnings("ignore", category=UserWarning, module="sklearn")
+warnings.filterwarnings("ignore", message=".*number of unique classes is greater than 50%.*")
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 import time
 from typing import List, Tuple
@@ -202,7 +205,8 @@ def prompt_user_selection():
         print("  4. Randomized Smoothing (randomized_smoothing)")
         print("  5. Adversarial Training (adversarial_training)")
         print("  6. Auto Selection (auto)")
-        def_choice = input("Select defense [6]: ").strip() or "6"
+        print("  7. Iterative Selection & Evaluation Loop (iterative)")
+        def_choice = input("Select defense [7]: ").strip() or "7"
         def_map = {
             "1": "spatial_smoothing",
             "2": "bit_depth_reduction",
@@ -210,8 +214,9 @@ def prompt_user_selection():
             "4": "randomized_smoothing",
             "5": "adversarial_training",
             "6": "auto",
+            "7": "iterative",
         }
-        selected_defense = def_map.get(def_choice, "auto")
+        selected_defense = def_map.get(def_choice, "iterative")
 
     # 7. Re-Test & Comparison Selection (M8)
     enable_retest_str = input("\nEnable M8 Re-Test & Comparison Engine? [Y/n]: ").strip().lower() or "y"
@@ -453,25 +458,58 @@ def main():
     print("M6 — XAI EXPLAINABILITY")
     print("------------------------------------------------------------")
     if result.xai_results:
+        def _fmt_pred(val, max_items=5):
+            if isinstance(val, (list, tuple)):
+                if len(val) > max_items:
+                    preview = ", ".join(map(str, val[:max_items]))
+                    return f"[{preview}, ...] ({len(val)} total samples)"
+                return str(val)
+            return str(val)
+
         for xai_key, xai_res in result.xai_results.items():
             print(f"[{xai_key.upper()}] Technique: {xai_res.get('technique')}")
             print(f"    Prediction Changed:   {xai_res.get('prediction_changed')}")
             print(f"    Attack Caused Failure:{xai_res.get('attack_caused_failure')}")
-            print(f"    Clean Prediction:     {xai_res.get('clean_prediction')}")
-            print(f"    Adversarial Pred:     {xai_res.get('adversarial_prediction')}")
+            print(f"    Clean Prediction:     {_fmt_pred(xai_res.get('clean_prediction'))}")
+            print(f"    Adversarial Pred:     {_fmt_pred(xai_res.get('adversarial_prediction'))}")
     else:
         print("XAI: Disabled or not executed.")
 
     print("\n------------------------------------------------------------")
-    print("M7 — HARDENING ENGINE")
+    print("M7 — HARDENING ENGINE & ITERATIVE SELECTION")
     print("------------------------------------------------------------")
     if result.hardening_results:
         hard_meta = result.hardening_results.get("metadata", {})
-        print(f"Applied Defense:          {hard_meta.get('defense_name')} ({hard_meta.get('defense_type')})")
-        print(f"Hardening Success:        {result.hardening_results.get('success')}")
+        selected_def = result.hardening_results.get("selected_defense") or hard_meta.get("defense_name")
+        print(f"Finally Selected Defense: {selected_def} ({hard_meta.get('defense_type')})")
+        print(f"Hardening Status:         {result.hardening_results.get('status')}")
+        print(f"Acceptance Satisfied:     {result.hardening_results.get('improvement_sufficient')}")
+        print(f"Total Attempts Evaluated: {result.hardening_results.get('num_attempts')}")
         print(f"Hardened Model Class:     {result.hardening_results.get('hardened_model_class')}")
+
+        attempts = result.hardening_results.get("defense_attempts", [])
+        if attempts:
+            print("\n  Candidate Attempt Breakdown:")
+            for idx, att in enumerate(attempts, 1):
+                st_str = "ACCEPTED" if att.get("status") == "accepted" else ("INSUFFICIENT" if att.get("status") == "insufficient" else "HARMFUL")
+                print(f"  [{idx}] Defense '{att.get('defense_name')}': Status = {st_str}")
+                if att.get("vuln_score_improvement") is not None:
+                    print(f"      - Vulnerability Score Improvement: {att.get('vuln_score_improvement'):+.2f} pts")
+                if att.get("clean_accuracy_drop_pct_points") is not None:
+                    print(f"      - Clean Accuracy Drop:            {att.get('clean_accuracy_drop_pct_points'):.2f}%")
+                if att.get("reason"):
+                    print(f"      - Failure / Evaluation Reason:    {att.get('reason')}")
+                if att.get("status") != "accepted" and idx < len(attempts):
+                    next_def = attempts[idx].get("defense_name")
+                    print(f"      - Next Action:                    Applied '{next_def}' to test alternative defense technique.")
+
+            best_att = max(attempts, key=lambda a: (a.get("vuln_score_improvement") or 0.0, -(a.get("clean_accuracy_drop") or 0.0)))
+            print(f"\n  📈 Defense Technique that Improved Model Most: '{best_att.get('defense_name')}' "
+                  f"(Achieved {best_att.get('vuln_score_improvement', 0.0):+.2f} pts vulnerability reduction)")
         if result.hardening_results.get("recommendations"):
-            print(f"Recommendations:          {result.hardening_results.get('recommendations')}")
+            print("\nRecommendations:")
+            for rec in result.hardening_results.get("recommendations", []):
+                print(f"  - {rec}")
     else:
         print("Hardening: Disabled or not executed.")
 
