@@ -120,7 +120,7 @@ class RetestEngine:
             num_classes=num_classes,
             model_name=model_name,
         )
-        after_baseline_result: EvaluationResult = baseline_evaluator.evaluate(output_dir=None)
+        after_baseline_result: EvaluationResult = baseline_evaluator.evaluate(output_dir=None, show_progress=False)
         after_baseline_dict = after_baseline_result.to_dict()
 
         # Extract sample batch for attack execution
@@ -177,7 +177,7 @@ class RetestEngine:
                 num_classes=num_classes,
                 model_name=model_name,
             )
-            adv_eval_res: EvaluationResult = adv_evaluator.evaluate(output_dir=None)
+            adv_eval_res: EvaluationResult = adv_evaluator.evaluate(output_dir=None, show_progress=False)
             after_adv_evaluations_dict[attack_name] = adv_eval_res
 
         # Step 3: Run Vulnerability Analysis on Hardened Model
