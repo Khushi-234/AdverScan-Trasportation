@@ -1,0 +1,893 @@
+{
+  "report_id": "RPT-E419A8AF",
+  "timestamp": "2026-09-21 16:53:10",
+  "status": "SUCCESS",
+  "scan_id": "SCAN-30B343",
+  "executive_summary": {
+    "scan_id": "SCAN-30B343",
+    "timestamp": "2026-09-21 16:53:10",
+    "risk_level": "LOW",
+    "vulnerability_score": 6.85,
+    "baseline_accuracy": 0.3125,
+    "attacks_evaluated": [
+      "fgsm"
+    ],
+    "num_attacks": 1,
+    "xai_enabled": false,
+    "hardening_applied": true,
+    "retest_conducted": true,
+    "execution_status": "SUCCESS"
+  },
+  "model_info": {
+    "framework": "pytorch",
+    "model_name": "TargetModel",
+    "input_shape": [
+      1,
+      10
+    ],
+    "output_shape": [
+      1,
+      3
+    ],
+    "num_classes": 3,
+    "task_type": "classification",
+    "device": "cpu",
+    "extra_info": {}
+  },
+  "dataset_config": {},
+  "baseline_performance": {
+    "dataset_name": "DummyDataset",
+    "model_name": "TargetModel",
+    "num_samples": 16,
+    "num_classes": 3,
+    "accuracy": 0.3125,
+    "precision_macro": 0.3148148148148148,
+    "recall_macro": 0.32222222222222224,
+    "f1_macro": 0.2738095238095238,
+    "precision_weighted": 0.3263888888888889,
+    "recall_weighted": 0.3125,
+    "f1_weighted": 0.27232142857142855,
+    "average_confidence": 0.47299376130104065,
+    "average_entropy": 1.4690865278244019,
+    "per_class_metrics": {
+      "0": {
+        "precision": 0.4444444444444444,
+        "recall": 0.8,
+        "f1": 0.5714285714285714,
+        "support": 5
+      },
+      "1": {
+        "precision": 0.5,
+        "recall": 0.16666666666666666,
+        "f1": 0.25,
+        "support": 6
+      },
+      "2": {
+        "precision": 0.0,
+        "recall": 0.0,
+        "f1": 0.0,
+        "support": 5
+      }
+    },
+    "confusion_matrix": [
+      [
+        4,
+        1,
+        0
+      ],
+      [
+        0,
+        1,
+        5
+      ],
+      [
+        5,
+        0,
+        0
+      ]
+    ],
+    "batch_size": 4,
+    "device": "cpu",
+    "timestamp": "2026-09-21 16:53:10",
+    "extra_metadata": {}
+  },
+  "attack_results": {
+    "fgsm": {
+      "attack_name": "fgsm",
+      "attack_class": "FGSM",
+      "execution_time_seconds": 0.0005,
+      "parameters": {},
+      "evaluation": {
+        "dataset_name": "adv_fgsm",
+        "model_name": "TargetModel",
+        "num_samples": 16,
+        "num_classes": 3,
+        "accuracy": 0.1875,
+        "precision_macro": 0.07142857142857142,
+        "recall_macro": 0.19999999999999998,
+        "f1_macro": 0.10526315789473684,
+        "precision_weighted": 0.06696428571428571,
+        "recall_weighted": 0.1875,
+        "f1_weighted": 0.09868421052631579,
+        "average_confidence": 0.47625142335891724,
+        "average_entropy": 1.5013480186462402,
+        "per_class_metrics": {
+          "0": {
+            "precision": 0.21428571428571427,
+            "recall": 0.6,
+            "f1": 0.3157894736842105,
+            "support": 5
+          },
+          "1": {
+            "precision": 0.0,
+            "recall": 0.0,
+            "f1": 0.0,
+            "support": 6
+          },
+          "2": {
+            "precision": 0.0,
+            "recall": 0.0,
+            "f1": 0.0,
+            "support": 5
+          }
+        },
+        "confusion_matrix": [
+          [
+            3,
+            2,
+            0
+          ],
+          [
+            6,
+            0,
+            0
+          ],
+          [
+            5,
+            0,
+            0
+          ]
+        ],
+        "batch_size": 32,
+        "device": "cpu",
+        "timestamp": "2026-09-21 16:53:10",
+        "extra_metadata": {}
+      }
+    }
+  },
+  "vulnerability_metrics": {
+    "fgsm": {
+      "assessment": {
+        "attack_name": "fgsm",
+        "dataset_name": "DummyDataset",
+        "num_samples": 16,
+        "attack_success_rate": null,
+        "perturbation": {
+          "linf_mean": 1.4101324006915092,
+          "l2_mean": 2.0536315412957733,
+          "l0_mean": 1.0,
+          "is_estimated": false
+        },
+        "accuracy_drop": 0.125,
+        "f1_drop": 0.16854636591478694,
+        "confidence_drop": -0.003257662057876587,
+        "model_degradation": 0.09784878863826231,
+        "clean_accuracy": 0.3125,
+        "adversarial_accuracy": 0.1875,
+        "clean_f1": 0.2738095238095238,
+        "adversarial_f1": 0.10526315789473684,
+        "clean_confidence": 0.47299376130104065,
+        "adversarial_confidence": 0.47625142335891724,
+        "attack_success_rate_reason": "missing_clean_predictions_and_adversarial_predictions",
+        "timestamp": "2026-09-21 16:53:10",
+        "extra_metadata": {
+          "attack_class": "FGSM",
+          "execution_time_seconds": 0.0005
+        }
+      },
+      "scoring": {
+        "attack_name": "fgsm",
+        "vulnerability_score": 6.85,
+        "risk_level": "LOW",
+        "sub_scores": {
+          "asr_score": null,
+          "degradation_score": 9.78,
+          "stealth_score": 0.0
+        },
+        "timestamp": "2026-09-21 16:53:10",
+        "metadata": {
+          "weights": {
+            "weight_asr": 0.5,
+            "weight_degradation": 0.35,
+            "weight_stealth": 0.15
+          },
+          "asr_available": false,
+          "score_completeness": "partial",
+          "attack_success_rate_reason": "missing_clean_predictions_and_adversarial_predictions",
+          "dataset_name": "DummyDataset",
+          "num_samples": 16,
+          "stealth_linf_reference": 0.3
+        }
+      }
+    }
+  },
+  "vulnerability_score": 6.85,
+  "risk_level": "LOW",
+  "mitre_atlas_mapping": {
+    "fgsm": {
+      "tactic": "AML.TA0000 \u2014 ML Attack Staging",
+      "technique": "AML.T0043 \u2014 Craft Adversarial Data (FGSM)",
+      "mitigation": "AML.M0003 \u2014 Adversarial Input Detection"
+    }
+  },
+  "xai_findings": {},
+  "hardening_results": {
+    "metadata": {
+      "defense_name": "spatial_smoothing",
+      "defense_type": "preprocessing",
+      "parameters": {
+        "kernel_size": 3,
+        "sigma": 1.0
+      },
+      "execution_time_seconds": 4.076957702636719e-05,
+      "timestamp": "2026-09-21 16:53:10",
+      "extra_metadata": {
+        "defense_family": "preprocessing"
+      }
+    },
+    "success": true,
+    "status": "insufficient",
+    "selected_defense": "spatial_smoothing",
+    "num_attempts": 1,
+    "is_improved": false,
+    "improvement_sufficient": false,
+    "thresholds": {
+      "min_vuln_score_improvement": 5.0,
+      "min_asr_reduction": 0.1,
+      "max_clean_accuracy_drop": 0.02,
+      "max_latency_overhead_ms": 30.0,
+      "respect_latency_sensitive": true,
+      "severe_clean_drop_threshold": 0.1,
+      "extra_thresholds": {}
+    },
+    "defense_attempts": [
+      {
+        "defense_name": "spatial_smoothing",
+        "status": "insufficient",
+        "is_improved": false,
+        "improvement_sufficient": false,
+        "vuln_score_before": 75.0,
+        "vuln_score_after": 75.0,
+        "vuln_score_improvement": 0.0,
+        "asr_before": 0.75,
+        "asr_after": 0.75,
+        "asr_reduction": 0.0,
+        "clean_accuracy_before": 0.3125,
+        "clean_accuracy_after": 0.3125,
+        "clean_accuracy_drop": 0.0,
+        "clean_accuracy_drop_pct_points": 0.0,
+        "latency_ms": 15.0,
+        "latency_overhead_ms": 0.0,
+        "parameters": {
+          "kernel_size": 3,
+          "sigma": 1.0
+        },
+        "reason": "Insufficient robustness improvement: Vuln score improvement 0.0 < 5.0 points and ASR reduction 0.0% < 10.0%"
+      }
+    ],
+    "metrics_before": {
+      "clean_accuracy": 0.3125,
+      "asr": 0.75,
+      "vulnerability_score": 75.0,
+      "latency_ms": 15.0
+    },
+    "metrics_after": {
+      "clean_accuracy": 0.3125,
+      "asr": 0.75,
+      "vulnerability_score": 75.0,
+      "latency_ms": 15.0
+    },
+    "recommendations": [
+      "Applied Gaussian Filter defense (kernel_size=3, sigma=1.00).",
+      "Selector Context: Selected primary defense 'spatial_smoothing' for LOW risk FGSM attack (vulnerability score: 6.8, eps: 0.0300). Evaluated 5 compatible candidates."
+    ],
+    "hardened_model_class": "HardenedModelWrapper",
+    "has_hardened_inputs": true
+  },
+  "retest_results": {
+    "hardened_model_name": "TargetModel",
+    "dataset_name": "DummyDataset",
+    "num_samples": 16,
+    "before_baseline_evaluation": {
+      "dataset_name": "DummyDataset",
+      "model_name": "TargetModel",
+      "num_samples": 16,
+      "num_classes": 3,
+      "accuracy": 0.3125,
+      "precision_macro": 0.3148148148148148,
+      "recall_macro": 0.32222222222222224,
+      "f1_macro": 0.2738095238095238,
+      "precision_weighted": 0.3263888888888889,
+      "recall_weighted": 0.3125,
+      "f1_weighted": 0.27232142857142855,
+      "average_confidence": 0.47299376130104065,
+      "average_entropy": 1.4690865278244019,
+      "per_class_metrics": {
+        "0": {
+          "precision": 0.4444444444444444,
+          "recall": 0.8,
+          "f1": 0.5714285714285714,
+          "support": 5
+        },
+        "1": {
+          "precision": 0.5,
+          "recall": 0.16666666666666666,
+          "f1": 0.25,
+          "support": 6
+        },
+        "2": {
+          "precision": 0.0,
+          "recall": 0.0,
+          "f1": 0.0,
+          "support": 5
+        }
+      },
+      "confusion_matrix": [
+        [
+          4,
+          1,
+          0
+        ],
+        [
+          0,
+          1,
+          5
+        ],
+        [
+          5,
+          0,
+          0
+        ]
+      ],
+      "batch_size": 4,
+      "device": "cpu",
+      "timestamp": "2026-09-21 16:53:10",
+      "extra_metadata": {}
+    },
+    "after_baseline_evaluation": {
+      "dataset_name": "DummyDataset",
+      "model_name": "TargetModel",
+      "num_samples": 16,
+      "num_classes": 3,
+      "accuracy": 0.3125,
+      "precision_macro": 0.3148148148148148,
+      "recall_macro": 0.32222222222222224,
+      "f1_macro": 0.2738095238095238,
+      "precision_weighted": 0.3263888888888889,
+      "recall_weighted": 0.3125,
+      "f1_weighted": 0.27232142857142855,
+      "average_confidence": 0.47299376130104065,
+      "average_entropy": 1.4690865278244019,
+      "per_class_metrics": {
+        "0": {
+          "precision": 0.4444444444444444,
+          "recall": 0.8,
+          "f1": 0.5714285714285714,
+          "support": 5
+        },
+        "1": {
+          "precision": 0.5,
+          "recall": 0.16666666666666666,
+          "f1": 0.25,
+          "support": 6
+        },
+        "2": {
+          "precision": 0.0,
+          "recall": 0.0,
+          "f1": 0.0,
+          "support": 5
+        }
+      },
+      "confusion_matrix": [
+        [
+          4,
+          1,
+          0
+        ],
+        [
+          0,
+          1,
+          5
+        ],
+        [
+          5,
+          0,
+          0
+        ]
+      ],
+      "batch_size": 4,
+      "device": "cpu",
+      "timestamp": "2026-09-21 16:53:10",
+      "extra_metadata": {}
+    },
+    "before_attack_results": {
+      "fgsm": {
+        "attack_name": "fgsm",
+        "attack_class": "FGSM",
+        "execution_time_seconds": 0.0005,
+        "parameters": {}
+      }
+    },
+    "after_attack_results": {
+      "fgsm": {
+        "attack_name": "fgsm",
+        "attack_class": "FGSM",
+        "execution_time_seconds": 0.00014662742614746094,
+        "parameters": {}
+      }
+    },
+    "before_vulnerability_analysis": {
+      "fgsm": {
+        "assessment": {
+          "attack_name": "fgsm",
+          "dataset_name": "DummyDataset",
+          "num_samples": 16,
+          "attack_success_rate": null,
+          "perturbation": {
+            "linf_mean": 1.4101324006915092,
+            "l2_mean": 2.0536315412957733,
+            "l0_mean": 1.0,
+            "is_estimated": false
+          },
+          "accuracy_drop": 0.125,
+          "f1_drop": 0.16854636591478694,
+          "confidence_drop": -0.003257662057876587,
+          "model_degradation": 0.09784878863826231,
+          "clean_accuracy": 0.3125,
+          "adversarial_accuracy": 0.1875,
+          "clean_f1": 0.2738095238095238,
+          "adversarial_f1": 0.10526315789473684,
+          "clean_confidence": 0.47299376130104065,
+          "adversarial_confidence": 0.47625142335891724,
+          "attack_success_rate_reason": "missing_clean_predictions_and_adversarial_predictions",
+          "timestamp": "2026-09-21 16:53:10",
+          "extra_metadata": {
+            "attack_class": "FGSM",
+            "execution_time_seconds": 0.0005
+          }
+        },
+        "scoring": {
+          "attack_name": "fgsm",
+          "vulnerability_score": 6.85,
+          "risk_level": "LOW",
+          "sub_scores": {
+            "asr_score": null,
+            "degradation_score": 9.78,
+            "stealth_score": 0.0
+          },
+          "timestamp": "2026-09-21 16:53:10",
+          "metadata": {
+            "weights": {
+              "weight_asr": 0.5,
+              "weight_degradation": 0.35,
+              "weight_stealth": 0.15
+            },
+            "asr_available": false,
+            "score_completeness": "partial",
+            "attack_success_rate_reason": "missing_clean_predictions_and_adversarial_predictions",
+            "dataset_name": "DummyDataset",
+            "num_samples": 16,
+            "stealth_linf_reference": 0.3
+          }
+        }
+      }
+    },
+    "after_vulnerability_analysis": {
+      "fgsm": {
+        "assessment": {
+          "attack_name": "fgsm",
+          "dataset_name": "DummyDataset",
+          "num_samples": 16,
+          "attack_success_rate": null,
+          "perturbation": {
+            "linf_mean": 1.1751147359609604,
+            "l2_mean": 2.1459478213480434,
+            "l0_mean": 1.0,
+            "is_estimated": false
+          },
+          "accuracy_drop": 0.0625,
+          "f1_drop": 0.14047619047619045,
+          "confidence_drop": -0.01057848334312439,
+          "model_degradation": 0.06765873015873015,
+          "clean_accuracy": 0.3125,
+          "adversarial_accuracy": 0.25,
+          "clean_f1": 0.2738095238095238,
+          "adversarial_f1": 0.13333333333333333,
+          "clean_confidence": 0.47299376130104065,
+          "adversarial_confidence": 0.48357224464416504,
+          "attack_success_rate_reason": "missing_clean_predictions_and_adversarial_predictions",
+          "timestamp": "2026-09-21 16:53:10",
+          "extra_metadata": {
+            "attack_class": "FGSM",
+            "execution_time_seconds": 0.00014662742614746094
+          }
+        },
+        "scoring": {
+          "attack_name": "fgsm",
+          "vulnerability_score": 4.74,
+          "risk_level": "LOW",
+          "sub_scores": {
+            "asr_score": null,
+            "degradation_score": 6.77,
+            "stealth_score": 0.0
+          },
+          "timestamp": "2026-09-21 16:53:10",
+          "metadata": {
+            "weights": {
+              "weight_asr": 0.5,
+              "weight_degradation": 0.35,
+              "weight_stealth": 0.15
+            },
+            "asr_available": false,
+            "score_completeness": "partial",
+            "attack_success_rate_reason": "missing_clean_predictions_and_adversarial_predictions",
+            "dataset_name": "DummyDataset",
+            "num_samples": 16,
+            "stealth_linf_reference": 0.3
+          }
+        }
+      }
+    },
+    "comparisons": {
+      "fgsm": {
+        "attack_name": "fgsm",
+        "before_assessment": {
+          "attack_name": "fgsm",
+          "dataset_name": "DummyDataset",
+          "num_samples": 16,
+          "attack_success_rate": null,
+          "perturbation": {
+            "linf_mean": 1.4101324006915092,
+            "l2_mean": 2.0536315412957733,
+            "l0_mean": 1.0,
+            "is_estimated": false
+          },
+          "accuracy_drop": 0.125,
+          "f1_drop": 0.16854636591478694,
+          "confidence_drop": -0.003257662057876587,
+          "model_degradation": 0.09784878863826231,
+          "clean_accuracy": 0.3125,
+          "adversarial_accuracy": 0.1875,
+          "clean_f1": 0.2738095238095238,
+          "adversarial_f1": 0.10526315789473684,
+          "clean_confidence": 0.47299376130104065,
+          "adversarial_confidence": 0.47625142335891724,
+          "attack_success_rate_reason": "missing_clean_predictions_and_adversarial_predictions",
+          "timestamp": "2026-09-21 16:53:10",
+          "extra_metadata": {
+            "attack_class": "FGSM",
+            "execution_time_seconds": 0.0005
+          }
+        },
+        "after_assessment": {
+          "attack_name": "fgsm",
+          "dataset_name": "DummyDataset",
+          "num_samples": 16,
+          "attack_success_rate": null,
+          "perturbation": {
+            "linf_mean": 1.1751147359609604,
+            "l2_mean": 2.1459478213480434,
+            "l0_mean": 1.0,
+            "is_estimated": false
+          },
+          "accuracy_drop": 0.0625,
+          "f1_drop": 0.14047619047619045,
+          "confidence_drop": -0.01057848334312439,
+          "model_degradation": 0.06765873015873015,
+          "clean_accuracy": 0.3125,
+          "adversarial_accuracy": 0.25,
+          "clean_f1": 0.2738095238095238,
+          "adversarial_f1": 0.13333333333333333,
+          "clean_confidence": 0.47299376130104065,
+          "adversarial_confidence": 0.48357224464416504,
+          "attack_success_rate_reason": "missing_clean_predictions_and_adversarial_predictions",
+          "timestamp": "2026-09-21 16:53:10",
+          "extra_metadata": {
+            "attack_class": "FGSM",
+            "execution_time_seconds": 0.00014662742614746094
+          }
+        },
+        "before_scoring": {
+          "attack_name": "fgsm",
+          "vulnerability_score": 6.85,
+          "risk_level": "LOW",
+          "sub_scores": {
+            "asr_score": null,
+            "degradation_score": 9.78,
+            "stealth_score": 0.0
+          },
+          "timestamp": "2026-09-21 16:53:10",
+          "metadata": {
+            "weights": {
+              "weight_asr": 0.5,
+              "weight_degradation": 0.35,
+              "weight_stealth": 0.15
+            },
+            "asr_available": false,
+            "score_completeness": "partial",
+            "attack_success_rate_reason": "missing_clean_predictions_and_adversarial_predictions",
+            "dataset_name": "DummyDataset",
+            "num_samples": 16,
+            "stealth_linf_reference": 0.3
+          }
+        },
+        "after_scoring": {
+          "attack_name": "fgsm",
+          "vulnerability_score": 4.74,
+          "risk_level": "LOW",
+          "sub_scores": {
+            "asr_score": null,
+            "degradation_score": 6.77,
+            "stealth_score": 0.0
+          },
+          "timestamp": "2026-09-21 16:53:10",
+          "metadata": {
+            "weights": {
+              "weight_asr": 0.5,
+              "weight_degradation": 0.35,
+              "weight_stealth": 0.15
+            },
+            "asr_available": false,
+            "score_completeness": "partial",
+            "attack_success_rate_reason": "missing_clean_predictions_and_adversarial_predictions",
+            "dataset_name": "DummyDataset",
+            "num_samples": 16,
+            "stealth_linf_reference": 0.3
+          }
+        },
+        "delta_attack_success_rate": null,
+        "delta_accuracy_drop": -0.0625,
+        "delta_f1_drop": -0.0281,
+        "delta_confidence_drop": -0.0073,
+        "delta_model_degradation": -0.0302,
+        "delta_vulnerability_score": -2.11,
+        "delta_clean_accuracy": 0.0,
+        "delta_adversarial_accuracy": 0.0625,
+        "delta_perturbation": {
+          "l2_mean": 0.0923,
+          "linf_mean": -0.235,
+          "l0_mean": 0.0,
+          "is_estimated": 0.0
+        },
+        "before_risk_level": "LOW",
+        "after_risk_level": "LOW",
+        "risk_level_changed": false,
+        "is_improved": true,
+        "summary_notes": [
+          "Vulnerability score decreased by 2.11 points.",
+          "Adversarial accuracy improved by 6.25%."
+        ],
+        "timestamp": "2026-09-21 16:53:10",
+        "extra_metadata": {}
+      }
+    },
+    "overall_improved": true,
+    "timestamp": "2026-09-21 16:53:10",
+    "execution_time_seconds": 0.005,
+    "extra_metadata": {}
+  },
+  "before_vs_after": {
+    "fgsm": {
+      "attack_name": "fgsm",
+      "before_assessment": {
+        "attack_name": "fgsm",
+        "dataset_name": "DummyDataset",
+        "num_samples": 16,
+        "attack_success_rate": null,
+        "perturbation": {
+          "linf_mean": 1.4101324006915092,
+          "l2_mean": 2.0536315412957733,
+          "l0_mean": 1.0,
+          "is_estimated": false
+        },
+        "accuracy_drop": 0.125,
+        "f1_drop": 0.16854636591478694,
+        "confidence_drop": -0.003257662057876587,
+        "model_degradation": 0.09784878863826231,
+        "clean_accuracy": 0.3125,
+        "adversarial_accuracy": 0.1875,
+        "clean_f1": 0.2738095238095238,
+        "adversarial_f1": 0.10526315789473684,
+        "clean_confidence": 0.47299376130104065,
+        "adversarial_confidence": 0.47625142335891724,
+        "attack_success_rate_reason": "missing_clean_predictions_and_adversarial_predictions",
+        "timestamp": "2026-09-21 16:53:10",
+        "extra_metadata": {
+          "attack_class": "FGSM",
+          "execution_time_seconds": 0.0005
+        }
+      },
+      "after_assessment": {
+        "attack_name": "fgsm",
+        "dataset_name": "DummyDataset",
+        "num_samples": 16,
+        "attack_success_rate": null,
+        "perturbation": {
+          "linf_mean": 1.1751147359609604,
+          "l2_mean": 2.1459478213480434,
+          "l0_mean": 1.0,
+          "is_estimated": false
+        },
+        "accuracy_drop": 0.0625,
+        "f1_drop": 0.14047619047619045,
+        "confidence_drop": -0.01057848334312439,
+        "model_degradation": 0.06765873015873015,
+        "clean_accuracy": 0.3125,
+        "adversarial_accuracy": 0.25,
+        "clean_f1": 0.2738095238095238,
+        "adversarial_f1": 0.13333333333333333,
+        "clean_confidence": 0.47299376130104065,
+        "adversarial_confidence": 0.48357224464416504,
+        "attack_success_rate_reason": "missing_clean_predictions_and_adversarial_predictions",
+        "timestamp": "2026-09-21 16:53:10",
+        "extra_metadata": {
+          "attack_class": "FGSM",
+          "execution_time_seconds": 0.00014662742614746094
+        }
+      },
+      "before_scoring": {
+        "attack_name": "fgsm",
+        "vulnerability_score": 6.85,
+        "risk_level": "LOW",
+        "sub_scores": {
+          "asr_score": null,
+          "degradation_score": 9.78,
+          "stealth_score": 0.0
+        },
+        "timestamp": "2026-09-21 16:53:10",
+        "metadata": {
+          "weights": {
+            "weight_asr": 0.5,
+            "weight_degradation": 0.35,
+            "weight_stealth": 0.15
+          },
+          "asr_available": false,
+          "score_completeness": "partial",
+          "attack_success_rate_reason": "missing_clean_predictions_and_adversarial_predictions",
+          "dataset_name": "DummyDataset",
+          "num_samples": 16,
+          "stealth_linf_reference": 0.3
+        }
+      },
+      "after_scoring": {
+        "attack_name": "fgsm",
+        "vulnerability_score": 4.74,
+        "risk_level": "LOW",
+        "sub_scores": {
+          "asr_score": null,
+          "degradation_score": 6.77,
+          "stealth_score": 0.0
+        },
+        "timestamp": "2026-09-21 16:53:10",
+        "metadata": {
+          "weights": {
+            "weight_asr": 0.5,
+            "weight_degradation": 0.35,
+            "weight_stealth": 0.15
+          },
+          "asr_available": false,
+          "score_completeness": "partial",
+          "attack_success_rate_reason": "missing_clean_predictions_and_adversarial_predictions",
+          "dataset_name": "DummyDataset",
+          "num_samples": 16,
+          "stealth_linf_reference": 0.3
+        }
+      },
+      "delta_attack_success_rate": null,
+      "delta_accuracy_drop": -0.0625,
+      "delta_f1_drop": -0.0281,
+      "delta_confidence_drop": -0.0073,
+      "delta_model_degradation": -0.0302,
+      "delta_vulnerability_score": -2.11,
+      "delta_clean_accuracy": 0.0,
+      "delta_adversarial_accuracy": 0.0625,
+      "delta_perturbation": {
+        "l2_mean": 0.0923,
+        "linf_mean": -0.235,
+        "l0_mean": 0.0,
+        "is_estimated": 0.0
+      },
+      "before_risk_level": "LOW",
+      "after_risk_level": "LOW",
+      "risk_level_changed": false,
+      "is_improved": true,
+      "summary_notes": [
+        "Vulnerability score decreased by 2.11 points.",
+        "Adversarial accuracy improved by 6.25%."
+      ],
+      "timestamp": "2026-09-21 16:53:10",
+      "extra_metadata": {}
+    }
+  },
+  "execution_summary": {
+    "run_label": "AdverScan [full]",
+    "run_timestamp": "2026-09-21 16:53:10",
+    "total_elapsed_seconds": 0.0,
+    "overall_status": "SUCCESS",
+    "modules": [
+      {
+        "module_id": "M1_ingestion",
+        "module_name": "M1 INGESTION",
+        "status": "SUCCESS",
+        "elapsed_seconds": 0.0009,
+        "metrics": {},
+        "error": null
+      },
+      {
+        "module_id": "M2_baseline",
+        "module_name": "M2 BASELINE",
+        "status": "SUCCESS",
+        "elapsed_seconds": 0.0028,
+        "metrics": {},
+        "error": null
+      },
+      {
+        "module_id": "M3_attack_engine",
+        "module_name": "M3 ATTACK ENGINE",
+        "status": "SUCCESS",
+        "elapsed_seconds": 0.0043,
+        "metrics": {},
+        "error": null
+      },
+      {
+        "module_id": "M5_vulnerability_analysis",
+        "module_name": "M5 VULNERABILITY ANALYSIS",
+        "status": "SUCCESS",
+        "elapsed_seconds": 0.0002,
+        "metrics": {},
+        "error": null
+      },
+      {
+        "module_id": "M7_hardening",
+        "module_name": "M7 HARDENING",
+        "status": "SUCCESS",
+        "elapsed_seconds": 0.0101,
+        "metrics": {},
+        "error": null
+      },
+      {
+        "module_id": "M8_retest",
+        "module_name": "M8 RETEST",
+        "status": "SUCCESS",
+        "elapsed_seconds": 0.0053,
+        "metrics": {},
+        "error": null
+      }
+    ]
+  },
+  "recommendations": [
+    "Model exhibits strong baseline robustness against tested attack suites. Maintain continuous monitoring and conduct periodic adversarial re-testing.",
+    "Adversarial defense was applied. Validate post-hardening accuracy retention and conduct periodic re-tests to ensure defense durability."
+  ],
+  "final_security_summary": {
+    "risk_level": "LOW",
+    "vulnerability_score": 6.85,
+    "baseline_accuracy": 0.3125,
+    "mean_adversarial_accuracy": 0.1875,
+    "attacks_evaluated": [
+      "fgsm"
+    ],
+    "hardening_applied": true,
+    "retest_conducted": true,
+    "total_recommendations": 2,
+    "primary_recommendation": "Model exhibits strong baseline robustness against tested attack suites. Maintain continuous monitoring and conduct periodic adversarial re-testing."
+  },
+  "metadata": {
+    "status": "SUCCESS",
+    "execution_mode": "full",
+    "timestamp": "2026-09-21 16:53:10",
+    "execution_time_seconds": 0.0,
+    "resource_summary": null,
+    "failure_records": []
+  }
+}

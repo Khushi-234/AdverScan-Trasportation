@@ -1,0 +1,9 @@
+module_id,module_name,status,elapsed_seconds
+M1_ingestion,M1 INGESTION,SUCCESS,0.0009
+M2_baseline,M2 BASELINE,SUCCESS,0.0028
+M3_attack_engine,M3 ATTACK ENGINE,SUCCESS,0.0043
+M5_vulnerability_analysis,M5 VULNERABILITY ANALYSIS,SUCCESS,0.0002
+M7_hardening,M7 HARDENING,SUCCESS,0.0101
+M8_retest,M8 RETEST,SUCCESS,0.0053
+
+TOTAL,AdverScan [full],SUCCESS,0.0

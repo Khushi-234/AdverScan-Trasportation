@@ -46,7 +46,7 @@ models/*
 results/*
 !results/.gitkeep
 !reports/.gitkeep
-reports/*
+# reports/*
 
 # IDEs and Editors
 .vscode/

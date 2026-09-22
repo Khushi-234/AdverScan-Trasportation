@@ -1,0 +1,136 @@
+========================================================================
+          ADVERSCAN SECURITY ASSESSMENT REPORT           
+========================================================================
+  Report ID   : RPT-ACACD19E
+  Scan ID     : SCAN-80351A
+  Timestamp   : 2026-09-21 16:53:10
+  Risk Level  : LOW
+  Vuln. Score : 19.07
+========================================================================
+
+1. EXECUTIVE SUMMARY
+------------------------------------------------------------------------
+  Scan ID            : SCAN-80351A
+  Risk Level         : LOW
+  Vulnerability Score: 19.07
+  Baseline Accuracy  : 80.00%
+  Attacks Evaluated  : fgsm
+  XAI Enabled        : False
+  Hardening Applied  : False
+  Re-Test Conducted  : False
+  Pipeline Status    : SUCCESS
+
+2. MODEL INFORMATION
+------------------------------------------------------------------------
+  - framework: pytorch
+  - model_name: TargetModel
+  - input_shape: (1, 10)
+  - output_shape: (1, 3)
+  - num_classes: 3
+  - task_type: classification
+  - device: cpu
+  - extra_info: {}
+
+3. DATASET / EVALUATION CONFIGURATION
+------------------------------------------------------------------------
+  No dataset configuration recorded.
+
+4. BASELINE PERFORMANCE
+------------------------------------------------------------------------
+  - dataset_name: DummyDataset
+  - model_name: TargetModel
+  - num_samples: 5.00
+  - num_classes: 3.00
+  - accuracy: 80.00%
+  - precision_macro: 55.56%
+  - recall_macro: 66.67%
+  - f1_macro: 60.00%
+  - precision_weighted: 66.67%
+  - recall_weighted: 80.00%
+  - f1_weighted: 72.00%
+  - average_confidence: 46.61%
+  - average_entropy: 1.48
+  - batch_size: 2.00
+  - device: cpu
+  - timestamp: 2026-09-21 16:53:10
+  - extra_metadata: {}
+
+5. ADVERSARIAL ATTACK RESULTS
+------------------------------------------------------------------------
+| Attack Vector | Parameters | Exec Time | Baseline Acc | Adv Acc | Acc Drop | Attack Success Rate (ASR) |
+|---|---|---|---|---|---|---|
+| FGSM          | Default    | 0.00s     | 80.00%       | 40.00%  | 40.00%   | **50.00%** |
+
+  ▶ How Attacks Were Performed:
+    • FGSM: Configured with [Default parameters].
+
+6. VULNERABILITY ASSESSMENT
+------------------------------------------------------------------------
+  ▶ Vector: FGSM
+    - Attack Success Rate (ASR) : 50.00%
+    - Vulnerability Score       : 19.07
+    - Risk Level                : LOW
+    - Clean vs Adversarial Acc  : 80.00% ➔ 40.00% (Drop: 40.00%)
+    - Perturbation Magnitude    : linf_mean=1.28, l2_mean=2.11, l0_mean=100.00%
+
+7. VULNERABILITY SCORE & RISK LEVEL
+------------------------------------------------------------------------
+  Overall Vulnerability Score : 19.07
+  Risk Level                  : LOW
+
+8. MITRE ATLAS MAPPING
+------------------------------------------------------------------------
+  ▶ FGSM
+    tactic      : AML.TA0000 — ML Attack Staging
+    technique   : AML.T0043 — Craft Adversarial Data (FGSM)
+    mitigation  : AML.M0003 — Adversarial Input Detection
+
+9. XAI FINDINGS
+------------------------------------------------------------------------
+  No XAI findings generated.
+
+10. HARDENING
+------------------------------------------------------------------------
+  No hardening actions recorded.
+
+11. RE-TEST RESULTS
+------------------------------------------------------------------------
+  No re-test results available.
+
+12. BEFORE VS AFTER COMPARISON
+------------------------------------------------------------------------
+  No comparison data available.
+
+13. EXECUTION PERFORMANCE
+------------------------------------------------------------------------
+  Run Label    : AdverScan [full]
+  Started At   : 2026-09-21 16:53:10
+  Total Time   : 0.00s
+  Overall      : SUCCESS
+
+  MODULE                         STATUS          TIME
+  ········································································
+  M1 INGESTION                   ✅ SUCCESS      0.00s
+  M2 BASELINE                    ✅ SUCCESS      0.00s
+  M3 ATTACK ENGINE               ✅ SUCCESS      0.00s
+  M5 VULNERABILITY ANALYSIS      ✅ SUCCESS      0.00s
+
+14. RECOMMENDATIONS
+------------------------------------------------------------------------
+  [01] Model exhibits strong baseline robustness against tested attack suites. Maintain continuous monitoring and conduct periodic adversarial re-testing.
+
+15. FINAL SECURITY SUMMARY
+------------------------------------------------------------------------
+  - risk_level: LOW
+  - vulnerability_score: 19.07
+  - baseline_accuracy: 80.00%
+  - mean_adversarial_accuracy: 40.00%
+  - attacks_evaluated: ['fgsm']
+  - hardening_applied: False
+  - retest_conducted: False
+  - total_recommendations: 1
+  - primary_recommendation: Model exhibits strong baseline robustness against tested attack suites. Maintain continuous monitoring and conduct periodic adversarial re-testing.
+
+========================================================================
+  Generated by AdverScan — 2026-09-21 16:53:10
+========================================================================
