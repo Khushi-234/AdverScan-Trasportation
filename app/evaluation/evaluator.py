@@ -9,23 +9,29 @@ import numpy as np
 import torch
 
 from app.ingestion.adapters.base_adapter import BaseModelAdapter
-from app.evaluation.dataset_loader import BaseDatasetLoader, GTSRBDatasetLoader
+from app.evaluation.dataset_loader import (
+    BaseDatasetLoader,
+    GTSRBDatasetLoader,
+    HFVisionDatasetLoader,
+    get_dataset_loader,
+)
 from app.evaluation.metrics import MetricsCalculator
 from app.evaluation.results import EvaluationResult
 
 
 class BaselineEvaluator:
     """
-    Evaluator engine that consumes standardized M1 model adapters,
+    Generalized evaluator engine that consumes standardized M1 model adapters,
     runs clean baseline evaluation over dataset splits, and records metrics.
+    Works dynamically for any model domain and class count.
     """
 
     def __init__(
         self,
         adapter: BaseModelAdapter,
         dataset_loader: BaseDatasetLoader,
-        num_classes: int = 43,
-        model_name: str = "GTSRB_Model",
+        num_classes: Optional[int] = None,
+        model_name: Optional[str] = None,
     ):
         """
         Initialize BaselineEvaluator.
@@ -33,8 +39,8 @@ class BaselineEvaluator:
         Args:
             adapter: Standardized model adapter from Module 1 (BaseModelAdapter).
             dataset_loader: Dataset loader instance (BaseDatasetLoader).
-            num_classes: Active target classes count (default 43 for GTSRB).
-            model_name: Model identifier name.
+            num_classes: Optional target classes count. If None, auto-inferred during evaluation.
+            model_name: Optional custom model identifier name.
         """
         if not isinstance(adapter, BaseModelAdapter):
             raise TypeError(f"Expected adapter instance of BaseModelAdapter, got {type(adapter)}")
@@ -42,7 +48,7 @@ class BaselineEvaluator:
         self.adapter = adapter
         self.dataset_loader = dataset_loader
         self.num_classes = num_classes
-        self.model_name = model_name
+        self.model_name = model_name or getattr(adapter, "model_name", "Target_Model")
 
     def evaluate(
         self,
@@ -54,6 +60,7 @@ class BaselineEvaluator:
 
         Args:
             output_dir: Optional directory to save evaluation result JSON artifact.
+            log_mlflow: Whether to log metrics to MLflow.
 
         Returns:
             EvaluationResult dataclass containing full metrics.
@@ -69,13 +76,21 @@ class BaselineEvaluator:
             # Perform inference using M1 adapter
             outputs = self.adapter.predict(batch_pixels)
             
+            # Support HuggingFace model outputs (ImageClassifierOutput)
+            if hasattr(outputs, "logits"):
+                outputs = outputs.logits
+
             # Convert to PyTorch Tensor if outputs are NumPy array
             if isinstance(outputs, np.ndarray):
                 logits_tensor = torch.from_numpy(outputs)
             else:
                 logits_tensor = outputs
 
-            # Slice logits to active target classes (e.g. 44 -> 43 for ViT GTSRB)
+            # Dynamically infer num_classes from output dimension if not explicitly provided
+            if self.num_classes is None:
+                self.num_classes = int(logits_tensor.shape[-1])
+
+            # Slice logits to active target classes if output contains unused buffer classes
             if logits_tensor.shape[-1] > self.num_classes:
                 logits_tensor = logits_tensor[:, : self.num_classes]
 
@@ -90,6 +105,10 @@ class BaselineEvaluator:
         y_true = np.array(all_targets, dtype=np.int64)
         y_pred = np.array(all_preds, dtype=np.int64)
         y_probs = np.concatenate(all_probs_list, axis=0)
+
+        # Fallback dynamic calculation of num_classes if dataset labels exceed num_classes
+        if self.num_classes is None or (len(y_true) > 0 and int(np.max(y_true)) >= self.num_classes):
+            self.num_classes = max(int(np.max(y_true)) + 1 if len(y_true) > 0 else 1, y_probs.shape[-1])
 
         # Compute classification, confidence, entropy, and confusion matrix metrics
         metrics = MetricsCalculator.compute_metrics(
@@ -136,34 +155,37 @@ class BaselineEvaluator:
 
 def evaluate_baseline(
     adapter: BaseModelAdapter,
-    dataset_name: str = "bazyl/GTSRB",
-    processor_name: str = "bazyl/gtsrb-model",
+    dataset_name: Optional[str] = None,
+    processor_name: Optional[str] = None,
     split: str = "test",
     batch_size: int = 32,
-    num_classes: int = 43,
-    model_name: str = "GTSRB_Model",
+    num_classes: Optional[int] = None,
+    model_name: Optional[str] = None,
     output_dir: Optional[Union[str, Path]] = "results/baseline",
     log_mlflow: bool = False,
 ) -> EvaluationResult:
     """
-    Convenience function for performing clean baseline evaluation.
+    Generalized convenience function for performing baseline evaluation on any model and dataset.
 
     Args:
         adapter: Module 1 model adapter.
-        dataset_name: Hugging Face dataset identifier.
-        processor_name: Hugging Face processor model identifier.
-        split: Dataset split ('test' or 'train').
+        dataset_name: Optional dataset identifier (default 'bazyl/GTSRB').
+        processor_name: Optional processor model identifier.
+        split: Dataset split ('test', 'train', 'validation').
         batch_size: Evaluation batch size.
-        num_classes: Number of target classes.
-        model_name: Model identifier.
+        num_classes: Optional number of target classes (auto-inferred if None).
+        model_name: Optional model identifier.
         output_dir: Output directory path to save JSON results.
         log_mlflow: Whether to log metrics to MLflow.
 
     Returns:
         EvaluationResult object.
     """
-    loader = GTSRBDatasetLoader(
-        dataset_name=dataset_name,
+    resolved_dataset = dataset_name or "bazyl/GTSRB"
+    resolved_model_name = model_name or getattr(adapter, "model_name", "Target_Model")
+
+    loader = get_dataset_loader(
+        dataset_name=resolved_dataset,
         processor_name=processor_name,
         split=split,
         batch_size=batch_size,
@@ -172,6 +194,7 @@ def evaluate_baseline(
         adapter=adapter,
         dataset_loader=loader,
         num_classes=num_classes,
-        model_name=model_name,
+        model_name=resolved_model_name,
     )
     return evaluator.evaluate(output_dir=output_dir, log_mlflow=log_mlflow)
+

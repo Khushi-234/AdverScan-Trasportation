@@ -19,6 +19,7 @@ class ModelMetadata:
     num_classes: Optional[int] = None
     task_type: Optional[str] = "classification"
     device: Optional[str] = "cpu"
+    domain: Optional[str] = "image"
     extra_info: Dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> Dict[str, Any]:

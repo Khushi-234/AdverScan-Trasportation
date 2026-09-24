@@ -1,10 +1,10 @@
 """
-Dataset loading and batch processing for GTSRB baseline evaluation in AdverScan.
+Dataset loading and batch processing for generalized model baseline evaluation in AdverScan.
 """
 
 from abc import ABC, abstractmethod
 import io
-from typing import Any, Callable, Generator, List, Optional, Tuple
+from typing import Any, Callable, Generator, List, Optional, Tuple, Union
 import torch
 from PIL import Image
 from datasets import load_dataset
@@ -14,7 +14,7 @@ from transformers import AutoImageProcessor
 class BaseDatasetLoader(ABC):
     """
     Abstract base dataset loader for AdverScan evaluation modules.
-    Allows generic domain support (ITS, Financial, Medical, etc.).
+    Allows generic domain support (ITS, Financial, Medical, Vision, NLP, Time-Series).
     """
 
     @property
@@ -36,36 +36,76 @@ class BaseDatasetLoader(ABC):
         pass
 
 
-class GTSRBDatasetLoader(BaseDatasetLoader):
+class HFVisionDatasetLoader(BaseDatasetLoader):
     """
-    Dataset loader for Hugging Face GTSRB dataset (bazyl/GTSRB).
-    Decodes image payloads, applies image processor, and yields mini-batches.
+    Generalized dataset loader for Hugging Face vision datasets (e.g., GTSRB, CIFAR-10, Intel Image Classification).
+    Dynamically discovers image and label columns, decodes image payloads, applies image processor,
+    and yields mini-batches.
     """
+
+    DATASET_ALIASES = {
+        "puneet6060/intel-image-classification": "miladfa7/Intel-Image-Classification",
+        "intel-image-classification": "miladfa7/Intel-Image-Classification",
+    }
+    LABEL_CANDIDATES = ["label", "labels", "ClassId", "target", "class_id", "category", "fine_label"]
+    IMAGE_CANDIDATES = ["image", "img", "Path", "bytes", "file"]
 
     def __init__(
         self,
-        dataset_name: str = "bazyl/GTSRB",
-        processor_name: str = "bazyl/gtsrb-model",
+        dataset_name: str,
+        processor_name: Optional[str] = None,
         split: str = "test",
         batch_size: int = 32,
     ):
         """
-        Initialize GTSRB dataset loader.
+        Initialize HFVisionDatasetLoader.
 
         Args:
             dataset_name: Hugging Face dataset identifier.
             processor_name: Hugging Face image processor model identifier.
-            split: Dataset split to evaluate ('test' or 'train').
+            split: Dataset split to evaluate ('test', 'train', 'validation', or split string).
             batch_size: Evaluation batch size.
         """
+        resolved_name = self.DATASET_ALIASES.get(dataset_name, dataset_name)
         self._dataset_name = dataset_name
         self.processor_name = processor_name
         self.split = split
         self.batch_size = batch_size
 
-        # Load Hugging Face dataset split
-        self._dataset = load_dataset(dataset_name, split=split)
-        self._processor = AutoImageProcessor.from_pretrained(processor_name)
+        # Load Hugging Face dataset split with fallback if requested split does not exist
+        try:
+            self._dataset = load_dataset(resolved_name, split=split)
+        except Exception:
+            # Fallback to 'train' if 'test' split is unavailable in this dataset repository
+            self._dataset = load_dataset(resolved_name, split="train")
+            self.split = "train"
+        
+        self._processor = None
+        if processor_name:
+            try:
+                self._processor = AutoImageProcessor.from_pretrained(processor_name)
+            except Exception:
+                self._processor = None
+
+        # Inspect dataset schema to discover label and image column names
+        self.label_col = self._find_column(self.LABEL_CANDIDATES, default="label")
+        self.image_col = self._find_column(self.IMAGE_CANDIDATES, default="image")
+
+    def _find_column(self, candidates: List[str], default: str) -> str:
+        """Discover existing column name from candidate list."""
+        if hasattr(self._dataset, "column_names") and self._dataset.column_names:
+            cols = self._dataset.column_names
+            for c in candidates:
+                if c in cols:
+                    return c
+        # Fallback to inspecting first sample
+        if len(self._dataset) > 0:
+            sample = self._dataset[0]
+            if isinstance(sample, dict):
+                for c in candidates:
+                    if c in sample:
+                        return c
+        return default
 
     @property
     def dataset_name(self) -> str:
@@ -82,17 +122,46 @@ class GTSRBDatasetLoader(BaseDatasetLoader):
         return len(self._dataset)
 
     def _decode_image(self, sample: dict) -> Image.Image:
-        """Decode PIL RGB image from raw bytes payload."""
+        """Decode PIL RGB image from raw bytes payload, file path, or PIL object."""
+        # Handle uninitialized instances created via __new__ in unit tests
+        image_col = getattr(self, "image_col", "image")
+
+        # 1. Direct check of image_col
+        if image_col in sample and sample[image_col] is not None:
+            val = sample[image_col]
+            if isinstance(val, Image.Image):
+                return val.convert("RGB")
+            elif isinstance(val, dict) and "bytes" in val:
+                return Image.open(io.BytesIO(val["bytes"])).convert("RGB")
+            elif isinstance(val, bytes):
+                return Image.open(io.BytesIO(val)).convert("RGB")
+            elif isinstance(val, str):
+                return Image.open(val).convert("RGB")
+
+        # 2. Check "Path" bytes structure (common in GTSRB dataset)
         if "Path" in sample and isinstance(sample["Path"], dict) and "bytes" in sample["Path"]:
-            image_bytes = sample["Path"]["bytes"]
-            return Image.open(io.BytesIO(image_bytes)).convert("RGB")
-        elif "image" in sample:
-            img = sample["image"]
-            if isinstance(img, Image.Image):
-                return img.convert("RGB")
-            return Image.open(img).convert("RGB")
-        else:
-            raise KeyError("Dataset sample does not contain a valid image payload or path bytes.")
+            return Image.open(io.BytesIO(sample["Path"]["bytes"])).convert("RGB")
+
+        # 3. Check "image" key fallback
+        if "image" in sample and sample["image"] is not None:
+            val = sample["image"]
+            if isinstance(val, Image.Image):
+                return val.convert("RGB")
+            elif isinstance(val, dict) and "bytes" in val:
+                return Image.open(io.BytesIO(val["bytes"])).convert("RGB")
+            elif isinstance(val, bytes):
+                return Image.open(io.BytesIO(val)).convert("RGB")
+            elif isinstance(val, str):
+                return Image.open(val).convert("RGB")
+
+        # 4. Fallback key scan
+        for k, v in sample.items():
+            if isinstance(v, Image.Image):
+                return v.convert("RGB")
+            if isinstance(v, dict) and "bytes" in v:
+                return Image.open(io.BytesIO(v["bytes"])).convert("RGB")
+
+        raise KeyError("Dataset sample does not contain a valid image payload or path bytes.")
 
     def iterate_batches(
         self,
@@ -107,10 +176,11 @@ class GTSRBDatasetLoader(BaseDatasetLoader):
 
         for i in range(0, total_samples, self.batch_size):
             batch_samples = self._dataset[i : i + self.batch_size]
-            
+
             # Reconstruct list of dicts if Hugging Face dataset returns dict of lists
             if isinstance(batch_samples, dict):
-                num_items = len(batch_samples["ClassId"])
+                first_key = next(iter(batch_samples))
+                num_items = len(batch_samples[first_key])
                 items = [
                     {key: batch_samples[key][j] for key in batch_samples}
                     for j in range(num_items)
@@ -123,13 +193,324 @@ class GTSRBDatasetLoader(BaseDatasetLoader):
 
             for item in items:
                 img = self._decode_image(item)
-                class_id = item["ClassId"]
+                class_id = item.get(self.label_col, 0)
                 images.append(img)
-                targets.append(class_id)
+                targets.append(int(class_id))
 
-            processed = self._processor(images=images, return_tensors="pt")
-            pixel_values = processed["pixel_values"]
+            if self._processor is not None:
+                processed = self._processor(images=images, return_tensors="pt")
+                pixel_values = processed["pixel_values"]
+            else:
+                # Default torchvision transform fallback if no HuggingFace processor is available
+                from torchvision import transforms
+                preprocess = transforms.Compose([
+                    transforms.Resize((224, 224)),
+                    transforms.ToTensor(),
+                    transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+                ])
+                pixel_values = torch.stack([preprocess(img) for img in images])
+
             targets_tensor = torch.tensor(targets, dtype=torch.long)
 
             yield pixel_values, targets_tensor, targets
+
+
+class GTSRBDatasetLoader(HFVisionDatasetLoader):
+    """
+    Dataset loader for Hugging Face GTSRB dataset (bazyl/GTSRB).
+    Inherits from generalized HFVisionDatasetLoader for backward compatibility.
+    """
+
+    def __init__(
+        self,
+        dataset_name: str = "bazyl/GTSRB",
+        processor_name: str = "bazyl/gtsrb-model",
+        split: str = "test",
+        batch_size: int = 32,
+    ):
+        super().__init__(
+            dataset_name=dataset_name,
+            processor_name=processor_name,
+            split=split,
+            batch_size=batch_size,
+        )
+
+
+class HFTextDatasetLoader(BaseDatasetLoader):
+    """
+    Generalized dataset loader for Hugging Face text / NLP classification datasets (e.g., IMDb, SST-2, AG News).
+    Discovers text and label columns, tokenizes inputs using Hugging Face AutoTokenizer, and yields mini-batches.
+    """
+
+    TEXT_CANDIDATES = ["text", "sentence", "content", "premise", "input", "document", "review"]
+    LABEL_CANDIDATES = ["label", "labels", "target", "class", "category"]
+
+    def __init__(
+        self,
+        dataset_name: str,
+        tokenizer_name: Optional[str] = None,
+        split: str = "test",
+        batch_size: int = 32,
+        max_length: int = 512,
+    ):
+        self._dataset_name = dataset_name
+        self.tokenizer_name = tokenizer_name
+        self.split = split
+        self.batch_size = batch_size
+        self.max_length = max_length
+
+        self._dataset = load_dataset(dataset_name, split=split)
+
+        self._tokenizer = None
+        if tokenizer_name:
+            try:
+                from transformers import AutoTokenizer
+                self._tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
+            except Exception:
+                self._tokenizer = None
+
+        self.text_col = self._find_column(self.TEXT_CANDIDATES, default="text")
+        self.label_col = self._find_column(self.LABEL_CANDIDATES, default="label")
+
+    def _find_column(self, candidates: List[str], default: str) -> str:
+        if hasattr(self._dataset, "column_names") and self._dataset.column_names:
+            cols = self._dataset.column_names
+            for c in candidates:
+                if c in cols:
+                    return c
+        if len(self._dataset) > 0:
+            sample = self._dataset[0]
+            if isinstance(sample, dict):
+                for c in candidates:
+                    if c in sample:
+                        return c
+        return default
+
+    @property
+    def dataset_name(self) -> str:
+        return self._dataset_name
+
+    def __len__(self) -> int:
+        return len(self._dataset)
+
+    def iterate_batches(
+        self,
+    ) -> Generator[Tuple[Any, torch.Tensor, List[int]], None, None]:
+        total_samples = len(self._dataset)
+
+        for i in range(0, total_samples, self.batch_size):
+            batch_samples = self._dataset[i : i + self.batch_size]
+
+            if isinstance(batch_samples, dict):
+                first_key = next(iter(batch_samples))
+                num_items = len(batch_samples[first_key])
+                items = [
+                    {key: batch_samples[key][j] for key in batch_samples}
+                    for j in range(num_items)
+                ]
+            else:
+                items = batch_samples
+
+            texts: List[str] = [str(item.get(self.text_col, "")) for item in items]
+            targets: List[int] = [int(item.get(self.label_col, 0)) for item in items]
+
+            if self._tokenizer is not None:
+                encoded = self._tokenizer(
+                    texts,
+                    padding=True,
+                    truncation=True,
+                    max_length=self.max_length,
+                    return_tensors="pt",
+                )
+                batch_inputs = encoded
+            else:
+                batch_inputs = texts
+
+            targets_tensor = torch.tensor(targets, dtype=torch.long)
+            yield batch_inputs, targets_tensor, targets
+
+
+class TimeSeriesDatasetLoader(BaseDatasetLoader):
+    """
+    Dataset loader for time-series data (sequences, 2D/3D numerical arrays or tensors).
+    """
+
+    def __init__(
+        self,
+        inputs: Union[torch.Tensor, Any],
+        targets: Union[torch.Tensor, Any],
+        dataset_name: str = "TimeSeries_Dataset",
+        batch_size: int = 32,
+    ):
+        self._dataset_name = dataset_name
+        self.batch_size = batch_size
+
+        if not isinstance(inputs, torch.Tensor):
+            self.inputs = torch.tensor(inputs, dtype=torch.float32)
+        else:
+            self.inputs = inputs.to(torch.float32)
+
+        if not isinstance(targets, torch.Tensor):
+            self.targets = torch.tensor(targets, dtype=torch.long)
+        else:
+            self.targets = targets.to(torch.long)
+
+    @property
+    def dataset_name(self) -> str:
+        return self._dataset_name
+
+    def __len__(self) -> int:
+        return len(self.inputs)
+
+    def iterate_batches(
+        self,
+    ) -> Generator[Tuple[torch.Tensor, torch.Tensor, List[int]], None, None]:
+        total_samples = len(self.inputs)
+        for i in range(0, total_samples, self.batch_size):
+            batch_inputs = self.inputs[i : i + self.batch_size]
+            batch_targets = self.targets[i : i + self.batch_size]
+            targets_list = batch_targets.cpu().numpy().tolist()
+            yield batch_inputs, batch_targets, targets_list
+
+
+class TabularDatasetLoader(BaseDatasetLoader):
+    """
+    Dataset loader for tabular / structured numerical data (CSV files, DataFrames, Tensors).
+    """
+
+    def __init__(
+        self,
+        data: Union[str, Any],
+        target_col: Union[str, int] = "target",
+        dataset_name: str = "Tabular_Dataset",
+        batch_size: int = 32,
+    ):
+        self._dataset_name = dataset_name
+        self.batch_size = batch_size
+
+        if isinstance(data, str):
+            import pandas as pd
+            df = pd.read_csv(data)
+            y = df[target_col].values
+            X = df.drop(columns=[target_col]).values
+            self.inputs = torch.tensor(X, dtype=torch.float32)
+            self.targets = torch.tensor(y, dtype=torch.long)
+        elif isinstance(data, tuple) and len(data) == 2:
+            X, y = data
+            self.inputs = X if isinstance(X, torch.Tensor) else torch.tensor(X, dtype=torch.float32)
+            self.targets = y if isinstance(y, torch.Tensor) else torch.tensor(y, dtype=torch.long)
+        else:
+            raise ValueError("Data for TabularDatasetLoader must be a CSV file path or tuple of (X, y).")
+
+    @property
+    def dataset_name(self) -> str:
+        return self._dataset_name
+
+    def __len__(self) -> int:
+        return len(self.inputs)
+
+    def iterate_batches(
+        self,
+    ) -> Generator[Tuple[torch.Tensor, torch.Tensor, List[int]], None, None]:
+        total_samples = len(self.inputs)
+        for i in range(0, total_samples, self.batch_size):
+            batch_inputs = self.inputs[i : i + self.batch_size]
+            batch_targets = self.targets[i : i + self.batch_size]
+            targets_list = batch_targets.cpu().numpy().tolist()
+            yield batch_inputs, batch_targets, targets_list
+
+
+class GenericDatasetLoader(BaseDatasetLoader):
+    """
+    Generic dataset loader for arbitrary PyTorch tensors, arrays, or custom inputs.
+    """
+
+    def __init__(
+        self,
+        inputs: torch.Tensor,
+        targets: torch.Tensor,
+        dataset_name: str = "Custom_Dataset",
+        batch_size: int = 32,
+    ):
+        self._dataset_name = dataset_name
+        self.inputs = inputs
+        self.targets = targets
+        self.batch_size = batch_size
+
+    @property
+    def dataset_name(self) -> str:
+        return self._dataset_name
+
+    def __len__(self) -> int:
+        return len(self.inputs)
+
+    def iterate_batches(
+        self,
+    ) -> Generator[Tuple[torch.Tensor, torch.Tensor, List[int]], None, None]:
+        total_samples = len(self.inputs)
+        for i in range(0, total_samples, self.batch_size):
+            batch_inputs = self.inputs[i : i + self.batch_size]
+            batch_targets = self.targets[i : i + self.batch_size]
+            targets_list = batch_targets.cpu().numpy().tolist()
+            yield batch_inputs, batch_targets, targets_list
+
+
+def get_dataset_loader(
+    dataset_name: str,
+    data_domain: str = "image",
+    processor_name: Optional[str] = None,
+    split: str = "test",
+    batch_size: int = 32,
+    **kwargs: Any,
+) -> BaseDatasetLoader:
+    """
+    Factory function to construct domain-specific dataset loaders for evaluation.
+    Supports data_domain: 'image' (vision), 'text' (NLP), 'time_series' / 'time-series', 'tabular', 'generic'.
+    """
+    domain_clean = str(data_domain).strip().lower().replace("-", "_")
+
+    if domain_clean in ("text", "nlp"):
+        return HFTextDatasetLoader(
+            dataset_name=dataset_name,
+            tokenizer_name=processor_name,
+            split=split,
+            batch_size=batch_size,
+            **kwargs,
+        )
+    elif domain_clean in ("time_series", "timeseries", "sequence"):
+        if "inputs" in kwargs and "targets" in kwargs:
+            return TimeSeriesDatasetLoader(
+                inputs=kwargs["inputs"],
+                targets=kwargs["targets"],
+                dataset_name=dataset_name,
+                batch_size=batch_size,
+            )
+        return HFVisionDatasetLoader(
+            dataset_name=dataset_name,
+            processor_name=processor_name,
+            split=split,
+            batch_size=batch_size,
+        )
+    elif domain_clean in ("tabular", "csv", "table"):
+        if "data" in kwargs:
+            return TabularDatasetLoader(
+                data=kwargs["data"],
+                target_col=kwargs.get("target_col", "target"),
+                dataset_name=dataset_name,
+                batch_size=batch_size,
+            )
+        return HFVisionDatasetLoader(
+            dataset_name=dataset_name,
+            processor_name=processor_name,
+            split=split,
+            batch_size=batch_size,
+        )
+    else:
+        return HFVisionDatasetLoader(
+            dataset_name=dataset_name,
+            processor_name=processor_name,
+            split=split,
+            batch_size=batch_size,
+        )
+
 
