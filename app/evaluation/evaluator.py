@@ -2,6 +2,7 @@
 Baseline evaluator engine for executing clean baseline evaluations in AdverScan.
 """
 
+from ast import List
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional, Union
@@ -121,6 +122,41 @@ class BaselineEvaluator:
         device_str = str(getattr(self.adapter, "device", "cpu"))
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
+        # Extract model metadata: parameter count, architecture, and class names
+        total_params: Optional[int] = None
+        trainable_params: Optional[int] = None
+        model_arch: Optional[str] = None
+        class_names: Optional[List[str]] = None
+
+        try:
+            raw_model = self.adapter.get_model() if hasattr(self.adapter, "get_model") else None
+            if raw_model is not None:
+                model_arch = raw_model.__class__.__name__
+                if hasattr(raw_model, "parameters"):
+                    params_list = [p for p in raw_model.parameters() if hasattr(p, "numel")]
+                    if params_list:
+                        total_params = int(sum(p.numel() for p in params_list))
+                        trainable_params = int(sum(p.numel() for p in params_list if getattr(p, "requires_grad", False)))
+
+                if hasattr(raw_model, "config") and hasattr(raw_model.config, "id2label"):
+                    id2label = getattr(raw_model.config, "id2label", None)
+                    if isinstance(id2label, dict) and id2label:
+                        try:
+                            sorted_keys = sorted(id2label.keys(), key=lambda k: int(k))
+                            class_names = [str(id2label[k]) for k in sorted_keys]
+                        except Exception:
+                            class_names = [str(v) for v in id2label.values()]
+        except Exception:
+            pass
+
+        if not class_names and hasattr(self.dataset_loader, "_dataset"):
+            ds = getattr(self.dataset_loader, "_dataset", None)
+            if hasattr(ds, "features") and ds.features:
+                for col in ["label", "labels", "ClassId", "target", "class_id", "category", "fine_label"]:
+                    if col in ds.features and hasattr(ds.features[col], "names"):
+                        class_names = [str(n) for n in ds.features[col].names]
+                        break
+
         result = EvaluationResult(
             dataset_name=self.dataset_loader.dataset_name,
             model_name=self.model_name,
@@ -140,6 +176,10 @@ class BaselineEvaluator:
             batch_size=getattr(self.dataset_loader, "batch_size", 32),
             device=device_str,
             timestamp=timestamp,
+            total_parameters=total_params,
+            trainable_parameters=trainable_params,
+            model_architecture=model_arch,
+            class_names=class_names,
         )
 
         # Persist results JSON if output_dir is provided
@@ -157,12 +197,14 @@ def evaluate_baseline(
     adapter: BaseModelAdapter,
     dataset_name: Optional[str] = None,
     processor_name: Optional[str] = None,
+    data_domain: str = "image",
     split: str = "test",
     batch_size: int = 32,
     num_classes: Optional[int] = None,
     model_name: Optional[str] = None,
     output_dir: Optional[Union[str, Path]] = "results/baseline",
     log_mlflow: bool = False,
+    **kwargs: Any,
 ) -> EvaluationResult:
     """
     Generalized convenience function for performing baseline evaluation on any model and dataset.
@@ -171,12 +213,14 @@ def evaluate_baseline(
         adapter: Module 1 model adapter.
         dataset_name: Optional dataset identifier (default 'bazyl/GTSRB').
         processor_name: Optional processor model identifier.
+        data_domain: Target data domain ('image', 'text', 'time_series', 'tabular', etc.).
         split: Dataset split ('test', 'train', 'validation').
         batch_size: Evaluation batch size.
         num_classes: Optional number of target classes (auto-inferred if None).
         model_name: Optional model identifier.
         output_dir: Output directory path to save JSON results.
         log_mlflow: Whether to log metrics to MLflow.
+        **kwargs: Additional keyword arguments forwarded to get_dataset_loader.
 
     Returns:
         EvaluationResult object.
@@ -186,9 +230,11 @@ def evaluate_baseline(
 
     loader = get_dataset_loader(
         dataset_name=resolved_dataset,
+        data_domain=data_domain,
         processor_name=processor_name,
         split=split,
         batch_size=batch_size,
+        **kwargs,
     )
     evaluator = BaselineEvaluator(
         adapter=adapter,

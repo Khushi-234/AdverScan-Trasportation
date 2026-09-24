@@ -4,10 +4,12 @@ Dataset loading and batch processing for generalized model baseline evaluation i
 
 from abc import ABC, abstractmethod
 import io
+import os
+from pathlib import Path
 from typing import Any, Callable, Generator, List, Optional, Tuple, Union
 import torch
 from PIL import Image
-from datasets import load_dataset
+from datasets import Image as HFImage, load_dataset
 from transformers import AutoImageProcessor
 
 
@@ -77,21 +79,78 @@ class HFVisionDatasetLoader(BaseDatasetLoader):
             self._dataset = load_dataset(resolved_name, split=split)
         except Exception:
             # Fallback to 'train' if 'test' split is unavailable in this dataset repository
-            self._dataset = load_dataset(resolved_name, split="train")
-            self.split = "train"
-        
+            # Preserve sample slice (e.g., [:100]) if present in split specification
+            slice_suffix = ""
+            if "[" in split and "]" in split:
+                slice_suffix = split[split.index("[") : split.index("]") + 1]
+            fallback_split = f"train{slice_suffix}"
+            try:
+                self._dataset = load_dataset(resolved_name, split=fallback_split)
+                self.split = fallback_split
+            except Exception:
+                self._dataset = load_dataset(resolved_name, split="train")
+                self.split = "train"
+
+        # Prevent automatic HF image decoding when necessary to avoid fsspec/zipfile decoding issues
+        if hasattr(self._dataset, "features") and self._dataset.features:
+            try:
+                for col_name, feat in list(self._dataset.features.items()):
+                    if isinstance(feat, HFImage):
+                        self._dataset = self._dataset.cast_column(col_name, HFImage(decode=False))
+            except Exception:
+                pass
+
         self._processor = None
         if processor_name:
             try:
                 self._processor = AutoImageProcessor.from_pretrained(processor_name)
             except Exception:
-                self._processor = None
+                try:
+                    from transformers import ViTImageProcessor
+                    self._processor = ViTImageProcessor.from_pretrained(processor_name)
+                except Exception as e:
+                    raise RuntimeError(
+                        f"Failed to load AutoImageProcessor for '{processor_name}': {e}"
+                    ) from e
 
         # Inspect dataset schema to discover label and image column names
-        self.label_col = self._find_column(self.LABEL_CANDIDATES, default="label")
+        self.label_col = self._find_column(self.LABEL_CANDIDATES, default=None)
         self.image_col = self._find_column(self.IMAGE_CANDIDATES, default="image")
 
-    def _find_column(self, candidates: List[str], default: str) -> str:
+        # Fallback for datasets like miladfa7/Intel-Image-Classification whose HF repository lacks a label column
+        if self.label_col is None and "intel" in resolved_name.lower():
+            try:
+                import re
+                import zipfile
+                from huggingface_hub import hf_hub_download
+                from datasets import Dataset
+                archive_path = hf_hub_download(resolved_name, "archive.zip", repo_type="dataset")
+                label_map = {'buildings': 0, 'forest': 1, 'glacier': 2, 'mountain': 3, 'sea': 4, 'street': 5}
+                with zipfile.ZipFile(archive_path) as z:
+                    test_files = [f for f in z.namelist() if f.startswith('seg_test/seg_test/') and f.endswith('.jpg')]
+                    max_samples = len(test_files)
+                    if "[" in split and "]" in split:
+                        m = re.search(r':(\d+)', split)
+                        if m:
+                            max_samples = min(int(m.group(1)), len(test_files))
+                    sub_files = test_files[:max_samples]
+                    self._dataset = Dataset.from_dict({
+                        "image": [z.read(f) for f in sub_files],
+                        "label": [label_map.get(f.split('/')[2].lower(), 0) for f in sub_files],
+                    })
+                    self.label_col = "label"
+                    self.image_col = "image"
+            except Exception:
+                pass
+
+        if self.label_col is None:
+            raise KeyError(
+                f"Dataset '{self.dataset_name}' does not contain any recognized label column. "
+                f"Candidates checked: {self.LABEL_CANDIDATES}. "
+                f"Available columns: {getattr(self._dataset, 'column_names', [])}"
+            )
+
+    def _find_column(self, candidates: List[str], default: Optional[str] = None) -> Optional[str]:
         """Discover existing column name from candidate list."""
         if hasattr(self._dataset, "column_names") and self._dataset.column_names:
             cols = self._dataset.column_names
@@ -100,11 +159,14 @@ class HFVisionDatasetLoader(BaseDatasetLoader):
                     return c
         # Fallback to inspecting first sample
         if len(self._dataset) > 0:
-            sample = self._dataset[0]
-            if isinstance(sample, dict):
-                for c in candidates:
-                    if c in sample:
-                        return c
+            try:
+                sample = self._dataset[0]
+                if isinstance(sample, dict):
+                    for c in candidates:
+                        if c in sample:
+                            return c
+            except Exception:
+                pass
         return default
 
     @property
@@ -126,40 +188,49 @@ class HFVisionDatasetLoader(BaseDatasetLoader):
         # Handle uninitialized instances created via __new__ in unit tests
         image_col = getattr(self, "image_col", "image")
 
+        def _to_rgb_image(val: Any) -> Optional[Image.Image]:
+            if val is None:
+                return None
+            if isinstance(val, Image.Image):
+                return val.convert("RGB")
+            if isinstance(val, dict):
+                raw_bytes = val.get("bytes")
+                if raw_bytes is not None:
+                    return Image.open(io.BytesIO(raw_bytes)).convert("RGB")
+                raw_path = val.get("path")
+                if raw_path is not None and os.path.exists(str(raw_path)):
+                    return Image.open(str(raw_path)).convert("RGB")
+            if isinstance(val, (bytes, bytearray)):
+                return Image.open(io.BytesIO(val)).convert("RGB")
+            if isinstance(val, (str, Path)) and os.path.exists(str(val)):
+                return Image.open(str(val)).convert("RGB")
+            return None
+
         # 1. Direct check of image_col
         if image_col in sample and sample[image_col] is not None:
-            val = sample[image_col]
-            if isinstance(val, Image.Image):
-                return val.convert("RGB")
-            elif isinstance(val, dict) and "bytes" in val:
-                return Image.open(io.BytesIO(val["bytes"])).convert("RGB")
-            elif isinstance(val, bytes):
-                return Image.open(io.BytesIO(val)).convert("RGB")
-            elif isinstance(val, str):
-                return Image.open(val).convert("RGB")
+            img = _to_rgb_image(sample[image_col])
+            if img is not None:
+                return img
 
         # 2. Check "Path" bytes structure (common in GTSRB dataset)
-        if "Path" in sample and isinstance(sample["Path"], dict) and "bytes" in sample["Path"]:
-            return Image.open(io.BytesIO(sample["Path"]["bytes"])).convert("RGB")
+        if "Path" in sample and sample["Path"] is not None:
+            img = _to_rgb_image(sample["Path"])
+            if img is not None:
+                return img
 
-        # 3. Check "image" key fallback
-        if "image" in sample and sample["image"] is not None:
-            val = sample["image"]
-            if isinstance(val, Image.Image):
-                return val.convert("RGB")
-            elif isinstance(val, dict) and "bytes" in val:
-                return Image.open(io.BytesIO(val["bytes"])).convert("RGB")
-            elif isinstance(val, bytes):
-                return Image.open(io.BytesIO(val)).convert("RGB")
-            elif isinstance(val, str):
-                return Image.open(val).convert("RGB")
+        # 3. Check common image key candidates
+        for key in ("image", "img", "file", "bytes"):
+            if key in sample and sample[key] is not None:
+                img = _to_rgb_image(sample[key])
+                if img is not None:
+                    return img
 
         # 4. Fallback key scan
         for k, v in sample.items():
-            if isinstance(v, Image.Image):
-                return v.convert("RGB")
-            if isinstance(v, dict) and "bytes" in v:
-                return Image.open(io.BytesIO(v["bytes"])).convert("RGB")
+            if v is not None:
+                img = _to_rgb_image(v)
+                if img is not None:
+                    return img
 
         raise KeyError("Dataset sample does not contain a valid image payload or path bytes.")
 
@@ -175,7 +246,11 @@ class HFVisionDatasetLoader(BaseDatasetLoader):
         total_samples = len(self._dataset)
 
         for i in range(0, total_samples, self.batch_size):
-            batch_samples = self._dataset[i : i + self.batch_size]
+            try:
+                batch_samples = self._dataset[i : i + self.batch_size]
+            except Exception:
+                # Fallback to item-by-item access if batch slicing fails inside fsspec/zipfile
+                batch_samples = [self._dataset[j] for j in range(i, min(i + self.batch_size, total_samples))]
 
             # Reconstruct list of dicts if Hugging Face dataset returns dict of lists
             if isinstance(batch_samples, dict):
@@ -193,7 +268,12 @@ class HFVisionDatasetLoader(BaseDatasetLoader):
 
             for item in items:
                 img = self._decode_image(item)
-                class_id = item.get(self.label_col, 0)
+                if not getattr(self, "label_col", None) or self.label_col not in item:
+                    raise KeyError(
+                        f"Dataset '{self.dataset_name}' sample is missing required label column '{getattr(self, 'label_col', None)}'. "
+                        f"Available columns: {list(item.keys())}"
+                    )
+                class_id = item[self.label_col]
                 images.append(img)
                 targets.append(int(class_id))
 
@@ -266,13 +346,21 @@ class HFTextDatasetLoader(BaseDatasetLoader):
             try:
                 from transformers import AutoTokenizer
                 self._tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
-            except Exception:
-                self._tokenizer = None
+            except Exception as e:
+                raise RuntimeError(
+                    f"Failed to load AutoTokenizer for '{tokenizer_name}': {e}"
+                ) from e
 
         self.text_col = self._find_column(self.TEXT_CANDIDATES, default="text")
-        self.label_col = self._find_column(self.LABEL_CANDIDATES, default="label")
+        self.label_col = self._find_column(self.LABEL_CANDIDATES, default=None)
+        if self.label_col is None:
+            raise KeyError(
+                f"Dataset '{self.dataset_name}' does not contain any recognized label column. "
+                f"Candidates checked: {self.LABEL_CANDIDATES}. "
+                f"Available columns: {getattr(self._dataset, 'column_names', [])}"
+            )
 
-    def _find_column(self, candidates: List[str], default: str) -> str:
+    def _find_column(self, candidates: List[str], default: Optional[str] = None) -> Optional[str]:
         if hasattr(self._dataset, "column_names") and self._dataset.column_names:
             cols = self._dataset.column_names
             for c in candidates:
@@ -311,8 +399,16 @@ class HFTextDatasetLoader(BaseDatasetLoader):
             else:
                 items = batch_samples
 
-            texts: List[str] = [str(item.get(self.text_col, "")) for item in items]
-            targets: List[int] = [int(item.get(self.label_col, 0)) for item in items]
+            texts: List[str] = []
+            targets: List[int] = []
+            for item in items:
+                if not getattr(self, "label_col", None) or self.label_col not in item:
+                    raise KeyError(
+                        f"Dataset '{self.dataset_name}' sample is missing required label column '{getattr(self, 'label_col', None)}'. "
+                        f"Available columns: {list(item.keys())}"
+                    )
+                texts.append(str(item.get(self.text_col, "")))
+                targets.append(int(item[self.label_col]))
 
             if self._tokenizer is not None:
                 encoded = self._tokenizer(
@@ -465,11 +561,20 @@ def get_dataset_loader(
 ) -> BaseDatasetLoader:
     """
     Factory function to construct domain-specific dataset loaders for evaluation.
-    Supports data_domain: 'image' (vision), 'text' (NLP), 'time_series' / 'time-series', 'tabular', 'generic'.
+    Supports data_domain: 'image'/'vision', 'text'/'nlp', 'time_series'/'timeseries'/'sequence',
+    'tabular'/'csv'/'table', 'generic'/'custom'.
     """
     domain_clean = str(data_domain).strip().lower().replace("-", "_")
 
-    if domain_clean in ("text", "nlp"):
+    if domain_clean in ("image", "vision"):
+        return HFVisionDatasetLoader(
+            dataset_name=dataset_name,
+            processor_name=processor_name,
+            split=split,
+            batch_size=batch_size,
+            **kwargs,
+        )
+    elif domain_clean in ("text", "nlp"):
         return HFTextDatasetLoader(
             dataset_name=dataset_name,
             tokenizer_name=processor_name,
@@ -478,39 +583,42 @@ def get_dataset_loader(
             **kwargs,
         )
     elif domain_clean in ("time_series", "timeseries", "sequence"):
-        if "inputs" in kwargs and "targets" in kwargs:
-            return TimeSeriesDatasetLoader(
-                inputs=kwargs["inputs"],
-                targets=kwargs["targets"],
-                dataset_name=dataset_name,
-                batch_size=batch_size,
+        if "inputs" not in kwargs or "targets" not in kwargs:
+            raise ValueError(
+                "TimeSeriesDatasetLoader requires both 'inputs' and 'targets' keyword arguments."
             )
-        return HFVisionDatasetLoader(
+        return TimeSeriesDatasetLoader(
+            inputs=kwargs["inputs"],
+            targets=kwargs["targets"],
             dataset_name=dataset_name,
-            processor_name=processor_name,
-            split=split,
             batch_size=batch_size,
         )
     elif domain_clean in ("tabular", "csv", "table"):
-        if "data" in kwargs:
-            return TabularDatasetLoader(
-                data=kwargs["data"],
-                target_col=kwargs.get("target_col", "target"),
-                dataset_name=dataset_name,
-                batch_size=batch_size,
+        if "data" not in kwargs:
+            raise ValueError(
+                "TabularDatasetLoader requires 'data' keyword argument (file path or (X, y) tuple)."
             )
-        return HFVisionDatasetLoader(
+        return TabularDatasetLoader(
+            data=kwargs["data"],
+            target_col=kwargs.get("target_col", "target"),
             dataset_name=dataset_name,
-            processor_name=processor_name,
-            split=split,
+            batch_size=batch_size,
+        )
+    elif domain_clean in ("generic", "custom"):
+        if "inputs" not in kwargs or "targets" not in kwargs:
+            raise ValueError(
+                "GenericDatasetLoader requires both 'inputs' and 'targets' keyword arguments."
+            )
+        return GenericDatasetLoader(
+            inputs=kwargs["inputs"],
+            targets=kwargs["targets"],
+            dataset_name=dataset_name,
             batch_size=batch_size,
         )
     else:
-        return HFVisionDatasetLoader(
-            dataset_name=dataset_name,
-            processor_name=processor_name,
-            split=split,
-            batch_size=batch_size,
+        raise ValueError(
+            f"Unsupported data domain: '{data_domain}'. "
+            f"Expected one of: 'image', 'vision', 'text', 'nlp', 'time_series', 'timeseries', 'sequence', 'tabular', 'csv', 'table', 'generic', 'custom'."
         )
 
 

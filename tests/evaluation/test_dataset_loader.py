@@ -129,4 +129,80 @@ def test_get_dataset_loader_factory_domains():
     )
     assert isinstance(tab_loader, TabularDatasetLoader)
 
+    # Generic domain
+    from app.evaluation.dataset_loader import GenericDatasetLoader
+    gen_loader = get_dataset_loader(
+        dataset_name="custom_gen",
+        data_domain="generic",
+        inputs=torch.randn(4, 5),
+        targets=torch.tensor([0, 1, 0, 1]),
+    )
+    assert isinstance(gen_loader, GenericDatasetLoader)
+
+
+def test_get_dataset_loader_validation_and_unsupported_domains():
+    """Test get_dataset_loader error handling for missing args and unsupported domains."""
+    import torch
+    from app.evaluation.dataset_loader import get_dataset_loader
+
+    # Unsupported domain
+    with pytest.raises(ValueError, match="Unsupported data domain"):
+        get_dataset_loader(dataset_name="unknown", data_domain="quantum_computing")
+
+    # Time series missing inputs or targets
+    with pytest.raises(ValueError, match="TimeSeriesDatasetLoader requires"):
+        get_dataset_loader(dataset_name="ts", data_domain="time-series")
+
+    # Tabular missing data
+    with pytest.raises(ValueError, match="TabularDatasetLoader requires"):
+        get_dataset_loader(dataset_name="tab", data_domain="tabular")
+
+    # Generic missing inputs or targets
+    with pytest.raises(ValueError, match="GenericDatasetLoader requires"):
+        get_dataset_loader(dataset_name="gen", data_domain="generic")
+
+
+def test_hf_vision_loader_invalid_processor_raises_runtime_error(monkeypatch):
+    """Test that specifying an invalid/unresolvable processor_name raises a RuntimeError."""
+    from app.evaluation.dataset_loader import HFVisionDatasetLoader
+
+    class DummyDataset:
+        column_names = ["image", "label"]
+        features = {}
+        def __len__(self):
+            return 1
+        def __getitem__(self, idx):
+            return {"image": Image.new("RGB", (10, 10)), "label": 0}
+
+    import app.evaluation.dataset_loader as dl_module
+    monkeypatch.setattr(dl_module, "load_dataset", lambda *args, **kwargs: DummyDataset())
+
+    with pytest.raises(RuntimeError, match="Failed to load AutoImageProcessor"):
+        HFVisionDatasetLoader(
+            dataset_name="dummy_dataset",
+            processor_name="non_existent_processor_12345XYZ",
+        )
+
+
+def test_hf_vision_loader_missing_label_raises_key_error(monkeypatch):
+    """Test that a dataset missing all recognized label columns raises KeyError."""
+    from app.evaluation.dataset_loader import HFVisionDatasetLoader
+
+    class DummyUnlabeledDataset:
+        column_names = ["image", "unrelated_meta"]
+        features = {}
+        def __len__(self):
+            return 1
+        def __getitem__(self, idx):
+            return {"image": Image.new("RGB", (10, 10)), "unrelated_meta": "test"}
+
+    import app.evaluation.dataset_loader as dl_module
+    monkeypatch.setattr(dl_module, "load_dataset", lambda *args, **kwargs: DummyUnlabeledDataset())
+
+    with pytest.raises(KeyError, match="does not contain any recognized label column"):
+        HFVisionDatasetLoader(
+            dataset_name="unlabeled_dataset",
+            processor_name=None,
+        )
+
 

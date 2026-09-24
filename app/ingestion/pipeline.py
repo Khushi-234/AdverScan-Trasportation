@@ -74,6 +74,19 @@ def ingest_model(
             if len(output_shape) > 1:
                 num_classes = output_shape[-1]
 
+    # Parameter count and architecture
+    total_params = None
+    trainable_params = None
+    model_arch = raw_model.__class__.__name__ if hasattr(raw_model, "__class__") else None
+    if hasattr(raw_model, "parameters"):
+        try:
+            params_list = [p for p in raw_model.parameters() if hasattr(p, "numel")]
+            if params_list:
+                total_params = int(sum(p.numel() for p in params_list))
+                trainable_params = int(sum(p.numel() for p in params_list if getattr(p, "requires_grad", False)))
+        except Exception:
+            pass
+
     metadata = ModelMetadata(
         framework="pytorch",
         model_name=model_name or (raw_model.__class__.__name__ if hasattr(raw_model, "__class__") else "PyTorchModel"),
@@ -83,6 +96,9 @@ def ingest_model(
         task_type=task_type,
         device=str(target_device),
         domain=domain or "image",
+        total_parameters=total_params,
+        trainable_parameters=trainable_params,
+        model_architecture=model_arch,
     )
 
     if log_ingestion:
