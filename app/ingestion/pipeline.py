@@ -2,6 +2,7 @@
 Ingestion pipeline logic for AdverScan framework.
 """
 
+from pathlib import Path
 from typing import Any, Optional, Tuple, Union
 import torch
 
@@ -19,6 +20,9 @@ def ingest_model(
     model_class: Optional[Any] = None,
     model_name: Optional[str] = None,
     task_type: Optional[str] = "classification",
+    domain: Optional[str] = None,
+    log_ingestion: bool = False,
+    log_filepath: Union[str, Path] = "results/ingestion_log.json",
     **kwargs: Any
 ) -> Tuple[PyTorchAdapter, ModelMetadata]:
     """
@@ -32,6 +36,9 @@ def ingest_model(
         model_class: Model class factory or structure when loading state_dict.
         model_name: Optional custom model name.
         task_type: Machine learning task type (default 'classification').
+        domain: Target problem domain ('image', 'text', 'time_series', 'tabular').
+        log_ingestion: Whether to append ingestion metadata to structured JSON log.
+        log_filepath: File path for ingestion log.
         **kwargs: Extra parameters passed to model loader.
 
     Returns:
@@ -75,6 +82,23 @@ def ingest_model(
         num_classes=num_classes,
         task_type=task_type,
         device=str(target_device),
+        domain=domain or "image",
     )
+
+    if log_ingestion:
+        from app.ingestion.model_registry import log_ingestion_event
+        log_ingestion_event(
+            {
+                "status": "INGESTION_SUCCESS",
+                "model_name": metadata.model_name,
+                "framework": metadata.framework,
+                "domain": metadata.domain,
+                "task_type": metadata.task_type,
+                "target_device": metadata.device,
+                "num_classes": metadata.num_classes,
+                "input_shape": list(metadata.input_shape) if metadata.input_shape else None,
+            },
+            log_filepath=log_filepath,
+        )
 
     return adapter, metadata
