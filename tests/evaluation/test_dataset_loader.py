@@ -63,3 +63,70 @@ def test_gtsrb_dataset_loader_decode_invalid_sample():
     with pytest.raises(KeyError, match="does not contain a valid image"):
         loader._decode_image({"invalid": "dict"})
 
+
+def test_time_series_dataset_loader():
+    """Test TimeSeriesDatasetLoader with 3D numerical sequence tensor inputs."""
+    import torch
+    from app.evaluation.dataset_loader import TimeSeriesDatasetLoader
+
+    inputs = torch.randn(10, 24, 5)  # 10 samples, 24 time steps, 5 features
+    targets = torch.tensor([0, 1, 0, 1, 0, 1, 0, 1, 0, 1])
+
+    loader = TimeSeriesDatasetLoader(inputs=inputs, targets=targets, batch_size=4)
+    assert len(loader) == 10
+
+    batches = list(loader.iterate_batches())
+    assert len(batches) == 3  # 4 + 4 + 2 samples
+    b_in, b_tgt, t_list = batches[0]
+    assert b_in.shape == (4, 24, 5)
+    assert b_tgt.shape == (4,)
+    assert t_list == [0, 1, 0, 1]
+
+
+def test_tabular_dataset_loader_tuple():
+    """Test TabularDatasetLoader with feature matrix and target vector tuple."""
+    import torch
+    from app.evaluation.dataset_loader import TabularDatasetLoader
+
+    X = torch.randn(12, 8)  # 12 samples, 8 tabular features
+    y = torch.tensor([0, 1, 2, 0, 1, 2, 0, 1, 2, 0, 1, 2])
+
+    loader = TabularDatasetLoader(data=(X, y), batch_size=5)
+    assert len(loader) == 12
+
+    batches = list(loader.iterate_batches())
+    assert len(batches) == 3
+    b_in, b_tgt, t_list = batches[0]
+    assert b_in.shape == (5, 8)
+    assert b_tgt.shape == (5,)
+    assert t_list == [0, 1, 2, 0, 1]
+
+
+def test_get_dataset_loader_factory_domains():
+    """Test get_dataset_loader factory resolving correct domain classes."""
+    import torch
+    from app.evaluation.dataset_loader import (
+        HFVisionDatasetLoader,
+        TimeSeriesDatasetLoader,
+        TabularDatasetLoader,
+        get_dataset_loader,
+    )
+
+    # Time series domain
+    ts_loader = get_dataset_loader(
+        dataset_name="custom_ts",
+        data_domain="time-series",
+        inputs=torch.randn(4, 10),
+        targets=torch.tensor([0, 1, 0, 1]),
+    )
+    assert isinstance(ts_loader, TimeSeriesDatasetLoader)
+
+    # Tabular domain
+    tab_loader = get_dataset_loader(
+        dataset_name="custom_tab",
+        data_domain="tabular",
+        data=(torch.randn(4, 5), torch.tensor([0, 1, 0, 1])),
+    )
+    assert isinstance(tab_loader, TabularDatasetLoader)
+
+
