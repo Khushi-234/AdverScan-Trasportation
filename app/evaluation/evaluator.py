@@ -12,7 +12,6 @@ import torch
 from app.ingestion.adapters.base_adapter import BaseModelAdapter
 from app.evaluation.dataset_loader import (
     BaseDatasetLoader,
-    GTSRBDatasetLoader,
     HFVisionDatasetLoader,
     get_dataset_loader,
 )

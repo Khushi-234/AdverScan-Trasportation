@@ -4,7 +4,6 @@ Module 2 — Baseline Evaluation for AdverScan framework.
 
 from app.evaluation.dataset_loader import (
     BaseDatasetLoader,
-    GTSRBDatasetLoader,
     GenericDatasetLoader,
     HFTextDatasetLoader,
     HFVisionDatasetLoader,
@@ -20,7 +19,6 @@ __all__ = [
     "EvaluationResult",
     "MetricsCalculator",
     "BaseDatasetLoader",
-    "GTSRBDatasetLoader",
     "HFVisionDatasetLoader",
     "HFTextDatasetLoader",
     "TimeSeriesDatasetLoader",

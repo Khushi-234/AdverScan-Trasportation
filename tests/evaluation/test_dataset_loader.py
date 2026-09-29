@@ -1,14 +1,14 @@
 """
-Unit tests for GTSRBDatasetLoader image decoding and sample processing.
+Unit tests for HFVisionDatasetLoader image decoding and sample processing.
 """
 
 import io
 from PIL import Image
 import pytest
-from app.evaluation.dataset_loader import GTSRBDatasetLoader
+from app.evaluation.dataset_loader import HFVisionDatasetLoader
 
 
-def test_gtsrb_dataset_loader_decode_image_bytes():
+def test_hf_vision_loader_decode_image_bytes():
     """Test decoding PIL Image from raw PNG bytes dict."""
     img = Image.new("RGB", (32, 32), color="red")
     buf = io.BytesIO()
@@ -17,7 +17,7 @@ def test_gtsrb_dataset_loader_decode_image_bytes():
 
     sample = {"Path": {"bytes": raw_bytes}, "ClassId": 14}
 
-    loader = GTSRBDatasetLoader.__new__(GTSRBDatasetLoader)
+    loader = HFVisionDatasetLoader.__new__(HFVisionDatasetLoader)
     decoded_img = loader._decode_image(sample)
 
     assert isinstance(decoded_img, Image.Image)
@@ -25,9 +25,9 @@ def test_gtsrb_dataset_loader_decode_image_bytes():
     assert decoded_img.mode == "RGB"
 
 
-def test_gtsrb_dataset_loader_rgb_conversion():
+def test_hf_vision_loader_rgb_conversion():
     """Test explicit conversion of RGBA and grayscale images to RGB."""
-    loader = GTSRBDatasetLoader.__new__(GTSRBDatasetLoader)
+    loader = HFVisionDatasetLoader.__new__(HFVisionDatasetLoader)
 
     # Test RGBA image
     rgba_img = Image.new("RGBA", (32, 32), color=(255, 0, 0, 128))
@@ -42,7 +42,7 @@ def test_gtsrb_dataset_loader_rgb_conversion():
     assert decoded_gray.mode == "RGB"
 
 
-def test_gtsrb_dataset_loader_processor_output_shape(mocker=None):
+def test_hf_vision_loader_processor_output_shape(mocker=None):
     """Test image processor transforms PIL image into expected (N, 3, 224, 224) tensor shape."""
     from transformers import AutoImageProcessor
     import torch
@@ -57,9 +57,9 @@ def test_gtsrb_dataset_loader_processor_output_shape(mocker=None):
     assert tensor.shape == (2, 3, 224, 224)
 
 
-def test_gtsrb_dataset_loader_decode_invalid_sample():
+def test_hf_vision_loader_decode_invalid_sample():
     """Test error handling when decoding sample with missing keys."""
-    loader = GTSRBDatasetLoader.__new__(GTSRBDatasetLoader)
+    loader = HFVisionDatasetLoader.__new__(HFVisionDatasetLoader)
     with pytest.raises(KeyError, match="does not contain a valid image"):
         loader._decode_image({"invalid": "dict"})
 
