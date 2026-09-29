@@ -102,7 +102,7 @@ def ingest_model(
     )
 
     if log_ingestion:
-        from app.ingestion.model_registry import log_ingestion_event
+        from app.ingestion.utils import log_ingestion_event
         log_ingestion_event(
             {
                 "status": "INGESTION_SUCCESS",

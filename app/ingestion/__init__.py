@@ -14,6 +14,7 @@ from app.ingestion.metadata import ModelMetadata
 from app.ingestion.pipeline import ingest_model
 from app.ingestion.runtime import DeviceManager
 from app.ingestion.validation import ModelValidator
+from app.ingestion.utils import log_ingestion_event
 
 __all__ = [
     "BaseModelLoader",
@@ -28,4 +29,5 @@ __all__ = [
     "ModelValidationError",
     "UnsupportedModelError",
     "ingest_model",
+    "log_ingestion_event",
 ]
