@@ -220,7 +220,7 @@ def setup_model_environment(
     Returns:
         Environment metadata dictionary.
     """
-    from app.ingestion.runtime.device_manager import DeviceManager
+    from app.utils.device_manager import DeviceManager
 
     target_device = DeviceManager.get_device(device)
     model_info = ModelPresetRegistry.resolve_model_info(model_id_or_path, data_domain=data_domain)

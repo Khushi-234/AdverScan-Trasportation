@@ -12,7 +12,7 @@ from app.ingestion.exceptions import (
 from app.ingestion.loader import BaseModelLoader, PyTorchLoader
 from app.ingestion.metadata import ModelMetadata
 from app.ingestion.pipeline import ingest_model
-from app.ingestion.runtime import DeviceManager
+from app.utils.device_manager import DeviceManager
 from app.ingestion.validation import ModelValidator
 from app.ingestion.utils import log_ingestion_event
 

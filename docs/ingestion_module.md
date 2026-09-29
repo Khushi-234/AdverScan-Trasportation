@@ -61,9 +61,6 @@ app/ingestion/
 │   ├── __init__.py
 │   ├── base_adapter.py         # BaseModelAdapter abstract base class
 │   └── pytorch_adapter.py      # PyTorchAdapter (predict, to, eval, train, __call__)
-├── runtime/                    # Hardware execution and device routing
-│   ├── __init__.py
-│   └── device_manager.py       # DeviceManager (CUDA, MPS, CPU detection & allocation)
 ├── validation/                 # Integrity and sanity verification
 │   ├── __init__.py
 │   └── validator.py            # ModelValidator (interface integrity, NaN/Inf checks)
@@ -72,7 +69,8 @@ app/ingestion/
 │   └── model_metadata.py       # ModelMetadata dataclass (shapes, parameters, domain, task)
 └── utils/                      # Ingestion utilities and logging
     ├── __init__.py
-    └── logger.py               # log_ingestion_event() structured JSON audit logging
+    ├── logger.py               # log_ingestion_event() structured JSON audit logging
+    └── device_manager.py       # DeviceManager alias (imported from app.utils.device_manager)
 ```
 
 ---
@@ -119,7 +117,7 @@ The adapter subsystem wraps framework-specific models in a uniform execution har
 
 ---
 
-### 3.3. Runtime Management (`app/ingestion/runtime/device_manager.py`)
+### 3.3. Device Management (`app/utils/device_manager.py`)
 
 * **`DeviceManager`**:
   * Resolves hardware acceleration targets:
@@ -252,7 +250,7 @@ When `ingest_model()` or the CLI/script runner executes, data flows through five
 | **`PyTorchLoader`** | `loader/pytorch_loader.py` | Path (`.pt`, `.pth`), state_dict, or module | `torch.nn.Module` (in `eval` mode) | `BaseModelLoader`, `ModelLoadError` |
 | **`HuggingFaceLoader`**| `loader/huggingface_loader.py`| HF Repo ID / directory path | `torch.nn.Module` (in `eval` mode) | `BaseModelLoader`, `patch_hf_config` |
 | **`PyTorchAdapter`** | `adapters/pytorch_adapter.py` | `torch.nn.Module`, target device | Standardized adapter instance | `BaseModelAdapter`, downstream attack engines |
-| **`DeviceManager`** | `runtime/device_manager.py` | Preferred device string/object | `torch.device` | `torch.cuda`, `torch.backends.mps` |
+| **`DeviceManager`** | `app/utils/device_manager.py` | Preferred device string/object | `torch.device` | `torch.cuda`, `torch.backends.mps` |
 | **`ModelValidator`** | `validation/validator.py` | `BaseModelAdapter`, sample input | `bool` (or raises error) | `BaseModelAdapter`, `ModelValidationError` |
 | **`ModelMetadata`** | `metadata/model_metadata.py`| Architecture, shape, and count specs | `ModelMetadata` object & dict | `pipeline.py`, reporting/logging |
 | **`ModelPresetRegistry`** | `model_registry.py` | Model ID, Kaggle URL, or path | Metadata dict & resolved IDs | `setup_model_environment()`, CLI scripts |

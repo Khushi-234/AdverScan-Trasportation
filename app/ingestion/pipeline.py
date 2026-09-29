@@ -9,7 +9,7 @@ import torch
 from app.ingestion.adapters.pytorch_adapter import PyTorchAdapter
 from app.ingestion.loader.pytorch_loader import PyTorchLoader
 from app.ingestion.metadata.model_metadata import ModelMetadata
-from app.ingestion.runtime.device_manager import DeviceManager
+from app.utils.device_manager import DeviceManager
 from app.ingestion.validation.validator import ModelValidator
 
 
