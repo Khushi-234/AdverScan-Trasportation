@@ -2,7 +2,7 @@
 Wavelet and Spectral adversarial attack for time-series models.
 """
 
-from typing import Any, List, Optional, Tuple, Union
+from typing import Any, Optional, Tuple
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -15,7 +15,7 @@ from app.attack_engine.exceptions import (
     AttackExecutionError,
 )
 from app.attack_engine.attack_registry import register_attack
-from app.attack_engine.utils.tensor_utils import get_device, clip_tensor, project_lp
+from app.attack_engine.utils.tensor_utils import get_device, project_lp
 from app.attack_engine.utils.validation import check_model_compatibility
 from app.attack_engine.attacks.time_series.pgd import _apply_time_series_bounds
 
@@ -46,12 +46,8 @@ def _dwt_haar_1d(
         pad = 1
 
     inv_sqrt2 = 1.0 / (2.0**0.5)
-    h_low = torch.tensor(
-        [[[inv_sqrt2, inv_sqrt2]]], device=x.device, dtype=x.dtype
-    )
-    h_high = torch.tensor(
-        [[[inv_sqrt2, -inv_sqrt2]]], device=x.device, dtype=x.dtype
-    )
+    h_low = torch.tensor([[[inv_sqrt2, inv_sqrt2]]], device=x.device, dtype=x.dtype)
+    h_high = torch.tensor([[[inv_sqrt2, -inv_sqrt2]]], device=x.device, dtype=x.dtype)
 
     cA = F.conv1d(signal, h_low, stride=2)
     cD = F.conv1d(signal, h_high, stride=2)
@@ -81,14 +77,12 @@ def _idwt_haar_1d(
         Reconstructed tensor of shape (B, orig_T, D).
     """
     inv_sqrt2 = 1.0 / (2.0**0.5)
-    g_low = torch.tensor(
-        [[[inv_sqrt2, inv_sqrt2]]], device=cA.device, dtype=cA.dtype
-    )
-    g_high = torch.tensor(
-        [[[inv_sqrt2, -inv_sqrt2]]], device=cA.device, dtype=cA.dtype
-    )
+    g_low = torch.tensor([[[inv_sqrt2, inv_sqrt2]]], device=cA.device, dtype=cA.dtype)
+    g_high = torch.tensor([[[inv_sqrt2, -inv_sqrt2]]], device=cA.device, dtype=cA.dtype)
 
-    rec = F.conv_transpose1d(cA, g_low, stride=2) + F.conv_transpose1d(cD, g_high, stride=2)
+    rec = F.conv_transpose1d(cA, g_low, stride=2) + F.conv_transpose1d(
+        cD, g_high, stride=2
+    )
     if pad > 0:
         rec = rec[..., :orig_T]
 
@@ -99,9 +93,9 @@ class WaveletAttack(BaseAttack):
     """
     Spectral / Wavelet adversarial attack for time-series data.
 
-    Perturbations are introduced in a transformed frequency/wavelet coefficient
-    space (using differentiable Haar DWT or differentiable real FFT) before being
-    reconstructed back into the original time-series space.
+    Generates adversarial time-series perturbations via gradient filtering in the
+    spectral/wavelet domain (differentiable Haar DWT or real FFT) followed by
+    reconstruction and projected gradient steps in input space.
     """
 
     metadata = AttackMetadata(
@@ -140,21 +134,33 @@ class WaveletAttack(BaseAttack):
             return
 
         if config.epsilon < 0:
-            raise AttackConfigurationError(f"Epsilon cannot be negative, got {config.epsilon}")
+            raise AttackConfigurationError(
+                f"Epsilon cannot be negative, got {config.epsilon}"
+            )
 
-        if config.clip_min is not None and config.clip_max is not None and config.clip_min > config.clip_max:
+        if (
+            config.clip_min is not None
+            and config.clip_max is not None
+            and config.clip_min > config.clip_max
+        ):
             raise AttackConfigurationError(
                 f"clip_min ({config.clip_min}) cannot be greater than clip_max ({config.clip_max})"
             )
 
         params = config.params or {}
-        num_steps = params.get("num_steps", params.get("steps", params.get("iters", 10)))
+        num_steps = params.get(
+            "num_steps", params.get("steps", params.get("iters", 10))
+        )
         if num_steps <= 0:
-            raise AttackExecutionError("WaveletAttack num_steps must be greater than 0.")
+            raise AttackExecutionError(
+                "WaveletAttack num_steps must be greater than 0."
+            )
 
         norm = params.get("norm", "Linf")
         if norm.upper() not in ("LINF", "INF", "L2", "2"):
-            raise AttackConfigurationError(f"Unsupported norm '{norm}'. Supported norms: ['Linf', 'L2']")
+            raise AttackConfigurationError(
+                f"Unsupported norm '{norm}'. Supported norms: ['Linf', 'L2']"
+            )
 
         transform_type = params.get("transform_type", "dwt").lower()
         if transform_type not in ("dwt", "haar", "fft"):
@@ -163,10 +169,16 @@ class WaveletAttack(BaseAttack):
             )
 
         band = params.get("band", "all")
-        if isinstance(band, str) and band.lower() not in ("all", "low", "high", "mid", "approx", "detail"):
-            raise AttackConfigurationError(
-                f"Unsupported frequency band '{band}'. Supported: ['all', 'low', 'high', 'mid', 'approx', 'detail']"
-            )
+        if isinstance(band, str):
+            band_lower = band.lower()
+            if band_lower not in ("all", "low", "high", "mid", "approx", "detail"):
+                raise AttackConfigurationError(
+                    f"Unsupported frequency band '{band}'. Supported: ['all', 'low', 'high', 'mid', 'approx', 'detail']"
+                )
+            if transform_type in ("dwt", "haar") and band_lower == "mid":
+                raise AttackConfigurationError(
+                    "Band 'mid' is only supported for FFT transform; DWT supports 'low'/'approx', 'high'/'detail', or 'all'."
+                )
 
     def generate(
         self,
@@ -194,7 +206,9 @@ class WaveletAttack(BaseAttack):
         self.validate_config(config)
 
         if not isinstance(inputs, torch.Tensor):
-            raise AttackExecutionError(f"WaveletAttack expects inputs to be torch.Tensor, got {type(inputs)}")
+            raise AttackExecutionError(
+                f"WaveletAttack expects inputs to be torch.Tensor, got {type(inputs)}"
+            )
 
         if inputs.dim() not in (2, 3):
             raise AttackExecutionError(
@@ -206,9 +220,13 @@ class WaveletAttack(BaseAttack):
             raise AttackExecutionError("Input batch cannot be empty.")
         if inputs.size(1) == 0:
             raise AttackExecutionError("Sequence length must be greater than 0.")
+        if not torch.isfinite(inputs).all():
+            raise AttackExecutionError(
+                "WaveletAttack inputs contain NaN or Inf values."
+            )
 
         # Ensure 3D internally: (B, T, D)
-        is_2d = (inputs.dim() == 2)
+        is_2d = inputs.dim() == 2
         if is_2d:
             inputs_3d = inputs.unsqueeze(-1)
         else:
@@ -230,7 +248,9 @@ class WaveletAttack(BaseAttack):
 
         if labels is None:
             if targeted:
-                raise AttackExecutionError("Target labels must be provided for targeted WaveletAttack.")
+                raise AttackExecutionError(
+                    "Target labels must be provided for targeted WaveletAttack."
+                )
             with torch.no_grad():
                 out = forward_model(x_orig)
                 logits = out.logits if hasattr(out, "logits") else out
@@ -247,12 +267,43 @@ class WaveletAttack(BaseAttack):
             )
 
         epsilon = float(config.epsilon)
-        num_steps = params.get("num_steps", params.get("steps", params.get("iters", 10)))
+        num_steps = params.get(
+            "num_steps", params.get("steps", params.get("iters", 10))
+        )
         norm = params.get("norm", "Linf")
         transform_type = params.get("transform_type", "dwt").lower()
         band = params.get("band", "all")
         if isinstance(band, str):
             band = band.lower()
+
+        # Feature-wise bounds
+        f_min = params.get("feature_min")
+        f_max = params.get("feature_max")
+        bounds = params.get("feature_bounds", params.get("bounds"))
+        if (
+            bounds is not None
+            and isinstance(bounds, (tuple, list))
+            and len(bounds) == 2
+        ):
+            f_min = f_min if f_min is not None else bounds[0]
+            f_max = f_max if f_max is not None else bounds[1]
+
+        # If epsilon <= 0, return bounded original input immediately
+        if epsilon <= 0:
+            clamped = (
+                _apply_time_series_bounds(
+                    x_orig,
+                    clip_min=config.clip_min,
+                    clip_max=config.clip_max,
+                    feature_min=f_min,
+                    feature_max=f_max,
+                )
+                .detach()
+                .contiguous()
+            )
+            if is_2d:
+                clamped = clamped.squeeze(-1).contiguous()
+            return clamped
 
         if "alpha" in params:
             alpha = float(params["alpha"])
@@ -261,16 +312,10 @@ class WaveletAttack(BaseAttack):
         else:
             alpha = (2.0 * epsilon / num_steps) if num_steps > 0 else epsilon
 
-        # Feature-wise bounds
-        f_min = params.get("feature_min")
-        f_max = params.get("feature_max")
-        bounds = params.get("feature_bounds", params.get("bounds"))
-        if bounds is not None and isinstance(bounds, (tuple, list)) and len(bounds) == 2:
-            f_min = f_min if f_min is not None else bounds[0]
-            f_max = f_max if f_max is not None else bounds[1]
-
         # Loss function
-        loss_fn = config.loss_fn if config.loss_fn is not None else nn.CrossEntropyLoss()
+        loss_fn = (
+            config.loss_fn if config.loss_fn is not None else nn.CrossEntropyLoss()
+        )
 
         was_training = self.raw_model.training
         self.raw_model.eval()
@@ -291,10 +336,14 @@ class WaveletAttack(BaseAttack):
                     x_adv,
                     retain_graph=False,
                     create_graph=False,
+                    allow_unused=True,
                 )[0]
 
                 if grad is None:
-                    raise AttackExecutionError("Gradients w.r.t time-series input tensor were not computed.")
+                    grad = torch.zeros_like(x_adv)
+
+                # Numerical stability: protect against NaN/Inf in gradients
+                grad = torch.nan_to_num(grad, nan=0.0, posinf=0.0, neginf=0.0)
 
                 # Differentiable transformation of gradients into spectral / wavelet domain
                 if transform_type in ("dwt", "haar"):
@@ -330,6 +379,10 @@ class WaveletAttack(BaseAttack):
                     filtered_fft = fft_grad * mask
                     filtered_grad = torch.fft.irfft(filtered_fft, n=T_len, dim=1)
 
+                filtered_grad = torch.nan_to_num(
+                    filtered_grad, nan=0.0, posinf=0.0, neginf=0.0
+                )
+
                 # Direction step
                 if norm.upper() in ("LINF", "INF"):
                     step = filtered_grad.sign()
@@ -357,6 +410,16 @@ class WaveletAttack(BaseAttack):
                     feature_max=f_max,
                 )
 
+            # Final projection and bounds check
+            x_adv = project_lp(x_adv, x_orig, epsilon=epsilon, norm=norm)
+            x_adv = _apply_time_series_bounds(
+                x_adv,
+                clip_min=config.clip_min,
+                clip_max=config.clip_max,
+                feature_min=f_min,
+                feature_max=f_max,
+            )
+
             res = x_adv.detach().contiguous()
             if is_2d:
                 res = res.squeeze(-1).contiguous()
@@ -365,7 +428,9 @@ class WaveletAttack(BaseAttack):
         except AttackExecutionError:
             raise
         except Exception as e:
-            raise AttackExecutionError(f"Error during WaveletAttack generation: {str(e)}") from e
+            raise AttackExecutionError(
+                f"Error during WaveletAttack generation: {str(e)}"
+            ) from e
         finally:
             if hasattr(self.raw_model, "zero_grad"):
                 self.raw_model.zero_grad(set_to_none=True)

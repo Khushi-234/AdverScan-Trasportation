@@ -2,7 +2,7 @@
 Smooth / Temporal Projected Gradient Descent (Smooth PGD) adversarial attack for time-series.
 """
 
-from typing import Any, Optional, Union
+from typing import Any, Optional
 import torch
 import torch.nn as nn
 
@@ -14,7 +14,7 @@ from app.attack_engine.exceptions import (
     AttackExecutionError,
 )
 from app.attack_engine.attack_registry import register_attack
-from app.attack_engine.utils.tensor_utils import get_device, clip_tensor, project_lp
+from app.attack_engine.utils.tensor_utils import get_device, project_lp
 from app.attack_engine.utils.validation import check_model_compatibility
 from app.attack_engine.attacks.time_series.pgd import _apply_time_series_bounds
 
@@ -37,7 +37,7 @@ def compute_temporal_total_variation(
         Scalar tensor representing temporal total variation per sample, averaged over batch.
     """
     if x.size(1) <= 1:
-        return torch.tensor(0.0, device=x.device, dtype=x.dtype, requires_grad=True)
+        return (x * 0.0).sum()
 
     # First-order temporal difference along the time dimension (t - (t-1))
     diff = x[:, 1:] - x[:, :-1]
@@ -46,7 +46,11 @@ def compute_temporal_total_variation(
         return torch.mean(torch.sum(torch.square(diff), dim=list(range(1, diff.dim()))))
     else:
         # Smooth L1 / Charbonnier approximation of Σ |x[t] - x[t-1]|
-        return torch.mean(torch.sum(torch.sqrt(torch.square(diff) + eps), dim=list(range(1, diff.dim()))))
+        return torch.mean(
+            torch.sum(
+                torch.sqrt(torch.square(diff) + eps), dim=list(range(1, diff.dim()))
+            )
+        )
 
 
 class SmoothPGD(BaseAttack):
@@ -94,36 +98,58 @@ class SmoothPGD(BaseAttack):
             return
 
         if config.epsilon < 0:
-            raise AttackConfigurationError(f"Epsilon cannot be negative, got {config.epsilon}")
+            raise AttackConfigurationError(
+                f"Epsilon cannot be negative, got {config.epsilon}"
+            )
 
-        if config.clip_min is not None and config.clip_max is not None and config.clip_min > config.clip_max:
+        if (
+            config.clip_min is not None
+            and config.clip_max is not None
+            and config.clip_min > config.clip_max
+        ):
             raise AttackConfigurationError(
                 f"clip_min ({config.clip_min}) cannot be greater than clip_max ({config.clip_max})"
             )
 
         params = config.params or {}
-        num_steps = params.get("num_steps", params.get("steps", params.get("iters", 10)))
+        num_steps = params.get(
+            "num_steps", params.get("steps", params.get("iters", 10))
+        )
         if num_steps <= 0:
             raise AttackExecutionError("SmoothPGD num_steps must be greater than 0.")
 
         norm = params.get("norm", "Linf")
         if norm.upper() not in ("LINF", "INF", "L2", "2"):
-            raise AttackConfigurationError(f"Unsupported norm '{norm}'. Supported norms: ['Linf', 'L2']")
+            raise AttackConfigurationError(
+                f"Unsupported norm '{norm}'. Supported norms: ['Linf', 'L2']"
+            )
 
-        tv_weight = params.get("tv_weight", params.get("lambda_tv", params.get("smoothness_factor", 0.1)))
+        tv_weight = params.get(
+            "tv_weight", params.get("lambda_tv", params.get("smoothness_factor", 0.1))
+        )
         if tv_weight < 0:
-            raise AttackConfigurationError(f"tv_weight (smoothness factor) cannot be negative, got {tv_weight}")
+            raise AttackConfigurationError(
+                f"tv_weight (smoothness factor) cannot be negative, got {tv_weight}"
+            )
 
         if "alpha" in params and params["alpha"] <= 0:
-            raise AttackConfigurationError(f"Step size (alpha) must be greater than 0, got {params['alpha']}")
+            raise AttackConfigurationError(
+                f"Step size (alpha) must be greater than 0, got {params['alpha']}"
+            )
         if "step_size" in params and params["step_size"] <= 0:
-            raise AttackConfigurationError(f"step_size must be greater than 0, got {params['step_size']}")
+            raise AttackConfigurationError(
+                f"step_size must be greater than 0, got {params['step_size']}"
+            )
 
         # Validate feature-wise bounds if provided
         f_min = params.get("feature_min")
         f_max = params.get("feature_max")
         bounds = params.get("feature_bounds", params.get("bounds"))
-        if bounds is not None and isinstance(bounds, (tuple, list)) and len(bounds) == 2:
+        if (
+            bounds is not None
+            and isinstance(bounds, (tuple, list))
+            and len(bounds) == 2
+        ):
             f_min = f_min if f_min is not None else bounds[0]
             f_max = f_max if f_max is not None else bounds[1]
 
@@ -131,7 +157,9 @@ class SmoothPGD(BaseAttack):
             t_min = torch.as_tensor(f_min)
             t_max = torch.as_tensor(f_max)
             if (t_min > t_max).any():
-                raise AttackConfigurationError("feature_min cannot be greater than feature_max.")
+                raise AttackConfigurationError(
+                    "feature_min cannot be greater than feature_max."
+                )
 
     def generate(
         self,
@@ -163,7 +191,9 @@ class SmoothPGD(BaseAttack):
         self.validate_config(config)
 
         if not isinstance(inputs, torch.Tensor):
-            raise AttackExecutionError(f"SmoothPGD expects inputs to be torch.Tensor, got {type(inputs)}")
+            raise AttackExecutionError(
+                f"SmoothPGD expects inputs to be torch.Tensor, got {type(inputs)}"
+            )
 
         if inputs.dim() not in (2, 3):
             raise AttackExecutionError(
@@ -175,6 +205,8 @@ class SmoothPGD(BaseAttack):
             raise AttackExecutionError("Input batch cannot be empty.")
         if inputs.size(1) == 0:
             raise AttackExecutionError("Sequence length must be greater than 0.")
+        if not torch.isfinite(inputs).all():
+            raise AttackExecutionError("SmoothPGD inputs contain NaN or Inf values.")
 
         params = config.params or {}
         targeted = params.get("targeted", False)
@@ -187,7 +219,9 @@ class SmoothPGD(BaseAttack):
 
         if labels is None:
             if targeted:
-                raise AttackExecutionError("Target labels must be provided for targeted SmoothPGD attack.")
+                raise AttackExecutionError(
+                    "Target labels must be provided for targeted SmoothPGD attack."
+                )
             with torch.no_grad():
                 out = self.raw_model(x_orig)
                 logits = out.logits if hasattr(out, "logits") else out
@@ -204,12 +238,45 @@ class SmoothPGD(BaseAttack):
             )
 
         epsilon = float(config.epsilon)
-        num_steps = params.get("num_steps", params.get("steps", params.get("iters", 10)))
+        num_steps = params.get(
+            "num_steps", params.get("steps", params.get("iters", 10))
+        )
         norm = params.get("norm", "Linf")
         random_start = params.get("random_start", True)
-        tv_weight = float(params.get("tv_weight", params.get("lambda_tv", params.get("smoothness_factor", 0.1))))
+        tv_weight = float(
+            params.get(
+                "tv_weight",
+                params.get("lambda_tv", params.get("smoothness_factor", 0.1)),
+            )
+        )
         tv_norm = params.get("tv_norm", "l1")
         regularize_perturbation = params.get("regularize_perturbation", False)
+
+        # Feature-wise bounds
+        f_min = params.get("feature_min")
+        f_max = params.get("feature_max")
+        bounds = params.get("feature_bounds", params.get("bounds"))
+        if (
+            bounds is not None
+            and isinstance(bounds, (tuple, list))
+            and len(bounds) == 2
+        ):
+            f_min = f_min if f_min is not None else bounds[0]
+            f_max = f_max if f_max is not None else bounds[1]
+
+        # If epsilon <= 0, no perturbation is mathematically allowed
+        if epsilon <= 0:
+            return (
+                _apply_time_series_bounds(
+                    x_orig,
+                    clip_min=config.clip_min,
+                    clip_max=config.clip_max,
+                    feature_min=f_min,
+                    feature_max=f_max,
+                )
+                .detach()
+                .contiguous()
+            )
 
         if "alpha" in params:
             alpha = float(params["alpha"])
@@ -217,14 +284,6 @@ class SmoothPGD(BaseAttack):
             alpha = float(params["step_size"])
         else:
             alpha = (2.0 * epsilon / num_steps) if num_steps > 0 else epsilon
-
-        # Feature-wise bounds
-        f_min = params.get("feature_min")
-        f_max = params.get("feature_max")
-        bounds = params.get("feature_bounds", params.get("bounds"))
-        if bounds is not None and isinstance(bounds, (tuple, list)) and len(bounds) == 2:
-            f_min = f_min if f_min is not None else bounds[0]
-            f_max = f_max if f_max is not None else bounds[1]
 
         # Loss function
         if config.loss_fn is not None:
@@ -248,12 +307,18 @@ class SmoothPGD(BaseAttack):
                     l2_norm = torch.norm(noise_flat, p=2, dim=1, keepdim=True).view(
                         -1, *([1] * (noise.dim() - 1))
                     )
-                    radius = torch.rand(noise.size(0), device=device).view(
-                        -1, *([1] * (noise.dim() - 1))
-                    ) * epsilon
+                    radius = (
+                        torch.rand(noise.size(0), device=device).view(
+                            -1, *([1] * (noise.dim() - 1))
+                        )
+                        * epsilon
+                    )
                     noise = (noise / (l2_norm + 1e-12)) * radius
 
                 x_adv = x_adv + noise
+                x_adv = project_lp(
+                    x_adv.contiguous(), x_orig, epsilon=epsilon, norm=norm
+                )
                 x_adv = _apply_time_series_bounds(
                     x_adv,
                     clip_min=config.clip_min,
@@ -270,28 +335,37 @@ class SmoothPGD(BaseAttack):
                 logits = outputs.logits if hasattr(outputs, "logits") else outputs
                 cls_loss = loss_fn(logits, labels)
 
-                # Differentiable temporal smoothness regularization
-                signal_to_smooth = (x_adv - x_orig) if regularize_perturbation else x_adv
-                tv_loss = compute_temporal_total_variation(signal_to_smooth, tv_norm=tv_norm)
+                if tv_weight > 0.0:
+                    # Differentiable temporal smoothness regularization
+                    signal_to_smooth = (
+                        (x_adv - x_orig) if regularize_perturbation else x_adv
+                    )
+                    tv_loss = compute_temporal_total_variation(
+                        signal_to_smooth, tv_norm=tv_norm
+                    )
 
-                if targeted:
-                    # In targeted attack, we want to minimize classification loss towards target
-                    # and minimize TV loss: Total = cls_loss + tv_weight * tv_loss
-                    total_loss = cls_loss + tv_weight * tv_loss
+                    if targeted:
+                        # In targeted attack: minimize classification loss towards target + TV loss
+                        total_loss = cls_loss + tv_weight * tv_loss
+                    else:
+                        # In untargeted attack: maximize classification loss away from true - TV loss
+                        total_loss = cls_loss - tv_weight * tv_loss
                 else:
-                    # In untargeted attack, we want to maximize classification loss away from true
-                    # and minimize TV loss: Total = cls_loss - tv_weight * tv_loss
-                    total_loss = cls_loss - tv_weight * tv_loss
+                    total_loss = cls_loss
 
                 grad = torch.autograd.grad(
                     total_loss,
                     x_adv,
                     retain_graph=False,
                     create_graph=False,
+                    allow_unused=True,
                 )[0]
 
                 if grad is None:
-                    raise AttackExecutionError("Gradients w.r.t time-series input tensor were not computed.")
+                    grad = torch.zeros_like(x_adv)
+
+                # Numerical stability: protect against NaN/Inf in gradients
+                grad = torch.nan_to_num(grad, nan=0.0, posinf=0.0, neginf=0.0)
 
                 # Direction step
                 if norm.upper() in ("LINF", "INF"):
@@ -311,7 +385,9 @@ class SmoothPGD(BaseAttack):
                     x_adv = x_adv.detach() + alpha * step
 
                 # Projection step back to Lp-ball around original time series
-                x_adv = project_lp(x_adv.contiguous(), x_orig, epsilon=epsilon, norm=norm)
+                x_adv = project_lp(
+                    x_adv.contiguous(), x_orig, epsilon=epsilon, norm=norm
+                )
 
                 # Clipping bounds
                 x_adv = _apply_time_series_bounds(
@@ -322,12 +398,23 @@ class SmoothPGD(BaseAttack):
                     feature_max=f_max,
                 )
 
+            # Final projection and bounds guarantee
+            x_adv = project_lp(x_adv.contiguous(), x_orig, epsilon=epsilon, norm=norm)
+            x_adv = _apply_time_series_bounds(
+                x_adv,
+                clip_min=config.clip_min,
+                clip_max=config.clip_max,
+                feature_min=f_min,
+                feature_max=f_max,
+            )
             return x_adv.detach().contiguous()
 
         except AttackExecutionError:
             raise
         except Exception as e:
-            raise AttackExecutionError(f"Error during SmoothPGD generation: {str(e)}") from e
+            raise AttackExecutionError(
+                f"Error during SmoothPGD generation: {str(e)}"
+            ) from e
         finally:
             if hasattr(self.raw_model, "zero_grad"):
                 self.raw_model.zero_grad(set_to_none=True)
