@@ -8,6 +8,11 @@ from app.attack_engine.attacks.image.pgd import PGD
 from app.attack_engine.attacks.image.deepfool import DeepFool
 from app.attack_engine.attacks.image.cw import CW
 from app.attack_engine.attacks.image.fab import FAB
+from app.attack_engine.attacks.text.hotflip import HotFlip
+from app.attack_engine.attacks.text.embedding_pgd import EmbeddingPGD
+from app.attack_engine.attacks.text.textbugger_wb import TextBuggerWB
+from app.attack_engine.attacks.text.universal_trigger import UniversalTrigger
+from app.attack_engine.attacks.text.gradient_substitution import GradientSubstitution
 from app.attack_engine.config import AttackConfig
 from app.attack_engine.models import AttackMetadata, AttackResult, AttackResults
 from app.attack_engine.exceptions import (
@@ -38,6 +43,11 @@ __all__ = [
     "DeepFool",
     "CW",
     "FAB",
+    "HotFlip",
+    "EmbeddingPGD",
+    "TextBuggerWB",
+    "UniversalTrigger",
+    "GradientSubstitution",
     "AttackConfig",
     "AttackResult",
     "AttackResults",

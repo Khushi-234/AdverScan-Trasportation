@@ -22,7 +22,7 @@ def compute_l0_norm(
     Compute average L0 norm (fraction or count of altered elements per sample).
     How many elements changed?
     """
-    delta = (x_adv - x_orig).abs()
+    delta = (x_adv.float() - x_orig.float()).abs()
     batch_size = x_orig.size(0)
     changed = (delta > threshold).float().view(batch_size, -1).sum(dim=1)
     return float(changed.mean().item())
@@ -33,7 +33,7 @@ def compute_l2_norm(x_orig: torch.Tensor, x_adv: torch.Tensor) -> float:
     Compute average L2 perturbation norm per sample.
     How large is the overall perturbation?
     """
-    delta = (x_adv - x_orig).view(x_orig.size(0), -1)
+    delta = (x_adv.float() - x_orig.float()).view(x_orig.size(0), -1)
     l2 = torch.norm(delta, p=2, dim=1)
     return float(l2.mean().item())
 
@@ -43,7 +43,7 @@ def compute_linf_norm(x_orig: torch.Tensor, x_adv: torch.Tensor) -> float:
     Compute average L_infinity perturbation norm per sample.
     What was the largest individual change?
     """
-    delta = (x_adv - x_orig).abs().view(x_orig.size(0), -1)
+    delta = (x_adv.float() - x_orig.float()).abs().view(x_orig.size(0), -1)
     linf = torch.max(delta, dim=1)[0]
     return float(linf.mean().item())
 
@@ -64,7 +64,7 @@ def compute_perturbation_metrics(
     if not isinstance(x_orig, torch.Tensor) or not isinstance(x_adv, torch.Tensor):
         return {}
 
-    delta = (x_adv - x_orig).abs()
+    delta = (x_adv.float() - x_orig.float()).abs()
     mae = float(delta.mean().item())
 
     return {

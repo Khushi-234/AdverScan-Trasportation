@@ -11,6 +11,13 @@ from app.attack_engine.attacks.time_series import (
     SoftDTWAttack,
     JSMA,
 )
+from app.attack_engine.attacks.text import (
+    HotFlip,
+    EmbeddingPGD,
+    TextBuggerWB,
+    UniversalTrigger,
+    GradientSubstitution,
+)
 
 __all__ = [
     "BaseAttack",
@@ -24,4 +31,9 @@ __all__ = [
     "WaveletAttack",
     "SoftDTWAttack",
     "JSMA",
+    "HotFlip",
+    "EmbeddingPGD",
+    "TextBuggerWB",
+    "UniversalTrigger",
+    "GradientSubstitution",
 ]
