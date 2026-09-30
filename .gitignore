@@ -1,0 +1,36 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+
+# Distribution / packaging
+.Python
+build/
+dist/
+downloads/
+lib/
+
+# Virtual environments
+.venv/
+
+# Logs and databases
+*.log
+logs/
+mlruns/
+
+# Datasets and model checkpoints (large files)
+datasets/*
+!datasets/.gitkeep
+results/*
+!results/.gitkeep
+reports/*
+!reports/.gitkeep
+
+# IDEs and Editors
+.vscode/
+.idea/
+
+# Jupyter Notebook Checkpoints
+.ipynb_checkpoints/
+
+# Reports
+reports/*
+
