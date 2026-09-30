@@ -7,10 +7,6 @@ name = "adverscan"
 version = "0.1.0"
 description = "Adversarial Hardening and Security Testing Platform Across Generalized Domains"
 readme = "README.md"
-authors = [
-    { name = "AdverScan Team" }
-]
-license = { text = "MIT" }
 classifiers = [
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.10",
