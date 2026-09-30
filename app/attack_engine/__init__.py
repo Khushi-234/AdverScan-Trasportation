@@ -13,6 +13,11 @@ from app.attack_engine.attacks.text.embedding_pgd import EmbeddingPGD
 from app.attack_engine.attacks.text.textbugger_wb import TextBuggerWB
 from app.attack_engine.attacks.text.universal_trigger import UniversalTrigger
 from app.attack_engine.attacks.text.gradient_substitution import GradientSubstitution
+from app.attack_engine.attacks.tabular.cap_pgd import CapPGD
+from app.attack_engine.attacks.tabular.lowprofool import LowProFool
+from app.attack_engine.attacks.tabular.carlini_wagner import TabularCW
+from app.attack_engine.attacks.tabular.jsma import TabularJSMA
+from app.attack_engine.attacks.tabular.vae_attack import VAEAttack
 from app.attack_engine.config import AttackConfig
 from app.attack_engine.models import AttackMetadata, AttackResult, AttackResults
 from app.attack_engine.exceptions import (
@@ -48,6 +53,11 @@ __all__ = [
     "TextBuggerWB",
     "UniversalTrigger",
     "GradientSubstitution",
+    "CapPGD",
+    "LowProFool",
+    "TabularCW",
+    "TabularJSMA",
+    "VAEAttack",
     "AttackConfig",
     "AttackResult",
     "AttackResults",

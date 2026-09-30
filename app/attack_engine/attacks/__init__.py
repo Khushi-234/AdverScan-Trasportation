@@ -18,6 +18,13 @@ from app.attack_engine.attacks.text import (
     UniversalTrigger,
     GradientSubstitution,
 )
+from app.attack_engine.attacks.tabular import (
+    CapPGD,
+    LowProFool,
+    TabularCW,
+    TabularJSMA,
+    VAEAttack,
+)
 
 __all__ = [
     "BaseAttack",
@@ -36,4 +43,9 @@ __all__ = [
     "TextBuggerWB",
     "UniversalTrigger",
     "GradientSubstitution",
+    "CapPGD",
+    "LowProFool",
+    "TabularCW",
+    "TabularJSMA",
+    "VAEAttack",
 ]
