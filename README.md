@@ -7,22 +7,19 @@
 ```text
 AdverScan/
 │
-├── app/                  # Main application source code
-│   ├── ingestion/        # Data & model ingestion pipelines
-│   ├── attacks/          # Adversarial attack implementations (FGSM, PGD, C&W, etc.)
-│   ├── orchestration/    # Scan workflows and engine execution
-│   ├── vulnerability/    # Vulnerability detection & threat assessment
-│   ├── scoring/          # Robustness scoring & metric calculation
-│   ├── hardening/        # Defense mechanisms & adversarial training routines
-│   ├── explainability/   # Model interpretability & saliency map generation
-│   ├── reporting/        # Report generation (PDF, HTML, JSON)
-│   ├── dashboard/        # Interactive UI / Monitoring dashboard
-│   ├── api/              # FastAPI REST endpoints
-│   ├── common/           # Shared types, base classes, and schemas
-│   ├── config/           # App settings & configuration management
-│   └── utils/            # Helper utilities and loggers
+├── app/                        # Main application source code
+│   ├── ingestion/              # Data & model ingestion pipelines
+│   ├── attacks/                # Adversarial attack implementations (FGSM, PGD, C&W, etc.)
+│   ├── orchestration/          # Scan workflows and engine execution
+│   ├── vulnerability_analysis/ # Vulnerability detection & threat assessment
+│   ├── hardening/              # Defense mechanisms & adversarial training routines
+│   ├── explainability/         # Model interpretability & saliency map generation
+│   ├── reporting/              # Report generation (PDF, HTML, JSON)
+│   ├── dashboard/              # Interactive UI / Monitoring dashboard
+│   ├── api/                    # FastAPI REST endpoints
+│   ├── common/                 # Shared types, base classes, and schemas
+│   └── utils/                  # Helper utilities and loggers
 │
-├── assets/               # Static assets & media
 ├── configs/              # System & experiment YAML/JSON configurations
 ├── datasets/             # Test samples, benchmarks, and data caches
 ├── experiments/          # Experiment scripts & tracking artifacts
@@ -30,8 +27,6 @@ AdverScan/
 ├── notebooks/            # Jupyter notebooks for prototyping & research
 ├── reports/              # Generated vulnerability & security reports
 ├── results/              # Scan output logs & raw metric evaluations
-├── logs/                 # System log files
-├── mlruns/               # MLflow experiment tracking records
 ├── tests/                # Unit, integration, and security test suites
 ├── docs/                 # Documentation & guides
 └── scripts/              # Utility scripts for setup, benchmarking, and deployment
@@ -77,7 +72,3 @@ AdverScan provides module interfaces for:
 3. **Evaluating & Scoring** robustness metrics.
 4. **Hardening** model checkpoints against adversarial perturbations.
 5. **Generating** explainability visualizers and audit reports.
-
-## 📄 License
-
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
