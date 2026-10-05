@@ -15,8 +15,17 @@ class HFTextDatasetLoader(BaseDatasetLoader):
     Discovers text and label columns, tokenizes inputs using Hugging Face AutoTokenizer, and yields mini-batches.
     """
 
-    TEXT_CANDIDATES = ["text", "sentence", "content", "premise", "input", "document", "review"]
-    LABEL_CANDIDATES = ["label", "labels", "target", "class", "category"]
+    TEXT_CANDIDATES = ["text", "sentence", "content", "premise", "input", "document", "review", "utterance", "query", "passage"]
+    LABEL_CANDIDATES = ["label", "labels", "target", "class", "category", "sentiment", "intent", "topic", "tag"]
+
+    DATASET_ALIASES = {
+        "sst2": "stanfordnlp/sst2",
+        "glue/sst2": "stanfordnlp/sst2",
+        "imdb": "stanfordnlp/imdb",
+        "ag_news": "fancyzhx/ag_news",
+        "cardiffnlp/tweet_eval": ("cardiffnlp/tweet_eval", "sentiment"),
+        "tweet_eval": ("cardiffnlp/tweet_eval", "sentiment"),
+    }
 
     def __init__(
         self,
@@ -26,13 +35,35 @@ class HFTextDatasetLoader(BaseDatasetLoader):
         batch_size: int = 32,
         max_length: int = 512,
     ):
+        resolved_name = self.DATASET_ALIASES.get(dataset_name, dataset_name)
         self._dataset_name = dataset_name
         self.tokenizer_name = tokenizer_name
         self.split = split
         self.batch_size = batch_size
         self.max_length = max_length
 
-        self._dataset = load_dataset(dataset_name, split=split)
+        def _load_hf_ds(target, split="test"):
+            if isinstance(target, (tuple, list)):
+                return load_dataset(target[0], target[1], split=split)
+            return load_dataset(target, split=split)
+
+        try:
+            self._dataset = _load_hf_ds(resolved_name, split=split)
+        except Exception as e:
+            if "Config name is missing" in str(e) and not isinstance(resolved_name, (tuple, list)):
+                resolved_name = (resolved_name, "sentiment")
+                self._dataset = _load_hf_ds(resolved_name, split=split)
+            else:
+                slice_suffix = ""
+                if "[" in split and "]" in split:
+                    slice_suffix = split[split.index("[") : split.index("]") + 1]
+                try:
+                    fallback_split = f"validation{slice_suffix}"
+                    self._dataset = _load_hf_ds(resolved_name, split=fallback_split)
+                    self.split = fallback_split
+                except Exception:
+                    self._dataset = _load_hf_ds(resolved_name, split="train")
+                    self.split = "train"
 
         self._tokenizer = None
         if tokenizer_name:
@@ -52,6 +83,20 @@ class HFTextDatasetLoader(BaseDatasetLoader):
                 f"Candidates checked: {self.LABEL_CANDIDATES}. "
                 f"Available columns: {getattr(self._dataset, 'column_names', [])}"
             )
+
+        # If test split has dummy labels (-1, e.g. GLUE test sets), fallback to validation split
+        if self.label_col and len(self._dataset) > 0 and self._dataset[0].get(self.label_col) == -1:
+            slice_suffix = ""
+            if "[" in self.split and "]" in self.split:
+                slice_suffix = self.split[self.split.index("[") : self.split.index("]") + 1]
+            try:
+                val_split = f"validation{slice_suffix}"
+                val_ds = _load_hf_ds(resolved_name, split=val_split)
+                if len(val_ds) > 0 and val_ds[0].get(self.label_col) != -1:
+                    self._dataset = val_ds
+                    self.split = val_split
+            except Exception:
+                pass
 
     def _find_column(self, candidates: List[str], default: Optional[str] = None) -> Optional[str]:
         if hasattr(self._dataset, "column_names") and self._dataset.column_names:
