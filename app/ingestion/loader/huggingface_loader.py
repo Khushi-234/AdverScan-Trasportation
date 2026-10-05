@@ -15,7 +15,7 @@ from transformers import (
     ViTConfig,
 )
 
-from app.ingestion.exceptions import ModelLoadError
+from app.ingestion.exceptions import ModelLoadError, UnsupportedTaskError
 from app.ingestion.loader.base_loader import BaseModelLoader
 
 
@@ -34,11 +34,11 @@ def patch_hf_config(cfg_dict: dict) -> dict:
 
 class HuggingFaceLoader(BaseModelLoader):
     """
-    Loads Hugging Face models across supported domains (image and text)
+    Loads Hugging Face models across supported domains (image, text, and time-series)
     from Hugging Face Model Hub or local model directories.
     """
 
-    SUPPORTED_DOMAINS = {"image", "text"}
+    SUPPORTED_DOMAINS = {"image", "text", "time-series"}
 
     def load(
         self,
@@ -71,7 +71,9 @@ class HuggingFaceLoader(BaseModelLoader):
             return model_path
 
         model_id = str(model_path).strip()
-        domain_str = str(domain).lower().strip() if domain is not None else ""
+        domain_str = str(domain).lower().strip().replace("_", "-") if domain is not None else ""
+        if domain_str == "timeseries":
+            domain_str = "time-series"
 
         if domain_str not in self.SUPPORTED_DOMAINS:
             # Attempt to auto-detect domain
@@ -85,12 +87,13 @@ class HuggingFaceLoader(BaseModelLoader):
         if domain_str not in self.SUPPORTED_DOMAINS:
             raise ModelLoadError(
                 f"Could not automatically determine model domain for Hugging Face model '{model_id}' (domain: '{domain_str}'). "
-                f"Please explicitly specify domain='image' or domain='text'."
+                f"Please explicitly specify domain='image', domain='text', or domain='time-series'."
             )
 
         try:
-            # 1. Download/read config.json to perform config patching if needed
+            # 1. Download/read config.json to perform config patching and task verification
             model_config = None
+            cfg_dict = {}
             try:
                 config_path = hf_hub_download(model_id, "config.json")
                 with open(config_path, "r", encoding="utf-8") as f:
@@ -107,6 +110,49 @@ class HuggingFaceLoader(BaseModelLoader):
                     model_config = AutoConfig.from_pretrained(model_id)
                 except Exception:
                     model_config = None
+
+            # Detect and reject forecasting/regression tasks for time-series models
+            clean_task = str(task_type).lower().strip() if task_type else ""
+            if clean_task in ("forecasting", "regression", "time-series-forecasting", "ts-forecasting"):
+                raise UnsupportedTaskError(
+                    "AdverScan currently supports time-series classification models only; forecasting models are not supported."
+                )
+
+            pipeline_tag = (
+                cfg_dict.get("pipeline_tag")
+                or getattr(model_config, "pipeline_tag", None)
+                or getattr(model_config, "task", None)
+            )
+            if pipeline_tag:
+                p_tag = str(pipeline_tag).lower().replace("_", "-")
+                if any(k in p_tag for k in ("forecasting", "time-series-forecasting", "time-series-regression")):
+                    raise UnsupportedTaskError(
+                        "AdverScan currently supports time-series classification models only; forecasting models are not supported."
+                    )
+
+            # Check architecture names in config for forecasting / regression
+            archs_list = []
+            if model_config and getattr(model_config, "architectures", None):
+                archs_list.extend([str(a) for a in model_config.architectures])
+            if "architectures" in cfg_dict and isinstance(cfg_dict["architectures"], list):
+                archs_list.extend([str(a) for a in cfg_dict["architectures"]])
+
+            forecasting_arch_patterns = (
+                "forprediction",
+                "forforecasting",
+                "forregression",
+                "timeseriesprediction",
+                "timeseriesforecasting",
+                "timeseriesregression",
+                "chronos",
+                "timesfm",
+            )
+            for arch in archs_list:
+                arch_clean = arch.lower()
+                if any(pat in arch_clean for pat in forecasting_arch_patterns):
+                    raise UnsupportedTaskError(
+                        "AdverScan currently supports time-series classification models only; forecasting models are not supported."
+                    )
 
             # 2. Domain-based loader selection
             model = None
@@ -150,6 +196,52 @@ class HuggingFaceLoader(BaseModelLoader):
                         last_exc = e2
                         model = None
 
+            elif domain_str == "time-series":
+                import transformers
+
+                # 1. Try architecture specified in model config
+                archs = getattr(model_config, "architectures", []) or []
+                for arch in archs:
+                    if hasattr(transformers, arch):
+                        cls = getattr(transformers, arch)
+                        try:
+                            if model_config is not None:
+                                model = cls.from_pretrained(model_id, config=model_config, **kwargs)
+                            else:
+                                model = cls.from_pretrained(model_id, **kwargs)
+                            if model is not None:
+                                break
+                        except Exception as e:
+                            last_exc = e
+
+                # 2. Try common time-series classification model classes in transformers
+                if model is None:
+                    ts_cls_names = [
+                        "PatchTSTForClassification",
+                        "PatchTSMixerForTimeSeriesClassification",
+                        "AutoModelForSequenceClassification",
+                    ]
+                    for name in ts_cls_names:
+                        if hasattr(transformers, name):
+                            cls = getattr(transformers, name)
+                            try:
+                                if model_config is not None:
+                                    model = cls.from_pretrained(model_id, config=model_config, **kwargs)
+                                else:
+                                    model = cls.from_pretrained(model_id, **kwargs)
+                                if model is not None:
+                                    break
+                            except Exception as e:
+                                last_exc = e
+
+                # 3. Fallback to AutoModel
+                if model is None:
+                    try:
+                        model = AutoModel.from_pretrained(model_id, trust_remote_code=True, **kwargs)
+                    except Exception as e:
+                        last_exc = e
+                        model = None
+
             if model is None:
                 err_detail = f": {last_exc}" if last_exc else "."
                 raise ModelLoadError(f"Could not load Hugging Face model '{model_id}' for domain '{domain_str}'{err_detail}")
@@ -158,7 +250,7 @@ class HuggingFaceLoader(BaseModelLoader):
             model.eval()
             return model
 
-        except ModelLoadError:
+        except (ModelLoadError, UnsupportedTaskError):
             raise
         except Exception as e:
             raise ModelLoadError(f"Failed to load Hugging Face model '{model_id}' for domain '{domain}': {str(e)}") from e

@@ -13,7 +13,11 @@ import torch.nn as nn
 from app.ingestion.adapters.base_adapter import BaseModelAdapter
 from app.ingestion.adapters.huggingface_adapter import HuggingFaceAdapter
 from app.ingestion.adapters.pytorch_adapter import PyTorchAdapter
-from app.ingestion.exceptions import UnsupportedDomainError, UnsupportedModelError
+from app.ingestion.exceptions import (
+    UnsupportedDomainError,
+    UnsupportedModelError,
+    UnsupportedTaskError,
+)
 from app.ingestion.loader.base_loader import BaseModelLoader
 from app.ingestion.loader.huggingface_loader import HuggingFaceLoader
 from app.ingestion.loader.pytorch_loader import PyTorchLoader
@@ -22,6 +26,7 @@ from app.ingestion.model_registry import ModelPresetRegistry
 from app.ingestion.processors.base_processor import BaseProcessor
 from app.ingestion.processors.image_processor import ImageProcessor
 from app.ingestion.processors.text_processor import TextProcessor
+from app.ingestion.processors.time_series_processor import TimeSeriesProcessor
 from app.ingestion.utils.device_manager import DeviceManager
 from app.ingestion.utils.logger import log_ingestion_event
 from app.ingestion.validation.validator import ModelValidator
@@ -116,6 +121,10 @@ def ingest_model(
     # 1. Device selection
     target_device = DeviceManager.get_device(device)
     resolved_domain = data_domain or domain
+    if resolved_domain:
+        resolved_domain = str(resolved_domain).lower().strip().replace("_", "-")
+        if resolved_domain == "timeseries":
+            resolved_domain = "time-series"
     resolved_task = task_type or "classification"
 
     if not resolved_domain:
@@ -127,6 +136,14 @@ def ingest_model(
             model_class=model_class,
         )
     resolved_domain = resolved_domain or "unknown"
+    if str(resolved_domain).lower().strip().replace("_", "-") in ("timeseries", "time-series"):
+        resolved_domain = "time-series"
+
+    from app.ingestion.model_registry import is_forecasting_or_regression
+    if is_forecasting_or_regression(model_path, task_type=resolved_task):
+        raise UnsupportedTaskError(
+            "AdverScan currently supports time-series classification models only; forecasting models are not supported."
+        )
 
     # 2. Registry lookup & runtime configuration creation
     config_dict: Dict[str, Any] = {}
@@ -200,7 +217,9 @@ def ingest_model(
         )
 
     # 6. Select processor using data_domain
-    domain_clean = (runtime_metadata.data_domain or "unknown").lower()
+    domain_clean = (runtime_metadata.data_domain or "unknown").lower().replace("_", "-")
+    if domain_clean == "timeseries":
+        domain_clean = "time-series"
     processor: Optional[BaseProcessor] = None
 
     if domain_clean == "image":
@@ -217,11 +236,22 @@ def ingest_model(
             device=target_device,
             max_length=max_length,
         )
+    elif domain_clean == "time-series":
+        processor = TimeSeriesProcessor(
+            processor_name_or_path=runtime_metadata.processor_name,
+            device=target_device,
+            target_format=config_dict.get("target_format", "batch_channels_length"),
+            sequence_length=config_dict.get("sequence_length"),
+            num_channels=config_dict.get("num_channels"),
+            normalize=config_dict.get("normalize", False),
+            standardize=config_dict.get("standardize", False),
+            scaling=config_dict.get("scaling"),
+        )
     elif domain_clean == "unknown":
         processor = None
     else:
         raise UnsupportedDomainError(
-            f"Unsupported data domain '{domain_clean}'. Current scope supports only ['image', 'text']."
+            f"Unsupported data domain '{domain_clean}'. Current scope supports only ['image', 'text', 'time-series']."
         )
 
     # 7. Select adapter using data_domain / framework
@@ -253,6 +283,12 @@ def ingest_model(
             input_shape = tuple(sample_input.shape)
         elif hasattr(sample_input, "shape"):
             input_shape = tuple(sample_input.shape)
+        elif processor is not None:
+            try:
+                proc_in = processor.process(sample_input)
+                input_shape = tuple(proc_in.shape)
+            except Exception:
+                pass
 
         out = adapter.predict(sample_input)
         if isinstance(out, torch.Tensor):
@@ -266,6 +302,27 @@ def ingest_model(
     elif config_dict.get("input_resolution") and domain_clean == "image":
         res = config_dict["input_resolution"]
         input_shape = (1, *res) if len(res) == 3 else (1, 3, *res)
+    elif domain_clean == "time-series":
+        seq_len = config_dict.get("sequence_length")
+        num_ch = config_dict.get("num_channels", 1)
+        if hasattr(raw_model, "config"):
+            cfg = getattr(raw_model, "config")
+            seq_len = seq_len or getattr(cfg, "context_length", getattr(cfg, "sequence_length", None))
+            num_ch = num_ch or getattr(cfg, "num_input_channels", getattr(cfg, "in_channels", 1))
+            if num_classes is None:
+                num_cls_val = getattr(cfg, "num_classes", getattr(cfg, "num_targets", getattr(cfg, "num_labels", None)))
+                if num_cls_val is not None:
+                    num_classes = int(num_cls_val)
+
+        if num_classes is None:
+            for layer_name in ["fc", "classifier", "head", "out_proj"]:
+                layer = getattr(raw_model, layer_name, None)
+                if isinstance(layer, nn.Linear):
+                    num_classes = layer.out_features
+                    break
+
+        if seq_len is not None:
+            input_shape = (1, num_ch, seq_len)
 
     # Parameter count and architecture
     total_params = None

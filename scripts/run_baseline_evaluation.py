@@ -4,15 +4,10 @@ Supports interactive model selection from terminal, single model evaluation, and
 """
 
 import argparse
-import json
-import os
 import sys
-import time
 from pathlib import Path
 import torch
 from dotenv import load_dotenv
-from huggingface_hub import hf_hub_download
-from transformers import AutoModelForImageClassification, ViTConfig
 
 # Ensure framework root directory is in sys.path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -97,20 +92,20 @@ def prompt_model_selection():
         # Determine domain or prompt user
         from app.ingestion.model_registry import detect_model_domain
         detected_domain = detect_model_domain(model_id, processor_name=processor_name)
-        if detected_domain in ("image", "text"):
-            domain_choice = input(f"Enter Data Domain ('image' or 'text') [{detected_domain}]: ").strip().lower() or detected_domain
+        if detected_domain in ("image", "text", "time-series"):
+            domain_choice = input(f"Enter Data Domain ('image', 'text', or 'time-series') [{detected_domain}]: ").strip().lower() or detected_domain
         else:
-            domain_choice = input("Enter Data Domain ('image' or 'text') [text]: ").strip().lower() or "text"
-        data_domain = domain_choice if domain_choice in ("image", "text") else "text"
+            domain_choice = input("Enter Data Domain ('image', 'text', or 'time-series') [image]: ").strip().lower() or "image"
+        data_domain = domain_choice if domain_choice in ("image", "text", "time-series") else "image"
     elif choice == str(len(presets) + 2):
         model_id = input("Enter Local Checkpoint Path [gtsrb_model.pt]: ").strip() or "gtsrb_model.pt"
         dataset_name = input("Enter Evaluation Dataset Name [bazyl/GTSRB]: ").strip() or "bazyl/GTSRB"
         processor_name = None
         from app.ingestion.model_registry import detect_model_domain
         detected_domain = detect_model_domain(model_id)
-        default_dom = detected_domain if detected_domain in ("image", "text") else "image"
-        domain_choice = input(f"Enter Data Domain ('image' or 'text') [{default_dom}]: ").strip().lower() or default_dom
-        data_domain = domain_choice if domain_choice in ("image", "text") else "image"
+        default_dom = detected_domain if detected_domain in ("image", "text", "time-series") else "image"
+        domain_choice = input(f"Enter Data Domain ('image', 'text', or 'time-series') [{default_dom}]: ").strip().lower() or default_dom
+        data_domain = domain_choice if domain_choice in ("image", "text", "time-series") else "image"
     elif choice == str(len(presets) + 3) or choice.lower() == "all":
         return "__all__", None, None, None
     else:
@@ -148,21 +143,45 @@ def run_single_evaluation(
 
     # Ingest model into AdverScan framework dynamically
     resolved_model_id = env_info["model_id"]
-    sample_input = (
-        torch.randn(1, 3, 224, 224)
-        if env_info.get("data_domain") == "image"
-        else "AdverScan clean baseline evaluation sample sentence."
-    )
-    adapter, metadata = ingest_model(
-        model_path=resolved_model_id,
-        sample_input=sample_input,
-        model_name=env_info["model_name"],
-        device=device,
-        data_domain=env_info.get("data_domain"),
-        dataset_name=dataset_name,
-        processor_name=env_info.get("processor_name"),
-        log_ingestion=True,
-    )
+    domain = str(env_info.get("data_domain", "")).lower().replace("_", "-")
+    if domain == "image":
+        sample_input = torch.randn(1, 3, 224, 224)
+    elif domain == "time-series":
+        seq_len = env_info.get("sequence_length") or 14
+        num_ch = env_info.get("num_channels") or 1
+        if "patchtst" in resolved_model_id.lower() or "patchtsmixer" in resolved_model_id.lower() or "transformer" in str(env_info.get("model_type", "")).lower():
+            sample_input = torch.randn(1, seq_len, num_ch)
+        else:
+            sample_input = torch.randn(1, num_ch, seq_len)
+    else:
+        sample_input = "AdverScan clean baseline evaluation sample sentence."
+
+    try:
+        adapter, metadata = ingest_model(
+            model_path=resolved_model_id,
+            sample_input=sample_input,
+            model_name=env_info["model_name"],
+            device=device,
+            data_domain=env_info.get("data_domain"),
+            dataset_name=dataset_name,
+            processor_name=env_info.get("processor_name"),
+            log_ingestion=True,
+        )
+    except Exception:
+        if domain == "time-series" and isinstance(sample_input, torch.Tensor) and sample_input.ndim == 3:
+            sample_input = sample_input.transpose(1, 2)
+            adapter, metadata = ingest_model(
+                model_path=resolved_model_id,
+                sample_input=sample_input,
+                model_name=env_info["model_name"],
+                device=device,
+                data_domain=env_info.get("data_domain"),
+                dataset_name=dataset_name,
+                processor_name=env_info.get("processor_name"),
+                log_ingestion=True,
+            )
+        else:
+            raise
 
     if metadata.total_parameters is not None:
         train_p = metadata.trainable_parameters or metadata.total_parameters
@@ -176,6 +195,13 @@ def run_single_evaluation(
     print(f"\n[2/3] Running Clean Baseline Evaluation on '{dataset_name}' (test split, {samples} samples)...")
     split_str = f"test[:{samples}]" if samples > 0 else "test"
 
+    eval_kwargs = {}
+    if domain == "time-series":
+        num_eval_samples = samples if samples > 0 else 100
+        input_shape_eval = (num_eval_samples,) + tuple(sample_input.shape[1:])
+        eval_kwargs["inputs"] = torch.randn(input_shape_eval)
+        eval_kwargs["targets"] = torch.randint(0, num_classes, (num_eval_samples,))
+
     result = evaluate_baseline(
         adapter=adapter,
         dataset_name=dataset_name,
@@ -186,6 +212,7 @@ def run_single_evaluation(
         num_classes=num_classes,
         model_name=metadata.model_name,
         output_dir=output_dir,
+        **eval_kwargs,
     )
 
     print("\n" + "=" * 70)

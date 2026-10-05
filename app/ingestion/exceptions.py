@@ -31,3 +31,8 @@ class UnsupportedModelError(ModelIngestionError):
     """Raised when an unsupported model framework or format is provided."""
     pass
 
+
+class UnsupportedTaskError(ModelIngestionError):
+    """Raised when an unsupported task (e.g. forecasting or regression) is provided."""
+    pass
+

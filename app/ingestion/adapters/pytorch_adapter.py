@@ -64,10 +64,20 @@ class PyTorchAdapter(BaseModelAdapter):
 
     def _prepare_tensor_input(self, inputs: Any) -> torch.Tensor:
         """Utility to convert input data to PyTorch Tensor on target device."""
+        if self.processor is not None and not isinstance(inputs, torch.Tensor):
+            try:
+                processed = self.processor(inputs)
+                if isinstance(processed, torch.Tensor):
+                    return processed.to(self._device)
+            except Exception:
+                pass
+
         if isinstance(inputs, torch.Tensor):
             return inputs.to(self._device)
         elif isinstance(inputs, np.ndarray):
             return torch.from_numpy(inputs).to(self._device)
+        elif hasattr(inputs, "values") and isinstance(getattr(inputs, "values"), np.ndarray):
+            return torch.from_numpy(inputs.values.astype(np.float32)).to(self._device)
         elif isinstance(inputs, (list, tuple)):
             tensor = torch.tensor(inputs)
             return tensor.to(self._device)

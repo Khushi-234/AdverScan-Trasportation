@@ -134,6 +134,39 @@ MODEL_PRESETS: Dict[str, Dict[str, Any]] = {
         "num_classes": 4,
         "framework": "huggingface",
     },
+
+
+    # ----------------------------Time-Series Based Model-----------------------------------
+    "hf-tiny-v2/tiny-random-PatchTSTForClassification": {
+        "model_id": "hf-tiny-v2/tiny-random-PatchTSTForClassification",
+        "name": "PatchTST Time-Series Classifier",
+        "processor_name": "hf-tiny-v2/tiny-random-PatchTSTForClassification",
+        "dataset_name": "time_series_classification",
+        "data_domain": "time-series",
+        "model_type": "Transformer Time-Series (PatchTST)",
+        "domain": "Time-Series Analysis (Classification)",
+        "description": "PatchTST transformer model configured for time-series sequence classification (2 classes)",
+        "task_type": "classification",
+        "num_classes": 2,
+        "sequence_length": 14,
+        "num_channels": 1,
+        "framework": "huggingface",
+    },
+    "hf-tiny-v2/tiny-random-PatchTSMixerForTimeSeriesClassification": {
+        "model_id": "hf-tiny-v2/tiny-random-PatchTSMixerForTimeSeriesClassification",
+        "name": "PatchTSMixer Time-Series Classifier",
+        "processor_name": "hf-tiny-v2/tiny-random-PatchTSMixerForTimeSeriesClassification",
+        "dataset_name": "time_series_classification",
+        "data_domain": "time-series",
+        "model_type": "MLP-Mixer Time-Series (PatchTSMixer)",
+        "domain": "Time-Series Analysis (Classification)",
+        "description": "PatchTSMixer architecture configured for time-series sequence classification (3 classes)",
+        "task_type": "classification",
+        "num_classes": 3,
+        "sequence_length": 32,
+        "num_channels": 3,
+        "framework": "huggingface",
+    },
 }
 
 # Mapping from dataset identifiers / Kaggle URLs to their recommended evaluation models
@@ -152,6 +185,7 @@ DATASET_TO_RECOMMENDED_MODEL: Dict[str, str] = {
     "imdb": "textattack/bert-base-uncased-imdb",
     "ag_news": "textattack/bert-base-uncased-ag-news",
     "tweet_eval": "cardiffnlp/twitter-roberta-base-sentiment-latest",
+    "time_series_classification": "hf-tiny-v2/tiny-random-PatchTSTForClassification",
 }
 
 __all__ = ["MODEL_PRESETS", "DATASET_TO_RECOMMENDED_MODEL"]

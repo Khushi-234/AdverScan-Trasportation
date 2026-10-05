@@ -90,7 +90,7 @@ class HuggingFaceAdapter(BaseModelAdapter):
                 for k, v in inputs.items()
             }
 
-        # Raw string / image data if processor is attached
+        # Process via attached processor if available
         if self.processor is not None:
             processed = self.processor(inputs)
             if isinstance(processed, torch.Tensor):
@@ -104,6 +104,10 @@ class HuggingFaceAdapter(BaseModelAdapter):
         # NumPy array
         if isinstance(inputs, np.ndarray):
             return torch.from_numpy(inputs).to(self._device)
+
+        # Handle Pandas DataFrame or Series
+        if hasattr(inputs, "values") and isinstance(getattr(inputs, "values"), np.ndarray):
+            return torch.from_numpy(inputs.values.astype(np.float32)).to(self._device)
 
         # Nested numeric list
         if isinstance(inputs, (list, tuple)) and inputs and isinstance(inputs[0], (int, float, list)):
@@ -137,10 +141,23 @@ class HuggingFaceAdapter(BaseModelAdapter):
             else:
                 outputs = self._model(prepared, **kwargs)
 
-            logits = outputs.logits if hasattr(outputs, "logits") else outputs
+            logits = getattr(
+                outputs,
+                "logits",
+                getattr(
+                    outputs,
+                    "prediction_logits",
+                    getattr(outputs, "prediction_outputs", outputs),
+                ),
+            )
+            if hasattr(outputs, "get") and callable(getattr(outputs, "get")):
+                if "prediction_outputs" in outputs and logits is outputs:
+                    logits = outputs["prediction_outputs"]
+                elif "logits" in outputs and logits is outputs:
+                    logits = outputs["logits"]
             if hasattr(logits, "last_hidden_state"):
                 logits = logits.last_hidden_state
-            if isinstance(logits, torch.Tensor) and logits.ndim == 3:
+            if isinstance(logits, torch.Tensor) and logits.ndim == 3 and self.data_domain != "time-series":
                 logits = logits[:, 0, :]  # Pool CLS representation
 
         if return_numpy:
@@ -192,7 +209,7 @@ class HuggingFaceAdapter(BaseModelAdapter):
             else:
                 outputs = self._model(prepared, **kwargs)
 
-            logits = outputs.logits if hasattr(outputs, "logits") else outputs
+            logits = getattr(outputs, "logits", getattr(outputs, "prediction_logits", outputs))
 
         if return_numpy:
             return logits.cpu().numpy()

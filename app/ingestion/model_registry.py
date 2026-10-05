@@ -14,6 +14,78 @@ from app.ingestion.presets import DATASET_TO_RECOMMENDED_MODEL, MODEL_PRESETS
 
 
 
+def is_forecasting_or_regression(
+    model_or_path: Any,
+    config: Optional[Any] = None,
+    task_type: Optional[str] = None,
+) -> bool:
+    """
+    Detect whether a time-series model represents a forecasting/regression task
+    rather than classification, based on pipeline_tag, architecture, config, or task info.
+    """
+    clean_task = str(task_type).lower().strip() if task_type else ""
+    if clean_task in ("forecasting", "regression", "time-series-forecasting", "ts-forecasting"):
+        return True
+
+    forecasting_keywords = (
+        "forprediction",
+        "forforecasting",
+        "forregression",
+        "timeseriesprediction",
+        "timeseriesforecasting",
+        "timeseriesregression",
+        "chronos",
+        "timesfm",
+    )
+
+    # Check config object if provided
+    if config is not None:
+        p_tag = getattr(config, "pipeline_tag", None) or getattr(config, "task", None)
+        if p_tag and any(k in str(p_tag).lower() for k in ("forecasting", "regression")):
+            return True
+        archs = getattr(config, "architectures", []) or []
+        for arch in archs:
+            if any(k in str(arch).lower() for k in forecasting_keywords):
+                return True
+
+    # Check string model_or_path
+    if isinstance(model_or_path, str):
+        clean_name = model_or_path.lower()
+        if any(k in clean_name for k in ("forprediction", "forforecasting", "forregression", "forecaster")):
+            return True
+
+        try:
+            from transformers import AutoConfig
+            cfg = AutoConfig.from_pretrained(model_or_path, local_files_only=True)
+            if cfg is not None:
+                return is_forecasting_or_regression(None, config=cfg)
+        except Exception:
+            pass
+
+        try:
+            from huggingface_hub import hf_hub_download
+            cfg_path = hf_hub_download(model_or_path, "config.json")
+            with open(cfg_path, "r", encoding="utf-8") as f:
+                raw_cfg = json.load(f)
+            p_tag = raw_cfg.get("pipeline_tag")
+            if p_tag and any(k in str(p_tag).lower() for k in ("forecasting", "regression")):
+                return True
+            archs = raw_cfg.get("architectures", [])
+            for arch in archs:
+                if any(k in str(arch).lower() for k in forecasting_keywords):
+                    return True
+        except Exception:
+            pass
+
+    # Check in-memory model or class
+    if model_or_path is not None:
+        cls_name = model_or_path.__class__.__name__.lower()
+        if any(k in cls_name for k in ("forprediction", "forforecasting", "forregression", "forecaster", "forecasting")):
+            return True
+
+    return False
+
+
 def detect_model_domain(
     model_or_path: Any,
     sample_input: Optional[Any] = None,
@@ -21,7 +93,7 @@ def detect_model_domain(
     model_class: Optional[Any] = None,
 ) -> str:
     """
-    Automatically detect the data domain ('image' or 'text') from a model identifier,
+    Automatically detect the data domain ('image', 'text', or 'time-series') from a model identifier,
     in-memory model instance, processor/tokenizer name, or sample input.
     Returns 'unknown' if domain cannot be determined with certainty, never falling back to 'image'.
     """
@@ -37,14 +109,18 @@ def detect_model_domain(
 
     # 2. Check processor / tokenizer name
     if processor_name and isinstance(processor_name, str):
-        proc_lower = processor_name.lower()
+        proc_lower = processor_name.lower().replace("_", "-")
+        if any(k in proc_lower for k in ("timeseries", "time-series", "ts-processor")):
+            return "time-series"
         if any(k in proc_lower for k in ("tokenizer", "bert", "roberta", "gpt", "t5", "bart", "text")):
             return "text"
-        if any(k in proc_lower for k in ("image", "vision", "vit", "resnet", "feature_extractor")):
+        if any(k in proc_lower for k in ("image", "vision", "vit", "resnet", "feature-extractor")):
             return "image"
 
     # 3. Check sample input
     if sample_input is not None:
+        if "pandas" in getattr(sample_input.__class__, "__module__", ""):
+            return "time-series"
         if isinstance(sample_input, (str, list)) and (
             isinstance(sample_input, str) or (len(sample_input) > 0 and isinstance(sample_input[0], str))
         ):
@@ -54,6 +130,8 @@ def detect_model_domain(
                 return "text"
             if any(k in sample_input for k in ("pixel_values", "images")):
                 return "image"
+            if any(k in sample_input for k in ("past_values", "series", "sequence")):
+                return "time-series"
         if "PIL" in getattr(sample_input.__class__, "__module__", ""):
             return "image"
         if isinstance(sample_input, torch.Tensor) or (hasattr(sample_input, "shape") and hasattr(sample_input, "dtype")):
@@ -61,10 +139,14 @@ def detect_model_domain(
                 return "image"
             if len(sample_input.shape) == 3 and sample_input.shape[0] in (1, 3, 4) and sample_input.shape[1] > 10 and sample_input.shape[2] > 10:
                 return "image"
+            dtype_str = str(getattr(sample_input, "dtype", ""))
             if len(sample_input.shape) in (1, 2):
-                dtype_str = str(getattr(sample_input, "dtype", ""))
                 if any(t in dtype_str for t in ("int", "long")):
                     return "text"
+            # 3D float tensor that is not a 2D image (e.g. single channel sequence [B, 1, L] or [B, L, 1])
+            if len(sample_input.shape) == 3 and any(t in dtype_str for t in ("float",)):
+                if sample_input.shape[1] == 1 or sample_input.shape[2] == 1:
+                    return "time-series"
 
     # 4. Check in-memory model or class
     target_model = model_or_path if isinstance(model_or_path, torch.nn.Module) else None
@@ -76,28 +158,42 @@ def detect_model_domain(
 
     if target_model is not None:
         cls_name = target_model.__class__.__name__.lower()
+        ts_model_keywords = (
+            "patchtst", "patchtsmixer", "timesnet", "informer", "autoformer",
+            "1dcnn", "cnn1d", "conv1d", "lstm", "gru", "timeseries", "time_series", "time-series"
+        )
+        if any(k in cls_name for k in ts_model_keywords):
+            return "time-series"
         if any(k in cls_name for k in ("vit", "resnet", "conv", "vision", "image", "swin", "deit", "cnn", "vgg", "alexnet")):
             return "image"
         if any(k in cls_name for k in ("bert", "roberta", "gpt", "t5", "text", "nlp", "tokenizer", "bart")):
             return "text"
 
         has_conv = False
+        has_conv1d = False
+        has_rnn = False
         has_embed = False
         for module in target_model.modules():
             if isinstance(module, (torch.nn.Conv2d, torch.nn.Conv3d, torch.nn.ConvTranspose2d, torch.nn.AdaptiveAvgPool2d)):
                 has_conv = True
                 break
+            if isinstance(module, (torch.nn.Conv1d, torch.nn.ConvTranspose1d)):
+                has_conv1d = True
+            if isinstance(module, (torch.nn.LSTM, torch.nn.GRU, torch.nn.RNN, torch.nn.RNNBase)):
+                has_rnn = True
             if isinstance(module, torch.nn.Embedding):
                 has_embed = True
 
         if has_conv:
             return "image"
+        if (has_conv1d or has_rnn) and not has_conv and not has_embed:
+            return "time-series"
         if has_embed and not has_conv:
             return "text"
 
     # 5. Check string identifier or Hugging Face config
     if isinstance(model_or_path, str):
-        name_lower = model_or_path.lower()
+        name_lower = model_or_path.lower().replace("_", "-")
         import re
 
         text_keywords = (
@@ -112,8 +208,15 @@ def detect_model_domain(
             "mnist", "imagenet", "mobilenet", "efficientnet", "vgg", "clip_vision", "beit",
             "yolo", "densenet", "segmentation", "object_detection"
         )
+        ts_keywords = (
+            "patchtst", "patchtsmixer", "timesnet", "informer", "autoformer",
+            "timeseries", "time-series", "chronos", "timesfm", "1dcnn", "cnn1d",
+            "lstm", "gru"
+        )
 
         # Fast local name keyword matching first
+        if any(k in name_lower for k in ts_keywords):
+            return "time-series"
         if any(k in name_lower for k in text_keywords) or re.search(r"(^|[^a-z])(ner|qa|text)([^a-z]|$)", name_lower):
             return "text"
         if any(k in name_lower for k in vision_keywords):
@@ -123,9 +226,14 @@ def detect_model_domain(
             from transformers import AutoConfig
             cfg = AutoConfig.from_pretrained(model_or_path, local_files_only=True)
             if cfg is not None:
+                p_tag = getattr(cfg, "pipeline_tag", "") or getattr(cfg, "task", "")
+                if p_tag and any(k in str(p_tag).lower() for k in ("time-series", "forecasting")):
+                    return "time-series"
                 m_type = getattr(cfg, "model_type", "").lower()
                 archs = [str(a).lower() for a in getattr(cfg, "architectures", [])]
                 combined = m_type + " " + " ".join(archs)
+                if any(k in combined for k in ts_keywords):
+                    return "time-series"
                 if any(k in combined for k in text_keywords) or re.search(r"(^|[^a-z])(ner|qa|text)([^a-z]|$)", combined):
                     return "text"
                 if any(k in combined for k in vision_keywords):
@@ -140,7 +248,12 @@ def detect_model_domain(
                 cfg_path = hf_hub_download(model_or_path, "config.json")
                 with open(cfg_path, "r", encoding="utf-8") as f:
                     raw_cfg = json.load(f)
+                p_tag = raw_cfg.get("pipeline_tag")
+                if p_tag and any(k in str(p_tag).lower() for k in ("time-series", "forecasting")):
+                    return "time-series"
                 combined_cfg = " ".join(str(v).lower() for v in raw_cfg.values() if isinstance(v, (str, list)))
+                if any(k in combined_cfg for k in ts_keywords):
+                    return "time-series"
                 if any(k in combined_cfg for k in text_keywords) or re.search(r"(^|[^a-z])(ner|qa|text)([^a-z]|$)", combined_cfg):
                     return "text"
                 if any(k in combined_cfg for k in vision_keywords):
@@ -246,8 +359,16 @@ class ModelPresetRegistry:
         if not resolved_domain:
             resolved_domain = cls.detect_domain(model_id=clean_id, processor_name=processor_name)
         resolved_domain = resolved_domain or "unknown"
+        if str(resolved_domain).lower().strip().replace("_", "-") in ("timeseries", "time-series"):
+            resolved_domain = "time-series"
 
-        resolved_task = task_type or "classification"
+        resolved_task = task_type
+        if not resolved_task:
+            if is_forecasting_or_regression(clean_id):
+                resolved_task = "forecasting"
+            else:
+                resolved_task = "classification"
+
         resolved_dataset = dataset_name or "custom_dataset"
         resolved_processor = processor_name or (None if is_local_file else clean_id)
 
@@ -366,9 +487,12 @@ class ModelPresetRegistry:
             else:
                 model_type_str = f"HF Model ({m_type or 'generic'})"
 
-            num_classes = getattr(cfg, "num_labels", None)
+            seq_len = getattr(cfg, "context_length", getattr(cfg, "sequence_length", None))
+            num_channels = getattr(cfg, "num_input_channels", getattr(cfg, "num_channels", None))
+            num_classes = getattr(cfg, "num_targets", getattr(cfg, "num_labels", getattr(cfg, "num_classes", None)))
         except Exception:
-            pass
+            seq_len = None
+            num_channels = None
 
         return {
             "model_id": clean_input,
@@ -382,6 +506,8 @@ class ModelPresetRegistry:
             "task_type": "classification",
             "num_classes": num_classes,
             "input_resolution": (3, 224, 224) if inferred_domain == "image" else None,
+            "sequence_length": seq_len,
+            "num_channels": num_channels,
             "framework": "huggingface",
         }
 
@@ -442,6 +568,8 @@ def setup_model_environment(
         "task_type": model_info.get("task_type", "classification"),
         "expected_num_classes": model_info.get("num_classes"),
         "expected_input_resolution": expected_resolution,
+        "sequence_length": model_info.get("sequence_length"),
+        "num_channels": model_info.get("num_channels"),
         "status": "ENVIRONMENT_CONFIGURED",
     }
 

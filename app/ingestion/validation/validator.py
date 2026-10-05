@@ -11,6 +11,7 @@ from app.ingestion.exceptions import (
     ModelValidationError,
     UnsupportedDomainError,
     UnsupportedModelError,
+    UnsupportedTaskError,
 )
 
 
@@ -21,7 +22,7 @@ class ModelValidator:
     """
 
     SUPPORTED_FRAMEWORKS = {"huggingface", "pytorch", "pytorch_local"}
-    SUPPORTED_DOMAINS = {"image", "text"}
+    SUPPORTED_DOMAINS = {"image", "text", "time-series"}
 
     @classmethod
     def validate_configuration(
@@ -39,8 +40,9 @@ class ModelValidator:
 
         Raises:
             ModelValidationError: If required fields are missing or invalid.
-            UnsupportedDomainError: If domain is not image or text.
+            UnsupportedDomainError: If domain is not image, text, or time-series.
             UnsupportedModelError: If framework is unsupported.
+            UnsupportedTaskError: If task is unsupported (e.g. forecasting).
         """
         if config is None:
             raise ModelValidationError("Model configuration cannot be None.")
@@ -77,11 +79,14 @@ class ModelValidator:
                 f"Unsupported framework '{framework}'. Supported frameworks are: {sorted(list(cls.SUPPORTED_FRAMEWORKS))}"
             )
 
-        # 3. Validate data_domain (Current scope is ONLY image and text, or unknown if domain cannot be inferred)
+        # 3. Validate data_domain
         if data_domain is None or not str(data_domain).strip():
-            raise ModelValidationError("Validation error: 'data_domain' is required. Supported domains are: ['image', 'text'].")
+            raise ModelValidationError("Validation error: 'data_domain' is required. Supported domains are: ['image', 'text', 'time-series'].")
 
-        clean_domain = str(data_domain).strip().lower()
+        clean_domain = str(data_domain).strip().lower().replace("_", "-")
+        if clean_domain == "timeseries":
+            clean_domain = "time-series"
+
         if clean_domain not in cls.SUPPORTED_DOMAINS and clean_domain != "unknown":
             raise UnsupportedDomainError(
                 f"Unsupported data domain '{data_domain}'. Current scope strictly supports ONLY: {sorted(list(cls.SUPPORTED_DOMAINS))}"
@@ -91,15 +96,23 @@ class ModelValidator:
         if task_type is None or not str(task_type).strip():
             raise ModelValidationError("Validation error: 'task_type' is required (e.g. 'classification').")
 
+        clean_task = str(task_type).strip().lower()
+        if clean_task in ("forecasting", "regression", "time-series-forecasting", "ts-forecasting", "time_series_forecasting"):
+            raise UnsupportedTaskError(
+                "AdverScan currently supports time-series classification models only; forecasting models are not supported."
+            )
+
         # 5. Validate processor/model compatibility
         if processor_name is not None:
             if not isinstance(processor_name, str) or not processor_name.strip():
                 raise ModelValidationError("Validation error: 'processor_name' must be a non-empty string when provided.")
             lower_proc = processor_name.lower()
-            if clean_domain == "image" and any(k in lower_proc for k in ("bert", "gpt", "roberta", "t5", "tokenizer")):
+            if clean_domain == "image" and any(k in lower_proc for k in ("bert", "gpt", "roberta", "t5", "tokenizer", "timeseries", "time-series")):
                 raise ModelValidationError(f"Incompatible processor '{processor_name}' specified for image domain model.")
-            if clean_domain == "text" and any(k in lower_proc for k in ("vit", "resnet", "convnext", "imageprocessor")):
+            if clean_domain == "text" and any(k in lower_proc for k in ("vit", "resnet", "convnext", "imageprocessor", "timeseries", "time-series")):
                 raise ModelValidationError(f"Incompatible processor '{processor_name}' specified for text domain model.")
+            if clean_domain == "time-series" and any(k in lower_proc for k in ("bert", "gpt", "roberta", "t5", "tokenizer", "vit", "resnet", "convnext", "imageprocessor")):
+                raise ModelValidationError(f"Incompatible processor '{processor_name}' specified for time-series domain model.")
 
         # 6. Supported image/text configuration
         if clean_domain == "image" and resolution is not None:
