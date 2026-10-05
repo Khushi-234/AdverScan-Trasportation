@@ -2,7 +2,7 @@
 PyTorch adapter implementation for standardizing PyTorch models.
 """
 
-from typing import Any, Union
+from typing import Any, Optional, Union
 import numpy as np
 import torch
 import torch.nn as nn
@@ -15,19 +15,26 @@ class PyTorchAdapter(BaseModelAdapter):
     Standardized adapter for PyTorch models.
     """
 
-    def __init__(self, model: nn.Module, device: Union[str, torch.device] = "cpu"):
+    def __init__(
+        self,
+        model: nn.Module,
+        device: Union[str, torch.device] = "cpu",
+        processor: Optional[Any] = None,
+    ):
         """
         Initialize PyTorchAdapter with a PyTorch model.
 
         Args:
             model: PyTorch model instance (nn.Module).
             device: Initial target device.
+            processor: Optional domain preprocessor instance.
         """
         if not isinstance(model, (nn.Module, torch.jit.ScriptModule)):
             raise TypeError(f"Expected torch.nn.Module or ScriptModule, got {type(model)}")
 
         self._model = model
         self._device = torch.device(device) if isinstance(device, str) else device
+        self.processor = processor
         self._model.to(self._device)
 
     @property
@@ -67,13 +74,14 @@ class PyTorchAdapter(BaseModelAdapter):
         else:
             raise TypeError(f"Unsupported input type for PyTorchAdapter: {type(inputs)}")
 
-    def predict(self, inputs: Any, return_numpy: bool = False) -> Union[torch.Tensor, np.ndarray]:
+    def predict(self, inputs: Any, return_numpy: bool = False, **kwargs: Any) -> Union[torch.Tensor, np.ndarray]:
         """
         Perform forward inference on input data.
 
         Args:
             inputs: Tensor, numpy array, or list/tuple of inputs.
             return_numpy: If True, returns predictions as numpy array.
+            **kwargs: Extra parameters.
 
         Returns:
             Model prediction tensor or numpy array.
@@ -82,10 +90,49 @@ class PyTorchAdapter(BaseModelAdapter):
         tensor_input = self._prepare_tensor_input(inputs)
         with torch.no_grad():
             outputs = self._model(tensor_input)
+            logits = outputs.logits if hasattr(outputs, "logits") else outputs
 
         if return_numpy:
-            return outputs.cpu().numpy()
-        return outputs
+            return logits.cpu().numpy()
+        return logits
+
+
+    def predict_batch(self, inputs: Any, return_numpy: bool = False, **kwargs: Any) -> Union[torch.Tensor, np.ndarray]:
+        """
+        Perform forward batch prediction on input data.
+
+        Args:
+            inputs: Batch of inputs.
+            return_numpy: If True, returns predictions as numpy array.
+            **kwargs: Extra parameters.
+
+        Returns:
+            Batch model prediction tensor or numpy array.
+        """
+        return self.predict(inputs, return_numpy=return_numpy, **kwargs)
+
+    def get_logits(self, inputs: Any, return_numpy: bool = False, **kwargs: Any) -> Union[torch.Tensor, np.ndarray]:
+        """
+        Compute and return raw unnormalized model logits.
+
+        Args:
+            inputs: Input data.
+            return_numpy: If True, returns logits as numpy array.
+            **kwargs: Extra parameters.
+
+        Returns:
+            Logits tensor or numpy array.
+        """
+        self._model.eval()
+        tensor_input = self._prepare_tensor_input(inputs)
+        with torch.no_grad():
+            outputs = self._model(tensor_input)
+            logits = outputs.logits if hasattr(outputs, "logits") else outputs
+
+        if return_numpy:
+            return logits.cpu().numpy()
+        return logits
+
 
     def __call__(self, *args: Any, **kwargs: Any) -> Any:
         """

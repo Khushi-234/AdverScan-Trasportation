@@ -13,17 +13,47 @@ class BaseModelAdapter(ABC):
     """
 
     @abstractmethod
-    def predict(self, inputs: Any) -> Any:
+    def predict(self, inputs: Any, **kwargs: Any) -> Any:
         """
         Perform model prediction on inputs.
 
         Args:
             inputs: Input data (e.g. tensors, numpy arrays, or batches).
+            **kwargs: Extra prediction parameters.
 
         Returns:
             Model outputs / predictions / logits.
         """
         pass
+
+    def predict_batch(self, inputs: Any, **kwargs: Any) -> Any:
+        """
+        Perform batch prediction on inputs. Default implementation delegates to predict.
+
+        Args:
+            inputs: Batch of input data.
+            **kwargs: Extra prediction parameters.
+
+        Returns:
+            Batch model outputs or logits.
+        """
+        return self.predict(inputs, **kwargs)
+
+    def get_logits(self, inputs: Any, **kwargs: Any) -> Any:
+        """
+        Compute and return raw unnormalized model logits. Default implementation delegates to predict.
+
+        Args:
+            inputs: Model inputs.
+            **kwargs: Extra inference parameters.
+
+        Returns:
+            Logits tensor or array.
+        """
+        outputs = self.predict(inputs, **kwargs)
+        return getattr(outputs, "logits", outputs)
+
+
 
     @abstractmethod
     def get_model(self) -> Any:

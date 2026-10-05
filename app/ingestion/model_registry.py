@@ -9,76 +9,162 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
 import torch
 
-MODEL_PRESETS: Dict[str, Dict[str, Any]] = {
-    "bazyl/gtsrb-model": {
-        "model_id": "bazyl/gtsrb-model",
-        "name": "GTSRB Vision Transformer",
-        "processor_name": "bazyl/gtsrb-model",
-        "dataset_name": "bazyl/GTSRB",
-        "data_domain": "image",
-        "model_type": "Vision Transformer (ViT)",
-        "domain": "Computer Vision (Traffic Sign Recognition / ITS)",
-        "description": "Vision Transformer (ViT) fine-tuned on German Traffic Sign Recognition Benchmark (43 classes)",
-        "task_type": "classification",
-        "num_classes": 43,
-        "input_resolution": (3, 224, 224),
-        "framework": "huggingface",
-    },
-    "ashutoshsharma58/scenery3214154": {
-        "model_id": "ashutoshsharma58/scenery3214154",
-        "name": "Intel Image Classification ViT",
-        "processor_name": "google/vit-base-patch16-224-in21k",
-        "dataset_name": "miladfa7/Intel-Image-Classification",
-        "data_domain": "image",
-        "model_type": "Vision Transformer (ViT)",
-        "domain": "Computer Vision (Scene & Natural Landscape Classification)",
-        "description": "Vision Transformer fine-tuned on Intel Image Classification dataset (6 scene classes: Buildings, Forest, Glacier, Mountain, Sea, Street)",
-        "task_type": "classification",
-        "num_classes": 6,
-        "input_resolution": (3, 224, 224),
-        "framework": "huggingface",
-        "kaggle_url": "https://www.kaggle.com/datasets/puneet6060/intel-image-classification",
-    },
-    "aaraki/vit-base-patch16-224-in21k-finetuned-cifar10": {
-        "model_id": "aaraki/vit-base-patch16-224-in21k-finetuned-cifar10",
-        "name": "CIFAR-10 Vision Transformer",
-        "processor_name": "aaraki/vit-base-patch16-224-in21k-finetuned-cifar10",
-        "dataset_name": "uoft-cs/cifar10",
-        "data_domain": "image",
-        "model_type": "Vision Transformer (ViT)",
-        "domain": "Computer Vision (General Object Classification / CIFAR-10)",
-        "description": "Vision Transformer (ViT) fine-tuned on CIFAR-10 dataset (10 object classes)",
-        "task_type": "classification",
-        "num_classes": 10,
-        "input_resolution": (3, 224, 224),
-        "framework": "huggingface",
-    },
-    "google/vit-base-patch16-224": {
-        "model_id": "google/vit-base-patch16-224",
-        "name": "ImageNet-1k Vision Transformer",
-        "processor_name": "google/vit-base-patch16-224",
-        "dataset_name": "imagenet-1k",
-        "data_domain": "image",
-        "model_type": "Vision Transformer (ViT)",
-        "domain": "Computer Vision (ImageNet-1k Benchmark)",
-        "description": "Base Vision Transformer pre-trained and fine-tuned on ImageNet-1k (1,000 classes)",
-        "task_type": "classification",
-        "num_classes": 1000,
-        "input_resolution": (3, 224, 224),
-        "framework": "huggingface",
-    },
-}
+from app.ingestion.metadata.model_metadata import ModelMetadata
+from app.ingestion.presets import DATASET_TO_RECOMMENDED_MODEL, MODEL_PRESETS
 
-# Separate mapping from dataset identifiers / Kaggle URLs to their recommended evaluation models
-DATASET_TO_RECOMMENDED_MODEL: Dict[str, str] = {
-    "puneet6060/intel-image-classification": "ashutoshsharma58/scenery3214154",
-    "intel-image-classification": "ashutoshsharma58/scenery3214154",
-    "miladfa7/intel-image-classification": "ashutoshsharma58/scenery3214154",
-    "bazyl/gtsrb": "bazyl/gtsrb-model",
-    "gtsrb": "bazyl/gtsrb-model",
-    "cifar10": "aaraki/vit-base-patch16-224-in21k-finetuned-cifar10",
-    "uoft-cs/cifar10": "aaraki/vit-base-patch16-224-in21k-finetuned-cifar10",
-}
+
+
+def detect_model_domain(
+    model_or_path: Any,
+    sample_input: Optional[Any] = None,
+    processor_name: Optional[str] = None,
+    model_class: Optional[Any] = None,
+) -> str:
+    """
+    Automatically detect the data domain ('image' or 'text') from a model identifier,
+    in-memory model instance, processor/tokenizer name, or sample input.
+    Returns 'unknown' if domain cannot be determined with certainty, never falling back to 'image'.
+    """
+    # 1. Preset registry check
+    if isinstance(model_or_path, str):
+        clean_id = model_or_path.strip()
+        if clean_id in MODEL_PRESETS:
+            return MODEL_PRESETS[clean_id].get("data_domain", "unknown")
+        if clean_id in DATASET_TO_RECOMMENDED_MODEL:
+            target = DATASET_TO_RECOMMENDED_MODEL[clean_id]
+            if target in MODEL_PRESETS:
+                return MODEL_PRESETS[target].get("data_domain", "unknown")
+
+    # 2. Check processor / tokenizer name
+    if processor_name and isinstance(processor_name, str):
+        proc_lower = processor_name.lower()
+        if any(k in proc_lower for k in ("tokenizer", "bert", "roberta", "gpt", "t5", "bart", "text")):
+            return "text"
+        if any(k in proc_lower for k in ("image", "vision", "vit", "resnet", "feature_extractor")):
+            return "image"
+
+    # 3. Check sample input
+    if sample_input is not None:
+        if isinstance(sample_input, (str, list)) and (
+            isinstance(sample_input, str) or (len(sample_input) > 0 and isinstance(sample_input[0], str))
+        ):
+            return "text"
+        if isinstance(sample_input, dict):
+            if any(k in sample_input for k in ("input_ids", "attention_mask", "token_type_ids")):
+                return "text"
+            if any(k in sample_input for k in ("pixel_values", "images")):
+                return "image"
+        if "PIL" in getattr(sample_input.__class__, "__module__", ""):
+            return "image"
+        if isinstance(sample_input, torch.Tensor) or (hasattr(sample_input, "shape") and hasattr(sample_input, "dtype")):
+            if len(sample_input.shape) == 4:
+                return "image"
+            if len(sample_input.shape) == 3 and sample_input.shape[0] in (1, 3, 4) and sample_input.shape[1] > 10 and sample_input.shape[2] > 10:
+                return "image"
+            if len(sample_input.shape) in (1, 2):
+                dtype_str = str(getattr(sample_input, "dtype", ""))
+                if any(t in dtype_str for t in ("int", "long")):
+                    return "text"
+
+    # 4. Check in-memory model or class
+    target_model = model_or_path if isinstance(model_or_path, torch.nn.Module) else None
+    if target_model is None and callable(model_class) and issubclass(model_class, torch.nn.Module):
+        try:
+            target_model = model_class()
+        except Exception:
+            pass
+
+    if target_model is not None:
+        cls_name = target_model.__class__.__name__.lower()
+        if any(k in cls_name for k in ("vit", "resnet", "conv", "vision", "image", "swin", "deit", "cnn", "vgg", "alexnet")):
+            return "image"
+        if any(k in cls_name for k in ("bert", "roberta", "gpt", "t5", "text", "nlp", "tokenizer", "bart")):
+            return "text"
+
+        has_conv = False
+        has_embed = False
+        for module in target_model.modules():
+            if isinstance(module, (torch.nn.Conv2d, torch.nn.Conv3d, torch.nn.ConvTranspose2d, torch.nn.AdaptiveAvgPool2d)):
+                has_conv = True
+                break
+            if isinstance(module, torch.nn.Embedding):
+                has_embed = True
+
+        if has_conv:
+            return "image"
+        if has_embed and not has_conv:
+            return "text"
+
+    # 5. Check string identifier or Hugging Face config
+    if isinstance(model_or_path, str):
+        name_lower = model_or_path.lower()
+        import re
+
+        text_keywords = (
+            "bert", "roberta", "gpt", "llama", "t5", "bart", "electra", "distilbert",
+            "albert", "deberta", "sentiment", "imdb", "nlp", "sequenceclassification",
+            "causallm", "gliner", "decide", "token_classification", "tokenclassification",
+            "question_answering", "summarization", "translation", "sentence_transformers",
+            "embedding", "bge", "e5", "minilm", "extractor"
+        )
+        vision_keywords = (
+            "vit", "resnet", "convnext", "swin", "deit", "vision", "cifar", "gtsrb",
+            "mnist", "imagenet", "mobilenet", "efficientnet", "vgg", "clip_vision", "beit",
+            "yolo", "densenet", "segmentation", "object_detection"
+        )
+
+        # Fast local name keyword matching first
+        if any(k in name_lower for k in text_keywords) or re.search(r"(^|[^a-z])(ner|qa|text)([^a-z]|$)", name_lower):
+            return "text"
+        if any(k in name_lower for k in vision_keywords):
+            return "image"
+
+        try:
+            from transformers import AutoConfig
+            cfg = AutoConfig.from_pretrained(model_or_path, local_files_only=True)
+            if cfg is not None:
+                m_type = getattr(cfg, "model_type", "").lower()
+                archs = [str(a).lower() for a in getattr(cfg, "architectures", [])]
+                combined = m_type + " " + " ".join(archs)
+                if any(k in combined for k in text_keywords) or re.search(r"(^|[^a-z])(ner|qa|text)([^a-z]|$)", combined):
+                    return "text"
+                if any(k in combined for k in vision_keywords):
+                    return "image"
+        except Exception:
+            pass
+
+        # Check raw config.json or tokenizer / preprocessor existence on HF Hub
+        try:
+            from huggingface_hub import hf_hub_download
+            try:
+                cfg_path = hf_hub_download(model_or_path, "config.json")
+                with open(cfg_path, "r", encoding="utf-8") as f:
+                    raw_cfg = json.load(f)
+                combined_cfg = " ".join(str(v).lower() for v in raw_cfg.values() if isinstance(v, (str, list)))
+                if any(k in combined_cfg for k in text_keywords) or re.search(r"(^|[^a-z])(ner|qa|text)([^a-z]|$)", combined_cfg):
+                    return "text"
+                if any(k in combined_cfg for k in vision_keywords):
+                    return "image"
+            except Exception:
+                pass
+
+            # If tokenizer exists, it's text
+            try:
+                hf_hub_download(model_or_path, "tokenizer_config.json")
+                return "text"
+            except Exception:
+                pass
+
+            # If preprocessor exists, it's image
+            try:
+                hf_hub_download(model_or_path, "preprocessor_config.json")
+                return "image"
+            except Exception:
+                pass
+        except Exception:
+            pass
+
+    return "unknown"
 
 
 class ModelPresetRegistry:
@@ -97,6 +183,114 @@ class ModelPresetRegistry:
     def get_preset(cls, model_id: str) -> Optional[Dict[str, Any]]:
         """Get model preset metadata by identifier if available."""
         return MODEL_PRESETS.get(model_id)
+
+    @classmethod
+    def has_preset(cls, model_id: str) -> bool:
+        """Check whether model_id exists in presets."""
+        return str(model_id).strip() in MODEL_PRESETS
+
+    @classmethod
+    def detect_domain(
+        cls,
+        model_id: Any,
+        sample_input: Optional[Any] = None,
+        processor_name: Optional[str] = None,
+        model_class: Optional[Any] = None,
+    ) -> str:
+        """Helper to automatically detect domain from model or return 'unknown'."""
+        return detect_model_domain(
+            model_or_path=model_id,
+            sample_input=sample_input,
+            processor_name=processor_name,
+            model_class=model_class,
+        )
+
+    @classmethod
+    def build_runtime_config(
+        cls,
+        model_id: str,
+        dataset_name: Optional[str] = None,
+        data_domain: Optional[str] = None,
+        task_type: Optional[str] = None,
+        framework: Optional[str] = None,
+        processor_name: Optional[str] = None,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        """
+        Build a normalized runtime configuration dictionary for either a preset model
+        or a user-provided custom model.
+        """
+        clean_id = str(model_id).strip()
+        if cls.has_preset(clean_id):
+            config = cls.get_preset(clean_id).copy()
+            if dataset_name is not None:
+                config["dataset_name"] = dataset_name
+            if data_domain is not None:
+                config["data_domain"] = data_domain
+                config["domain"] = data_domain
+            if task_type is not None:
+                config["task_type"] = task_type
+            if framework is not None:
+                config["framework"] = framework
+            if processor_name is not None:
+                config["processor_name"] = processor_name
+            config.update(kwargs)
+            return config
+
+        # When model_id is not in presets, build runtime configuration from user-provided values
+        p = Path(clean_id)
+        is_local_file = p.is_file()
+
+        resolved_framework = framework or ("pytorch_local" if is_local_file else "huggingface")
+        resolved_domain = data_domain
+        if not resolved_domain:
+            resolved_domain = cls.detect_domain(model_id=clean_id, processor_name=processor_name)
+        resolved_domain = resolved_domain or "unknown"
+
+        resolved_task = task_type or "classification"
+        resolved_dataset = dataset_name or "custom_dataset"
+        resolved_processor = processor_name or (None if is_local_file else clean_id)
+
+        config = {
+            "model_id": clean_id,
+            "name": clean_id.split("/")[-1],
+            "processor_name": resolved_processor,
+            "dataset_name": resolved_dataset,
+            "data_domain": resolved_domain,
+            "domain": f"{resolved_domain.capitalize()} (Custom Model)" if resolved_domain != "unknown" else "Unknown (Custom Model)",
+            "model_type": f"Custom {resolved_framework.capitalize()} Model",
+            "description": f"User-provided custom model ({clean_id})",
+            "task_type": resolved_task,
+            "framework": resolved_framework,
+            "input_resolution": (3, 224, 224) if resolved_domain == "image" else None,
+            **kwargs,
+        }
+        return config
+
+    @classmethod
+    def create_model_metadata(
+        cls,
+        model_id: str,
+        dataset_name: Optional[str] = None,
+        data_domain: Optional[str] = None,
+        task_type: Optional[str] = None,
+        framework: Optional[str] = None,
+        processor_name: Optional[str] = None,
+        **kwargs: Any,
+    ) -> ModelMetadata:
+        """
+        Build and normalize runtime ModelMetadata from either registry preset or custom user input.
+        """
+        config = cls.build_runtime_config(
+            model_id=model_id,
+            dataset_name=dataset_name,
+            data_domain=data_domain,
+            task_type=task_type,
+            framework=framework,
+            processor_name=processor_name,
+            **kwargs,
+        )
+        return ModelMetadata.from_dict(config)
 
     @classmethod
     def resolve_model_info(
@@ -130,7 +324,7 @@ class ModelPresetRegistry:
 
         p = Path(clean_input)
         if p.is_file():
-            inferred_domain = data_domain or "image"
+            inferred_domain = data_domain or cls.detect_domain(clean_input) or "unknown"
             return {
                 "model_id": str(p.resolve()),
                 "name": p.stem,
@@ -138,7 +332,7 @@ class ModelPresetRegistry:
                 "dataset_name": "custom_dataset",
                 "data_domain": inferred_domain,
                 "model_type": f"PyTorch Checkpoint ({p.suffix})",
-                "domain": f"{inferred_domain.capitalize()} / Local Checkpoint",
+                "domain": f"{inferred_domain.capitalize()} / Local Checkpoint" if inferred_domain != "unknown" else "Unknown / Local Checkpoint",
                 "description": f"Local PyTorch model checkpoint ({p.name})",
                 "task_type": "classification",
                 "num_classes": None,
@@ -147,28 +341,30 @@ class ModelPresetRegistry:
             }
 
         # Custom Hugging Face Hub Model ID — inspect architecture dynamically
-        inferred_domain = data_domain or "image"
-        model_type_str = "Hugging Face Model"
+        inferred_domain = data_domain or cls.detect_domain(clean_input) or "unknown"
+        model_type_str = f"Hugging Face Model ({inferred_domain})"
         num_classes = None
 
         try:
             from transformers import AutoConfig
-            cfg = AutoConfig.from_pretrained(clean_input)
+            try:
+                cfg = AutoConfig.from_pretrained(clean_input, local_files_only=True)
+            except Exception:
+                if "/" in clean_input:
+                    try:
+                        cfg = AutoConfig.from_pretrained(clean_input)
+                    except Exception:
+                        cfg = None
+                else:
+                    cfg = None
+            
             m_type = getattr(cfg, "model_type", "").lower()
-            archs = [str(a).lower() for a in getattr(cfg, "architectures", [])]
-
-            if any(k in m_type or any(k in a for a in archs) for k in (
-                "bert", "roberta", "gpt", "llama", "t5", "bart", "electra", "text", "sequenceclassification", "causallm"
-            )):
-                inferred_domain = data_domain or "text"
-                model_type_str = f"Transformer NLP ({getattr(cfg, 'model_type', 'text')})"
-            elif any(k in m_type or any(k in a for a in archs) for k in (
-                "vit", "resnet", "convnext", "swin", "deit", "image", "vision"
-            )):
-                inferred_domain = data_domain or "image"
-                model_type_str = f"Vision Model ({getattr(cfg, 'model_type', 'vision')})"
+            if inferred_domain == "text":
+                model_type_str = f"Transformer NLP ({m_type or 'text'})"
+            elif inferred_domain == "image":
+                model_type_str = f"Vision Model ({m_type or 'vision'})"
             else:
-                model_type_str = f"HF Model ({getattr(cfg, 'model_type', 'generic')})"
+                model_type_str = f"HF Model ({m_type or 'generic'})"
 
             num_classes = getattr(cfg, "num_labels", None)
         except Exception:
@@ -181,13 +377,14 @@ class ModelPresetRegistry:
             "dataset_name": "custom_dataset",
             "data_domain": inferred_domain,
             "model_type": model_type_str,
-            "domain": f"{inferred_domain.capitalize()} (Custom Hugging Face)",
+            "domain": f"{inferred_domain.capitalize()} (Custom Hugging Face)" if inferred_domain != "unknown" else "Unknown (Custom Hugging Face)",
             "description": f"Custom Hugging Face model ({clean_input})",
             "task_type": "classification",
             "num_classes": num_classes,
             "input_resolution": (3, 224, 224) if inferred_domain == "image" else None,
             "framework": "huggingface",
         }
+
 
 
 
@@ -235,9 +432,9 @@ def setup_model_environment(
         "model_id": model_info["model_id"],
         "model_name": model_info["name"],
         "processor_name": processor_name,
-        "data_domain": model_info.get("data_domain", "image"),
-        "model_type": model_info.get("model_type", "Vision Transformer (ViT)"),
-        "domain": model_info.get("domain", "Computer Vision"),
+        "data_domain": model_info.get("data_domain", "unknown"),
+        "model_type": model_info.get("model_type", "Model"),
+        "domain": model_info.get("domain", "Unknown Domain"),
         "framework": model_info["framework"],
         "target_device": str(target_device),
         "cuda_available": torch.cuda.is_available(),

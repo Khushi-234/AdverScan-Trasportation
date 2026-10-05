@@ -17,6 +17,17 @@ class ModelValidationError(ModelIngestionError):
     pass
 
 
+class ConfigurationError(ModelValidationError):
+    """Raised when model configuration is missing required fields or invalid."""
+    pass
+
+
+class UnsupportedDomainError(ModelValidationError):
+    """Raised when an unsupported data domain is provided."""
+    pass
+
+
 class UnsupportedModelError(ModelIngestionError):
     """Raised when an unsupported model framework or format is provided."""
     pass
+
