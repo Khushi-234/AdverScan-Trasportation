@@ -86,26 +86,46 @@ def prompt_model_selection():
         data_domain = selected.get("data_domain", "image")
     elif choice == str(len(presets) + 1):
         model_id = input("Enter Hugging Face Model ID [bazyl/gtsrb-model]: ").strip() or "bazyl/gtsrb-model"
-        dataset_name = input("Enter Hugging Face Dataset Name [bazyl/GTSRB]: ").strip() or "bazyl/GTSRB"
         processor_name = input(f"Enter Processor / Tokenizer ID [{model_id}]: ").strip() or model_id
 
         # Determine domain or prompt user
         from app.ingestion.model_registry import detect_model_domain
         detected_domain = detect_model_domain(model_id, processor_name=processor_name)
-        if detected_domain in ("image", "text", "time-series"):
-            domain_choice = input(f"Enter Data Domain ('image', 'text', or 'time-series') [{detected_domain}]: ").strip().lower() or detected_domain
+        if detected_domain in ("image", "text", "time-series", "tabular"):
+            domain_choice = input(f"Enter Data Domain ('image', 'text', 'time-series', or 'tabular') [{detected_domain}]: ").strip().lower() or detected_domain
         else:
-            domain_choice = input("Enter Data Domain ('image', 'text', or 'time-series') [image]: ").strip().lower() or "image"
-        data_domain = domain_choice if domain_choice in ("image", "text", "time-series") else "image"
+            domain_choice = input("Enter Data Domain ('image', 'text', 'time-series', or 'tabular') [image]: ").strip().lower() or "image"
+        data_domain = domain_choice if domain_choice in ("image", "text", "time-series", "tabular") else "image"
+
+        from app.evaluation.dataset_loader.factory import resolve_dataset_file
+        if data_domain == "tabular":
+            default_dataset = resolve_dataset_file(None, [".csv", ".tsv"], model_identifier=model_id) or "data/test.csv"
+        elif data_domain == "time-series":
+            default_dataset = resolve_dataset_file(None, [".pt", ".pth", ".npz"], model_identifier=model_id) or "data/test.pt"
+        elif data_domain == "text":
+            default_dataset = "imdb"
+        else:
+            default_dataset = "bazyl/GTSRB"
+        dataset_name = input(f"Enter Evaluation Dataset Name / Path [{default_dataset}]: ").strip() or default_dataset
     elif choice == str(len(presets) + 2):
         model_id = input("Enter Local Checkpoint Path [gtsrb_model.pt]: ").strip() or "gtsrb_model.pt"
-        dataset_name = input("Enter Evaluation Dataset Name [bazyl/GTSRB]: ").strip() or "bazyl/GTSRB"
         processor_name = None
         from app.ingestion.model_registry import detect_model_domain
         detected_domain = detect_model_domain(model_id)
-        default_dom = detected_domain if detected_domain in ("image", "text", "time-series") else "image"
-        domain_choice = input(f"Enter Data Domain ('image', 'text', or 'time-series') [{default_dom}]: ").strip().lower() or default_dom
-        data_domain = domain_choice if domain_choice in ("image", "text", "time-series") else "image"
+        default_dom = detected_domain if detected_domain in ("image", "text", "time-series", "tabular") else "image"
+        domain_choice = input(f"Enter Data Domain ('image', 'text', 'time-series', or 'tabular') [{default_dom}]: ").strip().lower() or default_dom
+        data_domain = domain_choice if domain_choice in ("image", "text", "time-series", "tabular") else "image"
+
+        from app.evaluation.dataset_loader.factory import resolve_dataset_file
+        if data_domain == "tabular":
+            default_dataset = resolve_dataset_file(None, [".csv", ".tsv"], model_identifier=model_id) or "data/test.csv"
+        elif data_domain == "time-series":
+            default_dataset = resolve_dataset_file(None, [".pt", ".pth", ".npz"], model_identifier=model_id) or "data/test.pt"
+        elif data_domain == "text":
+            default_dataset = "imdb"
+        else:
+            default_dataset = "bazyl/GTSRB"
+        dataset_name = input(f"Enter Evaluation Dataset Name / Path [{default_dataset}]: ").strip() or default_dataset
     elif choice == str(len(presets) + 3) or choice.lower() == "all":
         return "__all__", None, None, None
     else:
@@ -153,9 +173,13 @@ def run_single_evaluation(
             sample_input = torch.randn(1, seq_len, num_ch)
         else:
             sample_input = torch.randn(1, num_ch, seq_len)
+    elif domain == "tabular":
+        num_feats = env_info.get("num_features") or 14
+        sample_input = torch.randn(1, num_feats)
     else:
         sample_input = "AdverScan clean baseline evaluation sample sentence."
 
+    from app.ingestion.exceptions import UnsafeModelError
     try:
         adapter, metadata = ingest_model(
             model_path=resolved_model_id,
@@ -167,6 +191,24 @@ def run_single_evaluation(
             processor_name=env_info.get("processor_name"),
             log_ingestion=True,
         )
+    except UnsafeModelError as ume:
+        print(f"\n[SECURITY WARNING] {ume}")
+        confirm = input("\nThis model requires deserializing pickle/joblib files. Do you want to proceed? [y/N]: ").strip().lower()
+        if confirm in ("y", "yes"):
+            adapter, metadata = ingest_model(
+                model_path=resolved_model_id,
+                sample_input=sample_input,
+                model_name=env_info["model_name"],
+                device=device,
+                data_domain=env_info.get("data_domain"),
+                dataset_name=dataset_name,
+                processor_name=env_info.get("processor_name"),
+                unsafe_allow_pickle=True,
+                log_ingestion=True,
+            )
+        else:
+            print("\nAborted model loading due to security policy.")
+            return None
     except Exception:
         if domain == "time-series" and isinstance(sample_input, torch.Tensor) and sample_input.ndim == 3:
             sample_input = sample_input.transpose(1, 2)
@@ -196,11 +238,53 @@ def run_single_evaluation(
     split_str = f"test[:{samples}]" if samples > 0 else "test"
 
     eval_kwargs = {}
-    if domain == "time-series":
-        num_eval_samples = samples if samples > 0 else 100
-        input_shape_eval = (num_eval_samples,) + tuple(sample_input.shape[1:])
-        eval_kwargs["inputs"] = torch.randn(input_shape_eval)
-        eval_kwargs["targets"] = torch.randint(0, num_classes, (num_eval_samples,))
+    from pathlib import Path
+
+    from app.evaluation.dataset_loader.factory import resolve_dataset_file
+
+    if domain == "tabular":
+        data_file = resolve_dataset_file(dataset_name, [".csv", ".tsv"], model_identifier=model_id)
+
+        if data_file:
+            print(f"  ✓ Dynamically resolved tabular dataset: '{data_file}'")
+            eval_kwargs["data"] = data_file
+            eval_kwargs["target_col"] = "target"
+        else:
+            print("  [INFO] No local CSV dataset path found; evaluating on synthetic sample inputs.")
+            num_eval_samples = samples if samples > 0 else 100
+            input_shape_eval = (num_eval_samples,) + tuple(sample_input.shape[1:])
+            eval_inputs = torch.randn(input_shape_eval)
+            eval_targets = torch.randint(0, num_classes, (num_eval_samples,))
+            eval_kwargs["data"] = (eval_inputs, eval_targets)
+
+    elif domain == "time-series":
+        ts_file = resolve_dataset_file(dataset_name, [".pt", ".pth", ".npz", ".npy"], model_identifier=model_id)
+
+        if ts_file:
+            print(f"  ✓ Dynamically resolved time-series dataset: '{ts_file}'")
+            loaded = torch.load(ts_file, map_location="cpu", weights_only=False)
+            if isinstance(loaded, dict):
+                x_ts = loaded.get("inputs", loaded.get("X"))
+                y_ts = loaded.get("targets", loaded.get("y"))
+            elif isinstance(loaded, tuple) and len(loaded) == 2:
+                x_ts, y_ts = loaded
+            else:
+                x_ts, y_ts = loaded, None
+
+            if samples > 0 and len(x_ts) > samples:
+                x_ts = x_ts[:samples]
+                if y_ts is not None:
+                    y_ts = y_ts[:samples]
+            eval_kwargs["inputs"] = x_ts
+            eval_kwargs["targets"] = y_ts
+        else:
+            print("  [INFO] No local tensor dataset path found; evaluating on synthetic sequence samples.")
+            num_eval_samples = samples if samples > 0 else 100
+            input_shape_eval = (num_eval_samples,) + tuple(sample_input.shape[1:])
+            eval_inputs = torch.randn(input_shape_eval)
+            eval_targets = torch.randint(0, num_classes, (num_eval_samples,))
+            eval_kwargs["inputs"] = eval_inputs
+            eval_kwargs["targets"] = eval_targets
 
     result = evaluate_baseline(
         adapter=adapter,

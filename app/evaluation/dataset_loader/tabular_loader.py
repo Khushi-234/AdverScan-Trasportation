@@ -20,22 +20,50 @@ class TabularDatasetLoader(BaseDatasetLoader):
         dataset_name: str = "Tabular_Dataset",
         batch_size: int = 32,
     ):
+        from pathlib import Path
+        import pandas as pd
+
         self._dataset_name = dataset_name
         self.batch_size = batch_size
 
+        df = None
         if isinstance(data, str):
-            import pandas as pd
-            df = pd.read_csv(data)
-            y = df[target_col].values
-            X = df.drop(columns=[target_col]).values
-            self.inputs = torch.tensor(X, dtype=torch.float32)
-            self.targets = torch.tensor(y, dtype=torch.long)
+            from app.evaluation.dataset_loader.factory import resolve_dataset_file
+            resolved_p = resolve_dataset_file(data, [".csv", ".tsv", ".txt"])
+            if resolved_p and Path(resolved_p).is_file():
+                df = pd.read_csv(resolved_p)
+            else:
+                raise ValueError(f"Tabular dataset file '{data}' could not be found.")
+        elif isinstance(data, pd.DataFrame):
+            df = data
         elif isinstance(data, tuple) and len(data) == 2:
             X, y = data
             self.inputs = X if isinstance(X, torch.Tensor) else torch.tensor(X, dtype=torch.float32)
             self.targets = y if isinstance(y, torch.Tensor) else torch.tensor(y, dtype=torch.long)
+            return
         else:
-            raise ValueError("Data for TabularDatasetLoader must be a CSV file path or tuple of (X, y).")
+            raise ValueError("Data for TabularDatasetLoader must be a CSV file path, DataFrame, or tuple of (X, y).")
+
+        if df is not None:
+            # Resolve target column
+            resolved_col = None
+            if target_col in df.columns:
+                resolved_col = target_col
+            elif "target" in df.columns:
+                resolved_col = "target"
+            elif "label" in df.columns:
+                resolved_col = "label"
+            elif "class" in df.columns:
+                resolved_col = "class"
+            elif isinstance(target_col, int) and 0 <= target_col < len(df.columns):
+                resolved_col = df.columns[target_col]
+            else:
+                resolved_col = df.columns[-1]
+
+            y = df[resolved_col].values
+            X = df.drop(columns=[resolved_col]).values
+            self.inputs = torch.tensor(X, dtype=torch.float32)
+            self.targets = torch.tensor(y, dtype=torch.long)
 
     @property
     def dataset_name(self) -> str:

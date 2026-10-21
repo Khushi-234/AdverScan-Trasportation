@@ -206,3 +206,51 @@ def test_hf_vision_loader_missing_label_raises_key_error(monkeypatch):
         )
 
 
+def test_resolve_dataset_file_and_dynamic_tabular_loader():
+    """Verify general dynamic dataset file resolution and automatic tabular loading."""
+    from app.evaluation.dataset_loader.factory import get_dataset_loader, resolve_dataset_file
+
+    # 1. Direct path resolution
+    resolved_csv = resolve_dataset_file("data/adult_census_test.csv", [".csv"])
+    assert resolved_csv is not None
+    assert resolved_csv.endswith(".csv")
+
+    # 2. Model-based resolution
+    model_resolved = resolve_dataset_file(None, [".csv"], model_identifier="models/tabular-mlp-adult-census.pt")
+    assert model_resolved is not None
+    assert "adult_census" in model_resolved
+
+    # 3. Dynamic loading without explicit kwargs['data']
+    tab_loader = get_dataset_loader(
+        dataset_name="adult_census",
+        data_domain="tabular",
+        batch_size=16,
+    )
+    assert len(tab_loader) > 0
+    batch_x, batch_y, labels = next(tab_loader.iterate_batches())
+    assert batch_x.shape[0] == 16
+    assert batch_y.shape[0] == 16
+
+
+def test_resolve_dataset_file_and_dynamic_timeseries_loader():
+    """Verify general dynamic dataset file resolution and automatic time-series loading."""
+    from app.evaluation.dataset_loader.factory import get_dataset_loader, resolve_dataset_file
+
+    # 1. Model-based resolution for TS
+    resolved_ts = resolve_dataset_file(None, [".pt"], model_identifier="models/time-series-ecg-classifier.pt")
+    assert resolved_ts is not None
+    assert resolved_ts.endswith(".pt")
+
+    # 2. Dynamic loading without explicit kwargs['inputs'] or kwargs['targets']
+    ts_loader = get_dataset_loader(
+        dataset_name="time_series_ecg",
+        data_domain="time-series",
+        batch_size=8,
+    )
+    assert len(ts_loader) > 0
+    batch_x, batch_y, labels = next(ts_loader.iterate_batches())
+    assert batch_x.shape[0] == 8
+    assert batch_y.shape[0] == 8
+
+
+

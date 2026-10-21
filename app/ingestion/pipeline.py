@@ -13,6 +13,7 @@ import torch.nn as nn
 from app.ingestion.adapters.base_adapter import BaseModelAdapter
 from app.ingestion.adapters.huggingface_adapter import HuggingFaceAdapter
 from app.ingestion.adapters.pytorch_adapter import PyTorchAdapter
+from app.ingestion.adapters.sklearn_adapter import SklearnAdapter
 from app.ingestion.exceptions import (
     UnsupportedDomainError,
     UnsupportedModelError,
@@ -21,10 +22,13 @@ from app.ingestion.exceptions import (
 from app.ingestion.loader.base_loader import BaseModelLoader
 from app.ingestion.loader.huggingface_loader import HuggingFaceLoader
 from app.ingestion.loader.pytorch_loader import PyTorchLoader
+from app.ingestion.loader.sklearn_loader import SklearnLoader
 from app.ingestion.metadata.model_metadata import ModelMetadata
+from app.ingestion.metadata.tabular_metadata import TabularMetadata
 from app.ingestion.model_registry import ModelPresetRegistry
 from app.ingestion.processors.base_processor import BaseProcessor
 from app.ingestion.processors.image_processor import ImageProcessor
+from app.ingestion.processors.tabular_processor import TabularProcessor
 from app.ingestion.processors.text_processor import TextProcessor
 from app.ingestion.processors.time_series_processor import TimeSeriesProcessor
 from app.ingestion.utils.device_manager import DeviceManager
@@ -146,12 +150,21 @@ def ingest_model(
         )
 
     # 2. Registry lookup & runtime configuration creation
+    from app.ingestion.model_registry import (
+        detect_model_framework,
+        detect_model_source,
+        inspect_model_evidence,
+        is_sklearn_model,
+    )
+    detected_source = detect_model_source(model_path)
+    detected_fw = framework or detect_model_framework(model_path, model_class=model_class)
+
     config_dict: Dict[str, Any] = {}
     is_in_memory_model = isinstance(model_path, nn.Module) or not isinstance(model_path, (str, Path))
 
     if is_in_memory_model:
-        # In-memory PyTorch / custom model instance
-        resolved_framework = framework or "pytorch"
+        # In-memory PyTorch / scikit-learn / custom model instance
+        resolved_framework = framework or detected_fw
         resolved_dom = resolved_domain
         derived_name = model_name or model_path.__class__.__name__
         config_dict = {
@@ -177,6 +190,8 @@ def ingest_model(
             processor_name=processor_name,
             **kwargs,
         )
+        if not config_dict.get("framework"):
+            config_dict["framework"] = detected_fw
         if config_dict.get("data_domain") is None:
             config_dict["data_domain"] = resolved_domain
             config_dict["domain"] = resolved_domain
@@ -193,11 +208,24 @@ def ingest_model(
     # 4 & 5. Select loader using framework and load model dynamically
     framework_clean = runtime_metadata.framework.lower()
     raw_model: Any = None
+    target_model_path = model_path
+    if not is_in_memory_model and config_dict.get("model_id"):
+        cand_path = str(config_dict.get("model_id"))
+        if Path(cand_path).exists() or "/" in cand_path:
+            target_model_path = cand_path
 
-    if framework_clean == "huggingface":
-        loader: BaseModelLoader = HuggingFaceLoader()
+    if framework_clean == "sklearn":
+        loader: BaseModelLoader = SklearnLoader()
+        allow_pickle = kwargs.pop("unsafe_allow_pickle", False)
         raw_model = loader.load(
-            model_path,
+            target_model_path,
+            unsafe_allow_pickle=allow_pickle,
+            **kwargs,
+        )
+    elif framework_clean == "huggingface":
+        loader = HuggingFaceLoader()
+        raw_model = loader.load(
+            target_model_path,
             device=target_device,
             domain=runtime_metadata.data_domain,
             task_type=runtime_metadata.task_type,
@@ -206,14 +234,14 @@ def ingest_model(
     elif framework_clean in ("pytorch", "pytorch_local"):
         loader = PyTorchLoader()
         raw_model = loader.load(
-            model_path,
+            target_model_path,
             model_class=model_class,
             device=target_device,
             **kwargs,
         )
     else:
         raise UnsupportedModelError(
-            f"Unsupported framework '{runtime_metadata.framework}'. Supported frameworks are: ['huggingface', 'pytorch']"
+            f"Unsupported framework '{runtime_metadata.framework}'. Supported frameworks are: ['huggingface', 'pytorch', 'sklearn']"
         )
 
     # 6. Select processor using data_domain
@@ -247,16 +275,48 @@ def ingest_model(
             standardize=config_dict.get("standardize", False),
             scaling=config_dict.get("scaling"),
         )
+    elif domain_clean == "tabular":
+        processor = TabularProcessor(
+            processor_name_or_path=runtime_metadata.processor_name,
+            device=target_device,
+            feature_names=config_dict.get("feature_names"),
+            feature_types=config_dict.get("feature_types"),
+            numerical_features=config_dict.get("numerical_features"),
+            categorical_features=config_dict.get("categorical_features"),
+            binary_features=config_dict.get("binary_features"),
+            ordinal_features=config_dict.get("ordinal_features"),
+            target_column=config_dict.get("target_column"),
+            num_features=config_dict.get("num_features"),
+            num_classes=config_dict.get("num_classes"),
+            class_mapping=config_dict.get("class_mapping"),
+            preprocessor=config_dict.get("preprocessor"),
+            preprocessing_info=config_dict.get("preprocessing_info"),
+            categorical_threshold=config_dict.get("categorical_threshold", 10),
+            sample_data=sample_input,
+            feature_constraints=config_dict.get("feature_constraints"),
+            immutable_features=config_dict.get("immutable_features"),
+            mutable_features=config_dict.get("mutable_features"),
+            representation_space=config_dict.get("representation_space"),
+            categorical_encoding_type=config_dict.get("categorical_encoding_type"),
+            encoding_info=config_dict.get("encoding_info"),
+        )
     elif domain_clean == "unknown":
         processor = None
     else:
         raise UnsupportedDomainError(
-            f"Unsupported data domain '{domain_clean}'. Current scope supports only ['image', 'text', 'time-series']."
+            f"Unsupported data domain '{domain_clean}'. Current scope supports only ['image', 'text', 'time-series', 'tabular']."
         )
 
-    # 7. Select adapter using data_domain / framework
+    # 7. Select adapter using framework / data_domain
     adapter: BaseModelAdapter
-    if framework_clean == "huggingface":
+    if framework_clean == "sklearn":
+        adapter = SklearnAdapter(
+            raw_model,
+            device=target_device,
+            processor=processor,
+            data_domain=domain_clean,
+        )
+    elif framework_clean == "huggingface":
         adapter = HuggingFaceAdapter(
             raw_model,
             device=target_device,
@@ -270,7 +330,25 @@ def ingest_model(
             processor=processor,
         )
 
+    # Record detection evidence and adapter capabilities
+    evidence = inspect_model_evidence(
+        raw_model,
+        framework=framework_clean,
+        domain=domain_clean,
+        sample_input=sample_input,
+    )
+    runtime_metadata.extra_info["evidence"] = evidence
+    runtime_metadata.extra_info["source"] = detected_source
+    runtime_metadata.extra_info["capabilities"] = {
+        "supports_gradients": adapter.capabilities.supports_gradients,
+        "supports_predict": adapter.capabilities.supports_predict,
+        "supports_batch_predict": adapter.capabilities.supports_batch_predict,
+        "supports_logits": adapter.capabilities.supports_logits,
+    }
+
     # 8. Model validation and sanity verification
+    if isinstance(processor, TabularProcessor):
+        processor.validate_model_input(adapter, sample_input=sample_input)
     ModelValidator.validate(adapter, sample_input=sample_input)
 
     # 9. Metadata extraction and shape inference
@@ -323,6 +401,16 @@ def ingest_model(
 
         if seq_len is not None:
             input_shape = (1, num_ch, seq_len)
+
+    if domain_clean == "tabular" and isinstance(processor, TabularProcessor):
+        runtime_metadata.tabular_metadata = processor.tabular_metadata
+        runtime_metadata.extra_info["tabular_metadata"] = processor.tabular_metadata.to_dict()
+        if input_shape is None and processor.num_features:
+            input_shape = (1, processor.num_features)
+        if num_classes is None and processor.tabular_metadata.num_classes:
+            num_classes = processor.tabular_metadata.num_classes
+        if num_classes is None and hasattr(raw_model, "classes_") and raw_model.classes_ is not None:
+            num_classes = len(raw_model.classes_)
 
     # Parameter count and architecture
     total_params = None

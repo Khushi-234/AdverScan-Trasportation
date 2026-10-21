@@ -21,8 +21,8 @@ class ModelValidator:
     and runtime configuration before loading.
     """
 
-    SUPPORTED_FRAMEWORKS = {"huggingface", "pytorch", "pytorch_local"}
-    SUPPORTED_DOMAINS = {"image", "text", "time-series"}
+    SUPPORTED_FRAMEWORKS = {"huggingface", "pytorch", "pytorch_local", "sklearn"}
+    SUPPORTED_DOMAINS = {"image", "text", "time-series", "tabular"}
 
     @classmethod
     def validate_configuration(
@@ -40,7 +40,7 @@ class ModelValidator:
 
         Raises:
             ModelValidationError: If required fields are missing or invalid.
-            UnsupportedDomainError: If domain is not image, text, or time-series.
+            UnsupportedDomainError: If domain is not image, text, time-series, or tabular.
             UnsupportedModelError: If framework is unsupported.
             UnsupportedTaskError: If task is unsupported (e.g. forecasting).
         """
@@ -81,7 +81,7 @@ class ModelValidator:
 
         # 3. Validate data_domain
         if data_domain is None or not str(data_domain).strip():
-            raise ModelValidationError("Validation error: 'data_domain' is required. Supported domains are: ['image', 'text', 'time-series'].")
+            raise ModelValidationError("Validation error: 'data_domain' is required. Supported domains are: ['image', 'text', 'time-series', 'tabular'].")
 
         clean_domain = str(data_domain).strip().lower().replace("_", "-")
         if clean_domain == "timeseries":
@@ -107,12 +107,14 @@ class ModelValidator:
             if not isinstance(processor_name, str) or not processor_name.strip():
                 raise ModelValidationError("Validation error: 'processor_name' must be a non-empty string when provided.")
             lower_proc = processor_name.lower()
-            if clean_domain == "image" and any(k in lower_proc for k in ("bert", "gpt", "roberta", "t5", "tokenizer", "timeseries", "time-series")):
+            if clean_domain == "image" and any(k in lower_proc for k in ("bert", "gpt", "roberta", "t5", "tokenizer", "timeseries", "time-series", "tabular")):
                 raise ModelValidationError(f"Incompatible processor '{processor_name}' specified for image domain model.")
-            if clean_domain == "text" and any(k in lower_proc for k in ("vit", "resnet", "convnext", "imageprocessor", "timeseries", "time-series")):
+            if clean_domain == "text" and any(k in lower_proc for k in ("vit", "resnet", "convnext", "imageprocessor", "timeseries", "time-series", "tabular")):
                 raise ModelValidationError(f"Incompatible processor '{processor_name}' specified for text domain model.")
-            if clean_domain == "time-series" and any(k in lower_proc for k in ("bert", "gpt", "roberta", "t5", "tokenizer", "vit", "resnet", "convnext", "imageprocessor")):
+            if clean_domain == "time-series" and any(k in lower_proc for k in ("bert", "gpt", "roberta", "t5", "tokenizer", "vit", "resnet", "convnext", "imageprocessor", "tabular")):
                 raise ModelValidationError(f"Incompatible processor '{processor_name}' specified for time-series domain model.")
+            if clean_domain == "tabular" and any(k in lower_proc for k in ("bert", "gpt", "roberta", "t5", "tokenizer", "vit", "resnet", "convnext", "imageprocessor", "timeseries", "time-series")):
+                raise ModelValidationError(f"Incompatible processor '{processor_name}' specified for tabular domain model.")
 
         # 6. Supported image/text configuration
         if clean_domain == "image" and resolution is not None:

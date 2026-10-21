@@ -167,6 +167,52 @@ MODEL_PRESETS: Dict[str, Dict[str, Any]] = {
         "num_channels": 3,
         "framework": "huggingface",
     },
+
+    "time-series-ecg-classifier": {
+        "model_id": "models/time-series-ecg-classifier.pt",
+        "name": "ECG / Signal 1D-CNN Time-Series Classifier",
+        "processor_name": "models/time-series-ecg-classifier.pt",
+        "dataset_name": "time_series_ecg",
+        "data_domain": "time-series",
+        "model_type": "1D Convolutional Neural Network (1D-CNN)",
+        "domain": "Time-Series Analysis (ECG / Signal Classification)",
+        "description": "1D-CNN trained on time-series waveform classification (length 50, 1 channel, 2 classes)",
+        "task_type": "classification",
+        "num_classes": 2,
+        "sequence_length": 50,
+        "num_channels": 1,
+        "framework": "pytorch",
+    },
+
+    # ----------------------------Tabular Based Model---------------------------------------
+    "tabular-mlp-adult-census": {
+        "model_id": "models/tabular-mlp-adult-census.pt",
+        "name": "Adult Census Tabular MLP",
+        "processor_name": "models/tabular-mlp-adult-census.pt",
+        "dataset_name": "adult_census",
+        "data_domain": "tabular",
+        "model_type": "Multi-Layer Perceptron (Tabular MLP)",
+        "domain": "Tabular Data (Adult Census Income Classification)",
+        "description": "PyTorch TorchScript MLP for tabular census income binary classification (14 features, 2 classes)",
+        "task_type": "classification",
+        "num_classes": 2,
+        "num_features": 14,
+        "framework": "pytorch",
+    },
+    "tabular-mlp-credit-fraud": {
+        "model_id": "models/tabular-mlp-credit-fraud.pt",
+        "name": "Credit Card Fraud Tabular MLP",
+        "processor_name": "models/tabular-mlp-credit-fraud.pt",
+        "dataset_name": "credit_fraud",
+        "data_domain": "tabular",
+        "model_type": "Multi-Layer Perceptron (Tabular MLP)",
+        "domain": "Tabular Data (Credit Card Fraud Detection)",
+        "description": "PyTorch TorchScript MLP for tabular credit fraud binary classification (30 features, 2 classes)",
+        "task_type": "classification",
+        "num_classes": 2,
+        "num_features": 30,
+        "framework": "pytorch",
+    },
 }
 
 # Mapping from dataset identifiers / Kaggle URLs to their recommended evaluation models
@@ -186,6 +232,9 @@ DATASET_TO_RECOMMENDED_MODEL: Dict[str, str] = {
     "ag_news": "textattack/bert-base-uncased-ag-news",
     "tweet_eval": "cardiffnlp/twitter-roberta-base-sentiment-latest",
     "time_series_classification": "hf-tiny-v2/tiny-random-PatchTSTForClassification",
+    "time_series_ecg": "time-series-ecg-classifier",
+    "adult_census": "tabular-mlp-adult-census",
+    "credit_fraud": "tabular-mlp-credit-fraud",
 }
 
 __all__ = ["MODEL_PRESETS", "DATASET_TO_RECOMMENDED_MODEL"]

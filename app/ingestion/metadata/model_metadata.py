@@ -28,6 +28,7 @@ class ModelMetadata:
     total_parameters: Optional[int] = None
     trainable_parameters: Optional[int] = None
     model_architecture: Optional[str] = None
+    tabular_metadata: Optional[Any] = None
     extra_info: Dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
@@ -38,6 +39,15 @@ class ModelMetadata:
 
         if self.model_name is None and self.model_id is not None:
             self.model_name = self.model_id.split("/")[-1]
+
+        if self.tabular_metadata is not None and "tabular_metadata" not in self.extra_info:
+            self.extra_info["tabular_metadata"] = (
+                self.tabular_metadata.to_dict()
+                if hasattr(self.tabular_metadata, "to_dict")
+                else self.tabular_metadata
+            )
+        elif self.tabular_metadata is None and "tabular_metadata" in self.extra_info:
+            self.tabular_metadata = self.extra_info["tabular_metadata"]
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert metadata container to a dictionary."""

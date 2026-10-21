@@ -7,7 +7,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 
-from app.ingestion.adapters.base_adapter import BaseModelAdapter
+from app.ingestion.adapters.base_adapter import AdapterCapabilities, BaseModelAdapter
 
 
 class PyTorchAdapter(BaseModelAdapter):
@@ -36,6 +36,16 @@ class PyTorchAdapter(BaseModelAdapter):
         self._device = torch.device(device) if isinstance(device, str) else device
         self.processor = processor
         self._model.to(self._device)
+
+    @property
+    def capabilities(self) -> AdapterCapabilities:
+        """Return PyTorch adapter operational capabilities (supports gradients)."""
+        return AdapterCapabilities(
+            supports_gradients=True,
+            supports_predict=True,
+            supports_batch_predict=True,
+            supports_logits=True,
+        )
 
     @property
     def device(self) -> torch.device:

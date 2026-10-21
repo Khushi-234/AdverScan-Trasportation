@@ -7,7 +7,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 
-from app.ingestion.adapters.base_adapter import BaseModelAdapter
+from app.ingestion.adapters.base_adapter import AdapterCapabilities, BaseModelAdapter
 
 
 class HuggingFaceAdapter(BaseModelAdapter):
@@ -50,6 +50,16 @@ class HuggingFaceAdapter(BaseModelAdapter):
 
         self.data_domain = resolved_domain
         self._model.to(self._device)
+
+    @property
+    def capabilities(self) -> AdapterCapabilities:
+        """Return Hugging Face adapter operational capabilities (supports gradients)."""
+        return AdapterCapabilities(
+            supports_gradients=True,
+            supports_predict=True,
+            supports_batch_predict=True,
+            supports_logits=True,
+        )
 
     @property
     def device(self) -> torch.device:

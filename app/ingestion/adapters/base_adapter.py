@@ -3,7 +3,20 @@ Base adapter interface for standardized model interactions in AdverScan.
 """
 
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
 from typing import Any, Union
+
+
+@dataclass
+class AdapterCapabilities:
+    """
+    Operational and analytical capabilities of a model adapter.
+    Exposes gradient, prediction, batching, and logits support for attack compatibility.
+    """
+    supports_gradients: bool = False
+    supports_predict: bool = True
+    supports_batch_predict: bool = True
+    supports_logits: bool = True
 
 
 class BaseModelAdapter(ABC):
@@ -11,6 +24,23 @@ class BaseModelAdapter(ABC):
     Abstract base class wrapping framework-specific models into a unified interface
     for attack, vulnerability assessment, scoring, and hardening engines.
     """
+
+    @property
+    def capabilities(self) -> AdapterCapabilities:
+        """
+        Return the operational capabilities of this adapter.
+        Default base implementation assumes standard prediction without gradients.
+        """
+        return AdapterCapabilities(
+            supports_gradients=False,
+            supports_predict=True,
+            supports_batch_predict=True,
+            supports_logits=True,
+        )
+
+    def get_capabilities(self) -> AdapterCapabilities:
+        """Return the operational capabilities of this adapter."""
+        return self.capabilities
 
     @abstractmethod
     def predict(self, inputs: Any, **kwargs: Any) -> Any:

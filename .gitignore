@@ -39,6 +39,7 @@ logs/
 mlruns/
 
 # Datasets and model checkpoints (large files)
+data/*
 datasets/*
 !datasets/.gitkeep
 models/*
