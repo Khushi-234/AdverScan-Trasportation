@@ -12,11 +12,32 @@ class ModelLoadError(ModelIngestionError):
     pass
 
 
+class UnsafeModelError(ModelLoadError):
+    """Raised when an unsafe deserialization operation is attempted without explicit user consent."""
+    pass
+
+
 class ModelValidationError(ModelIngestionError):
     """Raised when model validation or sanity checking fails."""
+    pass
+
+
+class ConfigurationError(ModelValidationError):
+    """Raised when model configuration is missing required fields or invalid."""
+    pass
+
+
+class UnsupportedDomainError(ModelValidationError):
+    """Raised when an unsupported data domain is provided."""
     pass
 
 
 class UnsupportedModelError(ModelIngestionError):
     """Raised when an unsupported model framework or format is provided."""
     pass
+
+
+class UnsupportedTaskError(ModelIngestionError):
+    """Raised when an unsupported task (e.g. forecasting or regression) is provided."""
+    pass
+

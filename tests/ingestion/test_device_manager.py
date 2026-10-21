@@ -5,7 +5,7 @@ Unit tests for DeviceManager module.
 import torch
 import torch.nn as nn
 
-from app.ingestion.runtime.device_manager import DeviceManager
+from app.utils.device_manager import DeviceManager
 
 
 def test_get_device_cpu():
@@ -32,3 +32,12 @@ def test_to_device_module():
     model = nn.Linear(5, 2)
     moved = DeviceManager.to_device(model, "cpu")
     assert next(moved.parameters()).device == torch.device("cpu")
+
+
+def test_device_manager_aliases():
+    """Test DeviceManager alias imports from app.ingestion.utils and app.ingestion."""
+    from app.ingestion.utils import DeviceManager as IngestionUtilsDM
+    from app.ingestion import DeviceManager as IngestionRootDM
+
+    assert IngestionUtilsDM is DeviceManager
+    assert IngestionRootDM is DeviceManager
