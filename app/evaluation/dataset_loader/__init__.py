@@ -11,9 +11,13 @@ from app.evaluation.dataset_loader.tabular_loader import TabularDatasetLoader
 from app.evaluation.dataset_loader.generic_loader import GenericDatasetLoader
 from app.evaluation.dataset_loader.factory import get_dataset_loader
 
+# Backward-compatibility alias
+GTSRBDatasetLoader = HFVisionDatasetLoader
+
 __all__ = [
     "BaseDatasetLoader",
     "HFVisionDatasetLoader",
+    "GTSRBDatasetLoader",
     "HFTextDatasetLoader",
     "TimeSeriesDatasetLoader",
     "TabularDatasetLoader",
