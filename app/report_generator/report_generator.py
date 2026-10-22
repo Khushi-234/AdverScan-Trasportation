@@ -9,6 +9,7 @@ The actual file I/O is delegated to ReportWriter.
 from __future__ import annotations
 
 from datetime import datetime
+import random
 from typing import Any, Dict, List, Optional, Union
 import uuid
 
@@ -73,7 +74,21 @@ class ReportGenerator:
         report_id = f"RPT-{uuid.uuid4().hex[:8].upper()}"
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         if scan_id is None:
-            scan_id = f"SCAN-{uuid.uuid4().hex[:6].upper()}"
+            # Extract attack names from report_data to follow SCAN-{attack_name}-{number}
+            attack_names: List[str] = []
+            if report_data.attack_results:
+                attack_names = [str(k).strip() for k in report_data.attack_results.keys() if str(k).strip()]
+            elif report_data.vulnerability_metrics:
+                attack_names = [str(k).strip() for k in report_data.vulnerability_metrics.keys() if str(k).strip()]
+            elif report_data.before_vs_after:
+                attack_names = [str(k).strip() for k in report_data.before_vs_after.keys() if str(k).strip()]
+
+            random_num = f"{random.randint(100000, 999999)}"
+            if attack_names:
+                attack_segment = "_".join(a.upper() for a in attack_names)
+                scan_id = f"SCAN-{attack_segment}-{random_num}"
+            else:
+                scan_id = f"SCAN-{random_num}"
 
         # ── Scores & Risk ──────────────────────────────────────────────────────
         vuln_score = report_data.vulnerability_score
