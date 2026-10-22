@@ -89,12 +89,20 @@ class ReportWriter:
         out_dir.mkdir(parents=True, exist_ok=True)
 
         # ── File stem: adverscan_report_<attacks>_<scan_id_lower> ─────────────
-        # Built purely from the actual attack names in the result — no hardcoding.
-        # Preserves the insertion order of attacks as they were run.
+        # Built from the actual attack names in the result.
+        # Avoids duplicate repetitions when scan_suffix already contains attacks_segment.
         attack_names = list((result.attack_results or {}).keys())
         attacks_segment = "_".join(name.lower() for name in attack_names) if attack_names else "scan"
         scan_suffix = scan_id.lower().replace("-", "_")
-        stem = f"adverscan_report_{attacks_segment}_{scan_suffix}"
+
+        if attacks_segment == "scan":
+            stem = f"adverscan_report_{scan_suffix}"
+        elif attacks_segment in scan_suffix:
+            # e.g., scan_id="SCAN-FGSM-123456" -> scan_suffix="scan_fgsm_123456" -> "fgsm_123456"
+            file_suffix = scan_suffix[5:] if scan_suffix.startswith("scan_") else scan_suffix
+            stem = f"adverscan_report_{file_suffix}"
+        else:
+            stem = f"adverscan_report_{attacks_segment}_{scan_suffix}"
 
         written: Dict[str, str] = {}
 
