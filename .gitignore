@@ -47,6 +47,7 @@ results/*
 !results/.gitkeep
 !reports/.gitkeep
 reports/*
+data/*
 
 # IDEs and Editors
 .vscode/
