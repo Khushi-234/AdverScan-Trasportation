@@ -220,7 +220,7 @@ def parse_args():
         "--samples",
         type=str,
         default="100",
-        help="Number of samples to evaluate (e.g. 100, 500, or 'all'/'full')",
+        help="Number of samples to evaluate ('full'/'0' for full dataset, 'half' for 50%%, or custom integer like 100)",
     )
     parser.add_argument(
         "--attacks",
@@ -337,6 +337,95 @@ def prompt_domain_selection() -> str:
         print("  ❌ Invalid choice. Please enter 1, 2, 3, 4, or 5.")
 
 
+# =====================================================================
+# Known Dataset Sample Counts & Total Sample Inspector
+# =====================================================================
+KNOWN_DATASET_SAMPLE_COUNTS: Dict[str, int] = {
+    "bazyl/gtsrb": 12630,
+    "gtsrb": 12630,
+    "miladfa7/intel-image-classification": 3000,
+    "puneet6060/intel-image-classification": 3000,
+    "intel-image-classification": 3000,
+    "uoft-cs/cifar10": 10000,
+    "cifar10": 10000,
+    "imagenet-1k": 50000,
+    "imagenet": 50000,
+    "sst2": 872,
+    "glue/sst2": 872,
+    "imdb": 25000,
+    "ag_news": 7600,
+    "cardiffnlp/tweet_eval": 12284,
+    "tweet_eval": 12284,
+    "adult_census": 250,
+    "credit_fraud": 250,
+    "time_series_ecg": 200,
+    "time_series_classification": 200,
+}
+
+
+def get_dataset_total_samples(
+    domain: str,
+    dataset_name: str,
+    model_id: Optional[str] = None,
+) -> Optional[int]:
+    """
+    Inspect local dataset file or lookup known dataset to determine total samples available.
+    Supports CSV/TSV, PT/PTH tensors, NPZ/NPY files, and known benchmark datasets.
+    """
+    domain_clean = domain.lower().replace("_", "-")
+    resolved_file: Optional[str] = None
+
+    if domain_clean == "tabular":
+        resolved_file = resolve_dataset_file(dataset_name, [".csv", ".tsv"], model_identifier=model_id) or resolve_dataset_file(None, [".csv", ".tsv"], model_identifier=model_id)
+    elif domain_clean == "time-series":
+        resolved_file = resolve_dataset_file(dataset_name, [".pt", ".pth", ".npz", ".npy"], model_identifier=model_id) or resolve_dataset_file(None, [".pt", ".pth", ".npz"], model_identifier=model_id)
+
+    target_path = Path(resolved_file) if resolved_file else Path(dataset_name)
+
+    if target_path.is_file():
+        suffix = target_path.suffix.lower()
+        if suffix in (".csv", ".tsv"):
+            try:
+                with open(target_path, "r", encoding="utf-8", errors="ignore") as f:
+                    cnt = sum(1 for line in f if line.strip()) - 1
+                    if cnt > 0:
+                        return cnt
+            except Exception:
+                pass
+        elif suffix in (".pt", ".pth"):
+            try:
+                loaded = torch.load(target_path, map_location="cpu", weights_only=False)
+                if isinstance(loaded, dict):
+                    data = loaded.get("inputs", loaded.get("X", loaded.get("data")))
+                    if data is not None:
+                        return len(data)
+                elif isinstance(loaded, (tuple, list)) and len(loaded) > 0:
+                    return len(loaded[0])
+                elif hasattr(loaded, "__len__"):
+                    return len(loaded)
+            except Exception:
+                pass
+        elif suffix in (".npz", ".npy"):
+            try:
+                import numpy as np
+                arr = np.load(target_path)
+                if isinstance(arr, np.ndarray):
+                    return len(arr)
+                elif hasattr(arr, "files") and len(arr.files) > 0:
+                    return len(arr[arr.files[0]])
+            except Exception:
+                pass
+
+    ds_key = dataset_name.lower().strip()
+    if ds_key in KNOWN_DATASET_SAMPLE_COUNTS:
+        return KNOWN_DATASET_SAMPLE_COUNTS[ds_key]
+    for k, v in KNOWN_DATASET_SAMPLE_COUNTS.items():
+        if k in ds_key or ds_key in k:
+            return v
+
+    return None
+
+
 def prompt_model_selection(domain: str) -> Dict[str, Any]:
     """Prompt user to select a model registered in MODEL_PRESETS or provide a custom one."""
     domain_clean = domain.lower().replace("_", "-")
@@ -360,6 +449,20 @@ def prompt_model_selection(domain: str) -> Dict[str, Any]:
         m_id = preset.get("model_id")
         rec_data = preset.get("dataset_name", "N/A")
         p_dom = preset.get("data_domain", "").upper()
+        p_classes = preset.get("num_classes", 2)
+        p_task = preset.get("task_type", "classification").title()
+        p_fw = preset.get("framework", "PyTorch").upper()
+        p_proc = preset.get("processor_name", m_id)
+
+        # Dimension / Specs
+        specs = []
+        if "input_resolution" in preset:
+            specs.append(f"Input: {preset['input_resolution']}")
+        if "num_features" in preset:
+            specs.append(f"Features: {preset['num_features']}")
+        if "sequence_length" in preset:
+            specs.append(f"SeqLen: {preset['sequence_length']}, Channels: {preset.get('num_channels', 1)}")
+        specs_str = f" | {', '.join(specs)}" if specs else ""
 
         # Check if local dataset file exists on disk
         resolved_local = None
@@ -372,8 +475,10 @@ def prompt_model_selection(domain: str) -> Dict[str, Any]:
 
         print(f"  {idx}. {m_name}")
         print(f"     └─ Preset Key:       {p_key}")
-        print(f"     └─ Checkpoint / ID:  {m_id}")
-        print(f"     └─ Domain / Arch:    [{p_dom}] {m_arch}")
+        print(f"     └─ Model ID / Path:  {m_id}")
+        print(f"     └─ Architecture:     {m_arch} ({p_fw})")
+        print(f"     └─ Task & Classes:   {p_task} ({p_classes} classes){specs_str}")
+        print(f"     └─ Preprocessing:    {p_proc}")
         print(f"     └─ Default Dataset:  {data_desc}")
 
     opt_hf = len(domain_presets) + 1
@@ -471,19 +576,62 @@ def prompt_dataset_selection(domain: str, model_info: Dict[str, Any]) -> Tuple[s
         print(f"  • Resolved Local File on Disk:         '{resolved_file}'")
     user_ds = input(f"Enter Dataset identifier or file path [{recommended_dataset}]: ").strip() or recommended_dataset
 
+    # Detect total samples present in the dataset
+    total_samples = get_dataset_total_samples(domain, user_ds, model_id=model_id)
+    half_samples = (total_samples // 2) if total_samples else 50
+    default_sample = min(100, total_samples) if total_samples else 100
+
+    print("\nSelect Number of Samples to Evaluate:")
+    if total_samples is not None:
+        print(f"  Total samples present in dataset: {total_samples:,}")
+        print(f"  1. Full Dataset     ({total_samples:,} samples)")
+        print(f"  2. Half Dataset     ({half_samples:,} samples)")
+        print(f"  3. Custom Count     (write any custom number, e.g. 50, 100, 200)")
+    else:
+        print("  Total samples in dataset: Dynamic stream / Unknown")
+        print("  1. Full Dataset     (Evaluate entire test split)")
+        print("  2. Half Dataset     (Evaluate 50% split / 50 samples)")
+        print("  3. Custom Count     (write any custom number, e.g. 100)")
+
     while True:
-        samples_str = input("Number of samples to evaluate [100] (enter 'all' or '0' for full dataset): ").strip().lower() or "100"
-        if samples_str in ("0", "all", "full"):
-            sample_count = 0
+        prompt_text = f"Select sample option [1: Full, 2: Half, or write custom number] [{default_sample}]: "
+        samples_str = input(prompt_text).strip().lower() or str(default_sample)
+
+        if samples_str in ("1", "full", "all"):
+            sample_count = 0  # 0 indicates full dataset in AdverScan
+            total_disp = f"{total_samples:,}" if total_samples else "all"
+            print(f"  ✓ Selected: Full Dataset ({total_disp} samples)")
             break
-        try:
-            val = int(samples_str)
-            if val > 0:
-                sample_count = val
-                break
-            print("  ❌ Please enter a positive integer, or 'all'.")
-        except ValueError:
-            print("  ❌ Invalid number format. Try again.")
+        elif samples_str in ("2", "half"):
+            sample_count = half_samples
+            print(f"  ✓ Selected: Half Dataset ({half_samples:,} samples)")
+            break
+        elif samples_str == "3":
+            custom_in = input(f"Write custom number of samples [{default_sample}]: ").strip() or str(default_sample)
+            try:
+                val = int(custom_in)
+                if val > 0:
+                    sample_count = val
+                    print(f"  ✓ Selected: Custom count ({sample_count:,} samples)")
+                    break
+                print("  ❌ Please enter a positive integer.")
+            except ValueError:
+                print("  ❌ Invalid number format.")
+        else:
+            try:
+                val = int(samples_str)
+                if val == 0:
+                    sample_count = 0
+                    total_disp = f"{total_samples:,}" if total_samples else "all"
+                    print(f"  ✓ Selected: Full Dataset ({total_disp} samples)")
+                    break
+                elif val > 0:
+                    sample_count = val
+                    print(f"  ✓ Selected: {sample_count:,} samples")
+                    break
+                print("  ❌ Please enter a positive integer, '1' (Full), or '2' (Half).")
+            except ValueError:
+                print("  ❌ Invalid input. Enter '1' for Full, '2' for Half, or write a custom number.")
 
     return user_ds, sample_count
 
@@ -599,14 +747,21 @@ def prompt_pipeline_options() -> Dict[str, Any]:
 
 def print_configuration_summary(opts: Dict[str, Any]):
     """Print visually organized configuration summary before running."""
+    preset = opts.get("preset_info", {})
     print("\n" + "=" * 70)
     print("            ADVERSCAN MULTI-MODAL PIPELINE CONFIGURATION            ")
     print("=" * 70)
     print(f"Data Modality / Domain:     {opts['domain'].upper()}")
     print(f"Model Identifier:           {opts['model_id']}")
     print(f"Model Name:                 {opts['model_name']}")
-    print(f"Dataset Identifier:         {opts['dataset_name']}")
-    print(f"Evaluation Samples:         {'Full Dataset' if opts['samples'] == 0 else opts['samples']}")
+    if preset.get("model_type"):
+        print(f"Model Architecture:         {preset.get('model_type')}")
+    if preset.get("task_type"):
+        print(f"Task / Number of Classes:   {preset.get('task_type', '').title()} ({opts['num_classes']} classes)")
+    if opts.get("processor_name"):
+        print(f"Preprocessor / Config:      {opts['processor_name']}")
+    samples_display = "Full Dataset" if opts["samples"] == 0 else f"{opts['samples']:,}"
+    print(f"Evaluation Samples:         {samples_display}")
     print(f"Selected Attacks:           {', '.join(opts['attacks']).upper()}")
     print(f"Execution Mode:             {opts['mode'].upper()}")
     print(f"Target Device:              {opts['device'].upper()}")
@@ -791,8 +946,14 @@ def main():
             "output_dir": args.output_dir,
         }
     else:
-        # Resolve non-interactive CLI arguments matching MODEL_PRESETS
-        model_input = args.model or "bazyl/gtsrb-model"
+        domain = (args.domain or "image").lower().replace("_", "-")
+        default_models = {
+            "image": "bazyl/gtsrb-model",
+            "text": "distilbert/distilbert-base-uncased-finetuned-sst-2-english",
+            "time-series": "time-series-ecg-classifier",
+            "tabular": "tabular-mlp-adult-census",
+        }
+        model_input = args.model or default_models.get(domain, "bazyl/gtsrb-model")
         preset = None
         if model_input in MODEL_PRESETS:
             preset = {"preset_key": model_input, **MODEL_PRESETS[model_input]}
@@ -802,8 +963,8 @@ def main():
                     preset = {"preset_key": k, **v}
                     break
 
-        domain = args.domain or (preset.get("data_domain") if preset else "image")
-        domain = domain.lower().replace("_", "-")
+        if preset and not args.domain:
+            domain = str(preset.get("data_domain", "image")).lower().replace("_", "-")
         model_id = preset.get("model_id", model_input) if preset else model_input
         model_name = preset.get("name", Path(model_id).stem) if preset else Path(model_id).stem
 
@@ -819,7 +980,16 @@ def main():
                 dataset = resolved_ts
 
         samples_str = str(args.samples).lower()
-        samples_count = 0 if samples_str in ("0", "all", "full") else int(samples_str)
+        if samples_str in ("0", "all", "full"):
+            samples_count = 0
+        elif samples_str == "half":
+            total_s = get_dataset_total_samples(domain, dataset, model_id=model_id)
+            samples_count = (total_s // 2) if total_s else 50
+        else:
+            try:
+                samples_count = int(samples_str)
+            except ValueError:
+                samples_count = 100
 
         # Resolve attacks for domain if none given
         if args.attacks:
@@ -878,9 +1048,34 @@ def main():
         print(f"  ❌ Error initializing dataset loader: {e}")
         sys.exit(1)
 
+    # Prepare attack-specific configs if required (e.g. VAE for tabular manifold attacks)
+    attack_configs = {}
+    if opts["domain"] == "tabular" and any(a.lower() == "vae_attack" for a in opts["attacks"]):
+        class _SimpleTabularVAE(torch.nn.Module):
+            def __init__(self, num_features: int, latent_dim: int = 4):
+                super().__init__()
+                latent = max(2, min(latent_dim, num_features // 2))
+                self.encoder = torch.nn.Linear(num_features, latent)
+                self.decoder = torch.nn.Linear(latent, num_features)
+
+            def encode(self, x: torch.Tensor):
+                z = self.encoder(x)
+                return z, z
+
+            def decode(self, z: torch.Tensor):
+                return self.decoder(z)
+
+        n_feats = sample_input.shape[-1] if hasattr(sample_input, "shape") else 30
+        fallback_vae = _SimpleTabularVAE(num_features=n_feats).to(opts["device"])
+        attack_configs["vae_attack"] = {
+            "epsilon": 0.5,
+            "params": {"vae": fallback_vae, "num_steps": 5, "alpha": 0.05},
+        }
+
     # 2. Build PipelineConfig
     print(f"[2/3] Configuring AdverScan Pipeline (Mode: {opts['mode'].upper()})...")
     pipeline_config = PipelineConfig(
+        attack_configs=attack_configs,
         model_path=opts["model_id"],
         sample_input=sample_input,
         device=opts["device"],
@@ -922,6 +1117,41 @@ def main():
     print(f"Target Modality / Domain:  {opts['domain'].upper()}")
     print(f"Evaluated Model:           {opts['model_name']} ({opts['model_id']})")
     print(f"Evaluated Dataset:         {opts['dataset_name']}")
+
+    # M1 — Ingested Model Specifications & Parameter Details
+    print("\n" + "-" * 70)
+    print("M1 — MODEL SPECIFICATIONS & PARAMETERS")
+    print("-" * 70)
+    meta = result.model_metadata or {}
+    print(f"  • Model Identifier:        {meta.get('model_name') or opts['model_name']} ({opts['model_id']})")
+    if meta.get("model_architecture"):
+        print(f"  • Architecture:            {meta.get('model_architecture')}")
+    total_p = meta.get("total_parameters")
+    if total_p is not None:
+        train_p = meta.get("trainable_parameters") if meta.get("trainable_parameters") is not None else total_p
+        train_pct = (train_p / total_p * 100) if total_p > 0 else 100.0
+        print(f"  • Total Parameters:        {total_p:,} (~{total_p / 1e6:.2f}M)")
+        print(f"  • Trainable Parameters:    {train_p:,} ({train_pct:.1f}%)")
+        print(f"  • Estimated Model Size:    ~{total_p * 4 / (1024 * 1024):.1f} MB (FP32)")
+    if meta.get("input_shape"):
+        print(f"  • Input Shape:             {meta.get('input_shape')}")
+    if meta.get("num_classes"):
+        print(f"  • Total Classes:           {meta.get('num_classes')}")
+    if meta.get("task_type"):
+        print(f"  • Task Type:               {meta.get('task_type')}")
+    if meta.get("framework"):
+        print(f"  • Ingestion Framework:     {meta.get('framework')}")
+    print(f"  • Execution Device:        {meta.get('device') or opts['device']}")
+
+    # Dataset & Evaluation Details
+    print("\n" + "-" * 70)
+    print("DATASET & EVALUATION DETAILS")
+    print("-" * 70)
+    print(f"  • Dataset Identifier:      {opts['dataset_name']}")
+    print(f"  • Target Domain:           {opts['domain'].upper()}")
+    samples_disp = f"{opts['samples']:,}" if opts['samples'] > 0 else "Full Dataset"
+    print(f"  • Evaluated Samples:       {samples_disp}")
+    print(f"  • Evaluation Batch Size:   {opts['batch_size']}")
 
     # Clean Baseline Results
     print("\n" + "-" * 70)
