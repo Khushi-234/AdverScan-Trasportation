@@ -5,6 +5,7 @@ Central AdverScanOrchestrator coordinator module for Module 8 (Orchestration).
 from app.report_generator import ReportWriter
 from datetime import datetime
 import time
+from collections.abc import Mapping
 from typing import Any, Dict, List, Optional
 import numpy as np
 import torch
@@ -271,14 +272,35 @@ class AdverScanOrchestrator:
                     last_metadata = atk_res_b.metadata
 
                 # Combine per-batch results across the full dataset
-                if isinstance(batch_adv_list[0], torch.Tensor):
-                    combined_orig = torch.cat(batch_orig_list, dim=0)
-                    combined_adv = torch.cat(batch_adv_list, dim=0)
-                    combined_labels = torch.cat(batch_labels_list, dim=0)
-                else:
-                    combined_orig = np.concatenate(batch_orig_list, axis=0)
-                    combined_adv = np.concatenate(batch_adv_list, axis=0)
-                    combined_labels = np.concatenate(batch_labels_list, axis=0)
+                def _combine_batches(batch_list):
+                    if not batch_list:
+                        return None
+                    first = batch_list[0]
+                    if isinstance(first, torch.Tensor):
+                        return torch.cat(batch_list, dim=0)
+                    if isinstance(first, (dict, Mapping)):
+                        combined = {}
+                        for k in first.keys():
+                            vals = [b[k] for b in batch_list if isinstance(b, (dict, Mapping)) and k in b and b[k] is not None]
+                            if vals:
+                                if isinstance(vals[0], torch.Tensor):
+                                    combined[k] = torch.cat(vals, dim=0)
+                                elif isinstance(vals[0], np.ndarray):
+                                    combined[k] = np.concatenate(vals, axis=0)
+                                elif isinstance(vals[0], list):
+                                    combined[k] = [item for sub in vals for item in sub]
+                                else:
+                                    combined[k] = vals[0]
+                        return combined
+                    if isinstance(first, list):
+                        return [item for sub in batch_list for item in sub]
+                    if isinstance(first, np.ndarray):
+                        return np.concatenate(batch_list, axis=0)
+                    return batch_list
+
+                combined_orig = _combine_batches(batch_orig_list)
+                combined_adv = _combine_batches(batch_adv_list)
+                combined_labels = _combine_batches(batch_labels_list)
 
                 combined_metadata = AttackMetadata(
                     name=attack_name,
@@ -304,7 +326,7 @@ class AdverScanOrchestrator:
                 }
                 print(f" Done ({time.time() - atk_start:.2f}s)")
             except Exception as e:
-                print(f" Failed ({time.time() - atk_start:.2f}s)")
+                print(f" Failed ({time.time() - atk_start:.2f}s) — [{type(e).__name__}]: {e}")
                 result.status = "PARTIAL_SUCCESS"
                 failure_registry.register_exception(
                     e, module="M3_attack_engine", operation=f"run_attack_{attack_name}", attack_name=attack_name, recoverable=True
@@ -375,7 +397,7 @@ class AdverScanOrchestrator:
             print(f" Done ({time.time() - step_start:.2f}s)")
         except Exception as e:
             module_timings["M5_vulnerability_analysis"] = round(time.time() - step_start, 4)
-            print(f" Failed ({time.time() - step_start:.2f}s)")
+            print(f" Failed ({time.time() - step_start:.2f}s) — [{type(e).__name__}]: {e}")
             result.status = "PARTIAL_SUCCESS"
             failure_registry.register_exception(
                 e, module="M5_vulnerability_analysis", operation="analyze_pipeline", recoverable=True

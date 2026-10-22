@@ -32,6 +32,7 @@ models/*
 results/*
 !results/.gitkeep
 reports/*
+data/*
 
 # IDEs and Editors
 .vscode/
