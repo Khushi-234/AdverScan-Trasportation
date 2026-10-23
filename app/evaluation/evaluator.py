@@ -2,10 +2,9 @@
 Baseline evaluator engine for executing clean baseline evaluations in AdverScan.
 """
 
-from ast import List
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Optional, Union
+from typing import Any, List, Optional, Union
 import numpy as np
 import torch
 
@@ -84,7 +83,7 @@ class BaselineEvaluator:
         batch_iter = self.dataset_loader.iterate_batches()
         if show_progress:
             try:
-                from tqdm import tqdm
+                from tqdm import tqdm  # type: ignore[import-untyped]
                 batch_iter = tqdm(
                     batch_iter,
                     total=total_batches,
@@ -134,9 +133,16 @@ class BaselineEvaluator:
                 if torch.cuda.is_available():
                     torch.cuda.empty_cache()
 
+        if self.num_classes is None:
+            if all_targets:
+                self.num_classes = int(max(all_targets)) + 1
+            else:
+                self.num_classes = 2
+        num_classes_int = int(self.num_classes)
+
         y_true = np.array(all_targets, dtype=np.int64)
         y_pred = np.array(all_preds, dtype=np.int64)
-        y_probs = np.concatenate(all_probs_list, axis=0) if all_probs_list else np.empty((0, self.num_classes))
+        y_probs = np.concatenate(all_probs_list, axis=0) if all_probs_list else np.empty((0, num_classes_int))
         sample_confidences = np.max(y_probs, axis=-1).tolist() if len(y_probs) > 0 else []
 
         # Compute classification, confidence, entropy, and confusion matrix metrics
@@ -144,7 +150,7 @@ class BaselineEvaluator:
             y_true=y_true,
             y_pred=y_pred,
             y_probs=y_probs,
-            num_classes=self.num_classes,
+            num_classes=num_classes_int,
         )
 
         device_str = str(getattr(self.adapter, "device", "cpu"))
@@ -189,7 +195,7 @@ class BaselineEvaluator:
             dataset_name=self.dataset_loader.dataset_name,
             model_name=self.model_name,
             num_samples=len(y_true),
-            num_classes=self.num_classes,
+            num_classes=num_classes_int,
             accuracy=metrics["accuracy"],
             precision_macro=metrics["precision_macro"],
             recall_macro=metrics["recall_macro"],
