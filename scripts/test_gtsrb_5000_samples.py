@@ -13,7 +13,7 @@ from huggingface_hub import hf_hub_download
 from transformers import AutoModelForImageClassification, ViTConfig
 
 from app.ingestion import ingest_model
-from app.evaluation.dataset_loader import GTSRBDatasetLoader
+from app.evaluation.dataset_loader import HFVisionDatasetLoader
 from app.evaluation.evaluator import BaselineEvaluator
 from app.utils import get_execution_device_info, load_gtsrb_vit_model
 
@@ -68,7 +68,7 @@ def main():
 
     # 3. Initialize GTSRB dataset loader for exactly 5,000 samples from test split
     print(f"\n[2/3] Loading dataset split 'test[:{num_samples_target}]' from '{dataset_name}' ...")
-    loader = GTSRBDatasetLoader(
+    loader = HFVisionDatasetLoader(
         dataset_name=dataset_name,
         processor_name=model_name,
         split=f"test[:{num_samples_target}]",

@@ -16,7 +16,7 @@ from huggingface_hub import hf_hub_download
 from transformers import AutoModelForImageClassification, ViTConfig
 
 from app.ingestion import ingest_model
-from app.evaluation.dataset_loader import GTSRBDatasetLoader
+from app.evaluation.dataset_loader import HFVisionDatasetLoader
 from app.evaluation.metrics import MetricsCalculator
 from app.attack_engine import execute_attack, AttackConfig, get_attack
 from app.utils import get_execution_device_info, load_gtsrb_vit_model
@@ -87,7 +87,7 @@ def main():
     # 3. Load dataset split
     split_str = f"test[:{args.samples}]" if args.samples > 0 else "test"
     print(f"\n[2/3] Loading dataset split '{split_str}' from '{dataset_name}' ...")
-    loader = GTSRBDatasetLoader(
+    loader = HFVisionDatasetLoader(
         dataset_name=dataset_name,
         processor_name=model_name,
         split=split_str,

@@ -237,3 +237,41 @@ def test_report_writer(tmp_path):
     assert "module_id" in csv_text
     assert "M1" in csv_text
     assert "M2_baseline" in csv_text
+
+
+def test_report_naming_convention(tmp_path):
+    """Test that report naming convention generates SCAN-{attack_name}-{number}."""
+    import re
+    from pathlib import Path
+
+    # 1. Single attack
+    data_single = ReportData(
+        model_info={"model_name": "SingleModel"},
+        attack_results={"fgsm": {"evaluation": {"metrics": {}}}},
+    )
+    generator = ReportGenerator()
+    res_single = generator.generate(data_single)
+    assert re.match(r"^SCAN-FGSM-\d{6}$", res_single.scan_id)
+
+    # 2. Multiple attacks
+    data_multi = ReportData(
+        model_info={"model_name": "MultiModel"},
+        attack_results={
+            "fgsm": {"evaluation": {"metrics": {}}},
+            "pgd": {"evaluation": {"metrics": {}}},
+        },
+    )
+    res_multi = generator.generate(data_multi)
+    assert re.match(r"^SCAN-FGSM_PGD-\d{6}$", res_multi.scan_id)
+
+    # 3. Directory and file naming through ReportWriter
+    writer = ReportWriter(output_root=tmp_path / "reports")
+    written = writer.write(res_single, formats=["md", "json"])
+
+    md_path = Path(written["md"])
+    # Folder name must be SCAN-FGSM-{number}
+    assert md_path.parent.name == res_single.scan_id
+    # File name must be adverscan_report_fgsm_{number}.md
+    num = res_single.scan_id.split("-")[-1]
+    assert md_path.name == f"adverscan_report_fgsm_{num}.md"
+

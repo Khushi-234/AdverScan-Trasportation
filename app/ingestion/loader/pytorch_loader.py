@@ -58,14 +58,34 @@ class PyTorchLoader(BaseModelLoader):
             except Exception:
                 pass  # Fallback to standard torch.load
 
-            # Load using torch.load handling PyTorch 2.6+ weights_only behavior
-            if "weights_only" not in kwargs:
+            # Support safetensors format directly and safely
+            if path.suffix.lower() == ".safetensors":
                 try:
-                    loaded_obj = torch.load(str(path), map_location=map_location, weights_only=False, **kwargs)
-                except TypeError:
-                    loaded_obj = torch.load(str(path), map_location=map_location, **kwargs)
+                    from safetensors.torch import load_file
+                    loaded_obj = load_file(str(path), device=str(map_location))
+                except ImportError:
+                    raise ModelLoadError("safetensors package is required to load .safetensors models.")
             else:
-                loaded_obj = torch.load(str(path), map_location=map_location, **kwargs)
+                # Security boundary: prefer weights_only=True
+                unsafe_allow_pickle = kwargs.pop("unsafe_allow_pickle", None)
+                safe_mode = kwargs.pop("safe_mode", False)
+
+                if "weights_only" in kwargs:
+                    loaded_obj = torch.load(str(path), map_location=map_location, **kwargs)
+                else:
+                    try:
+                        loaded_obj = torch.load(str(path), map_location=map_location, weights_only=True, **kwargs)
+                    except Exception as e:
+                        # If weights_only failed because it contains full pickled classes
+                        if safe_mode or unsafe_allow_pickle is False:
+                            from app.ingestion.exceptions import UnsafeModelError
+                            raise UnsafeModelError(
+                                f"Security risk: Refusing unsafe pickle deserialization from '{path}'. "
+                                f"Checkpoint contains non-weight objects that cannot be loaded safely. "
+                                f"Pass `unsafe_allow_pickle=True` if you trust this source."
+                            ) from e
+                        # Fallback for full serialized nn.Module checkpoints with warning
+                        loaded_obj = torch.load(str(path), map_location=map_location, weights_only=False, **kwargs)
 
             # Case 2: loaded_obj is an nn.Module instance
             if isinstance(loaded_obj, nn.Module):
@@ -76,7 +96,9 @@ class PyTorchLoader(BaseModelLoader):
             if isinstance(loaded_obj, dict):
                 if model_class is None:
                     raise ModelLoadError(
-                        f"Loaded state_dict from {path}, but no model_class or model structure was provided."
+                        "State dictionary detected, but the model architecture could not be determined: "
+                        "no model_class or model structure was provided. "
+                        "Please provide the model class or architecture configuration."
                     )
                 
                 # Instantiate model if model_class is a class, or use instance if already instantiated

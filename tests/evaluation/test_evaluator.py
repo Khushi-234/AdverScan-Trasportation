@@ -130,3 +130,45 @@ def test_baseline_evaluator_invalid_adapter():
             dataset_loader=loader,  # type: ignore[arg-type]
         )
 
+
+def test_baseline_evaluator_auto_inferred_num_classes():
+    """Test generalized BaselineEvaluator with auto-inferred num_classes for non-GTSRB models."""
+    class Custom6ClassModel(nn.Module):
+        def forward(self, x):
+            return torch.randn(len(x), 6)
+
+    class CustomAdapter(BaseModelAdapter):
+        def __init__(self):
+            self._model = Custom6ClassModel()
+        def predict(self, inputs: Any, return_numpy: bool = False) -> Any:
+            return self._model(inputs)
+        def get_model(self) -> Any:
+            return self._model
+        def to(self, device: Any) -> "CustomAdapter":
+            return self
+        def eval(self) -> "CustomAdapter":
+            return self
+        def train(self, mode: bool = True) -> "CustomAdapter":
+            return self
+        def __call__(self, *args: Any, **kwargs: Any) -> Any:
+            return self._model(*args, **kwargs)
+
+    adapter = CustomAdapter()
+    loader = MockDatasetLoader(batch_size=4, num_samples=8)
+    loader.dataset_name = "puneet6060/intel-image-classification"
+
+    evaluator = BaselineEvaluator(
+        adapter=adapter,
+        dataset_loader=loader,  # type: ignore[arg-type]
+        num_classes=None,  # Should auto-infer 6 classes
+        model_name="IntelImage_ViT",
+    )
+
+    result = evaluator.evaluate(output_dir=None)
+
+    assert result.num_classes == 6
+    assert result.dataset_name == "puneet6060/intel-image-classification"
+    assert len(result.confusion_matrix) == 6
+    assert len(result.confusion_matrix[0]) == 6
+
+

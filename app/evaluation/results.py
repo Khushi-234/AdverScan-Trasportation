@@ -32,6 +32,10 @@ class EvaluationResult:
     batch_size: int = 32
     device: str = "cpu"
     timestamp: Optional[str] = None
+    total_parameters: Optional[int] = None
+    trainable_parameters: Optional[int] = None
+    model_architecture: Optional[str] = None
+    class_names: Optional[List[str]] = None
     extra_metadata: Dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> Dict[str, Any]:
@@ -54,28 +58,33 @@ class EvaluationResult:
         """
         try:
             import mlflow
-            if mlflow.active_run() is None:
-                return False
-
-            mlflow.log_params({
-                "dataset_name": self.dataset_name,
-                "model_name": self.model_name,
-                "num_samples": self.num_samples,
-                "num_classes": self.num_classes,
-                "batch_size": self.batch_size,
-                "device": self.device,
-            })
-            mlflow.log_metrics({
-                "accuracy": self.accuracy,
-                "precision_macro": self.precision_macro,
-                "recall_macro": self.recall_macro,
-                "f1_macro": self.f1_macro,
-                "precision_weighted": self.precision_weighted,
-                "recall_weighted": self.recall_weighted,
-                "f1_weighted": self.f1_weighted,
-                "average_confidence": self.average_confidence,
-                "average_entropy": self.average_entropy,
-            })
+            with mlflow.start_run(run_name=run_name or f"baseline_{self.model_name}"):
+                params = {
+                    "dataset_name": self.dataset_name,
+                    "model_name": self.model_name,
+                    "num_samples": self.num_samples,
+                    "num_classes": self.num_classes,
+                    "batch_size": self.batch_size,
+                    "device": self.device,
+                }
+                if self.total_parameters is not None:
+                    params["total_parameters"] = self.total_parameters
+                if self.trainable_parameters is not None:
+                    params["trainable_parameters"] = self.trainable_parameters
+                if self.model_architecture is not None:
+                    params["model_architecture"] = self.model_architecture
+                mlflow.log_params(params)
+                mlflow.log_metrics({
+                    "accuracy": self.accuracy,
+                    "precision_macro": self.precision_macro,
+                    "recall_macro": self.recall_macro,
+                    "f1_macro": self.f1_macro,
+                    "precision_weighted": self.precision_weighted,
+                    "recall_weighted": self.recall_weighted,
+                    "f1_weighted": self.f1_weighted,
+                    "average_confidence": self.average_confidence,
+                    "average_entropy": self.average_entropy,
+                })
             return True
         except Exception:
             return False

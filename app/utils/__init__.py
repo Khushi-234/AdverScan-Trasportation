@@ -1,4 +1,11 @@
 """
+Application utilities for AdverScan.
+"""
+
+from app.utils.device_manager import DeviceManager
+
+__all__ = ["DeviceManager"]
+"""
 AdverScan Utilities Module.
 Provides centralized hardware device resolution, reproducibility management, model patch loading, and helper routines.
 """

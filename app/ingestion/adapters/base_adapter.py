@@ -3,7 +3,20 @@ Base adapter interface for standardized model interactions in AdverScan.
 """
 
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
 from typing import Any, Union
+
+
+@dataclass
+class AdapterCapabilities:
+    """
+    Operational and analytical capabilities of a model adapter.
+    Exposes gradient, prediction, batching, and logits support for attack compatibility.
+    """
+    supports_gradients: bool = False
+    supports_predict: bool = True
+    supports_batch_predict: bool = True
+    supports_logits: bool = True
 
 
 class BaseModelAdapter(ABC):
@@ -12,18 +25,65 @@ class BaseModelAdapter(ABC):
     for attack, vulnerability assessment, scoring, and hardening engines.
     """
 
+    @property
+    def capabilities(self) -> AdapterCapabilities:
+        """
+        Return the operational capabilities of this adapter.
+        Default base implementation assumes standard prediction without gradients.
+        """
+        return AdapterCapabilities(
+            supports_gradients=False,
+            supports_predict=True,
+            supports_batch_predict=True,
+            supports_logits=True,
+        )
+
+    def get_capabilities(self) -> AdapterCapabilities:
+        """Return the operational capabilities of this adapter."""
+        return self.capabilities
+
     @abstractmethod
-    def predict(self, inputs: Any) -> Any:
+    def predict(self, inputs: Any, **kwargs: Any) -> Any:
         """
         Perform model prediction on inputs.
 
         Args:
             inputs: Input data (e.g. tensors, numpy arrays, or batches).
+            **kwargs: Extra prediction parameters.
 
         Returns:
             Model outputs / predictions / logits.
         """
         pass
+
+    def predict_batch(self, inputs: Any, **kwargs: Any) -> Any:
+        """
+        Perform batch prediction on inputs. Default implementation delegates to predict.
+
+        Args:
+            inputs: Batch of input data.
+            **kwargs: Extra prediction parameters.
+
+        Returns:
+            Batch model outputs or logits.
+        """
+        return self.predict(inputs, **kwargs)
+
+    def get_logits(self, inputs: Any, **kwargs: Any) -> Any:
+        """
+        Compute and return raw unnormalized model logits. Default implementation delegates to predict.
+
+        Args:
+            inputs: Model inputs.
+            **kwargs: Extra inference parameters.
+
+        Returns:
+            Logits tensor or array.
+        """
+        outputs = self.predict(inputs, **kwargs)
+        return getattr(outputs, "logits", outputs)
+
+
 
     @abstractmethod
     def get_model(self) -> Any:
