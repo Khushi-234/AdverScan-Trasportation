@@ -2,7 +2,8 @@
 PyTorch adapter implementation for standardizing PyTorch models.
 """
 
-from typing import Any, Optional, Union
+from collections.abc import Mapping
+from typing import Any, Dict, Optional, Union
 import numpy as np
 import torch
 import torch.nn as nn
@@ -72,17 +73,29 @@ class PyTorchAdapter(BaseModelAdapter):
         self._model.train(mode)
         return self
 
-    def _prepare_tensor_input(self, inputs: Any) -> torch.Tensor:
+    def _prepare_tensor_input(self, inputs: Any) -> Union[torch.Tensor, Dict[str, torch.Tensor]]:
         """Utility to convert input data to PyTorch Tensor on target device."""
         if self.processor is not None and not isinstance(inputs, torch.Tensor):
             try:
                 processed = self.processor(inputs)
                 if isinstance(processed, torch.Tensor):
                     return processed.to(self._device)
+                elif isinstance(processed, Mapping) or hasattr(processed, "items"):
+                    return {
+                        k: (v.to(self._device) if isinstance(v, torch.Tensor) else v)
+                        for k, v in processed.items()
+                    }
             except Exception:
                 pass
 
-        if isinstance(inputs, torch.Tensor):
+        if isinstance(inputs, Mapping) or hasattr(inputs, "items"):
+            if inputs and all(isinstance(v, (torch.Tensor, np.ndarray)) for v in inputs.values()):
+                return {
+                    k: (v.to(self._device) if isinstance(v, torch.Tensor) else torch.from_numpy(v).to(self._device))
+                    for k, v in inputs.items()
+                }
+            raise TypeError(f"Unsupported input type for PyTorchAdapter: {type(inputs)}")
+        elif isinstance(inputs, torch.Tensor):
             return inputs.to(self._device)
         elif isinstance(inputs, np.ndarray):
             return torch.from_numpy(inputs).to(self._device)
@@ -99,7 +112,7 @@ class PyTorchAdapter(BaseModelAdapter):
         Perform forward inference on input data.
 
         Args:
-            inputs: Tensor, numpy array, or list/tuple of inputs.
+            inputs: Tensor, numpy array, dictionary, or list/tuple of inputs.
             return_numpy: If True, returns predictions as numpy array.
             **kwargs: Extra parameters.
 
@@ -109,8 +122,17 @@ class PyTorchAdapter(BaseModelAdapter):
         self._model.eval()
         tensor_input = self._prepare_tensor_input(inputs)
         with torch.no_grad():
-            outputs = self._model(tensor_input)
+            if isinstance(tensor_input, (dict, Mapping)):
+                try:
+                    outputs = self._model(**tensor_input, **kwargs)
+                except TypeError:
+                    outputs = self._model(tensor_input, **kwargs)
+            else:
+                outputs = self._model(tensor_input, **kwargs)
             logits = outputs.logits if hasattr(outputs, "logits") else outputs
+
+        if hasattr(logits, "logits"):
+            logits = logits.logits
 
         if return_numpy:
             return logits.cpu().numpy()
@@ -146,8 +168,17 @@ class PyTorchAdapter(BaseModelAdapter):
         self._model.eval()
         tensor_input = self._prepare_tensor_input(inputs)
         with torch.no_grad():
-            outputs = self._model(tensor_input)
+            if isinstance(tensor_input, (dict, Mapping)):
+                try:
+                    outputs = self._model(**tensor_input, **kwargs)
+                except TypeError:
+                    outputs = self._model(tensor_input, **kwargs)
+            else:
+                outputs = self._model(tensor_input, **kwargs)
             logits = outputs.logits if hasattr(outputs, "logits") else outputs
+
+        if hasattr(logits, "logits"):
+            logits = logits.logits
 
         if return_numpy:
             return logits.cpu().numpy()
@@ -159,8 +190,13 @@ class PyTorchAdapter(BaseModelAdapter):
         Forward call passing inputs to the model.
         Converts first positional input if appropriate, maintaining gradient context if required.
         """
-        if args and isinstance(args[0], (torch.Tensor, np.ndarray, list, tuple)):
+        if args and isinstance(args[0], (torch.Tensor, np.ndarray, list, tuple, dict, Mapping)):
             prepared_first = self._prepare_tensor_input(args[0])
+            if isinstance(prepared_first, (dict, Mapping)):
+                try:
+                    return self._model(**prepared_first, **kwargs)
+                except TypeError:
+                    pass
             new_args = (prepared_first, *args[1:])
             return self._model(*new_args, **kwargs)
         return self._model(*args, **kwargs)
