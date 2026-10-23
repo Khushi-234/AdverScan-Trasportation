@@ -144,6 +144,7 @@ class AdverScanOrchestrator:
         except Exception as e:
             module_timings["M1_ingestion"] = round(time.time() - step_start, 4)
             print(f" Failed ({time.time() - step_start:.2f}s)")
+            print(f"  ❌ [{type(e).__name__}] {e}")
             result.status = "FAILED"
             failure_registry.register_exception(
                 e, module="M1_ingestion", operation="ingest_model", recoverable=False
@@ -358,7 +359,7 @@ class AdverScanOrchestrator:
                     if isinstance(first, torch.Tensor):
                         return _concat_tensors(batch_list, pad_value=pad_token_id)
                     if isinstance(first, (dict, Mapping)):
-                        combined = {}
+                        combined: Dict[Any, Any] = {}
                         for k in first.keys():
                             vals = [b[k] for b in batch_list if isinstance(b, (dict, Mapping)) and k in b and b[k] is not None]
                             if vals:
@@ -563,7 +564,7 @@ class AdverScanOrchestrator:
 
                 # Evaluation function closure for empirical candidate defense testing
                 def eval_fn(candidate_model: Any) -> Dict[str, Any]:
-                    cand_adapter = PyTorchAdapter(candidate_model, device=config.device)
+                    cand_adapter = PyTorchAdapter(candidate_model, device=config.device or "cpu")
                     # Clean accuracy baseline
                     cand_evaluator = BaselineEvaluator(
                         adapter=cand_adapter,
@@ -637,7 +638,8 @@ class AdverScanOrchestrator:
                         if att.clean_accuracy_before is not None and att.clean_accuracy_after is not None:
                             print(f"      - Clean Accuracy:           {att.clean_accuracy_before*100:.2f}% ➔ {att.clean_accuracy_after*100:.2f}% (Drop: {att.clean_accuracy_drop_pct_points:.2f}%)")
                         if att.asr_before is not None and att.asr_after is not None:
-                            print(f"      - Attack Success Rate (ASR): {att.asr_before*100:.2f}% ➔ {att.asr_after*100:.2f}% (Reduction: {att.asr_reduction*100:.2f}%)")
+                            reduc_str = f" (Reduction: {att.asr_reduction*100:.2f}%)" if att.asr_reduction is not None else ""
+                            print(f"      - Attack Success Rate (ASR): {att.asr_before*100:.2f}% ➔ {att.asr_after*100:.2f}%{reduc_str}")
 
                         print(f"      - Evaluation Detail:        {att.reason}")
 
@@ -692,7 +694,7 @@ class AdverScanOrchestrator:
                     before_attack_results=result.attack_results,
                     num_classes=config.num_classes,
                     model_name=config.model_name,
-                    device=config.device,
+                    device=config.device or "cpu",
                     batch_size=config.batch_size,
                 )
                 result.retest_results = retest_res_obj.to_dict()

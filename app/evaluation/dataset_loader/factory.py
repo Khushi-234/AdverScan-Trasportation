@@ -88,7 +88,7 @@ def get_dataset_loader(
     Supports data_domain: 'image'/'vision', 'text'/'nlp', 'time_series'/'timeseries'/'sequence',
     'tabular'/'csv'/'table', 'generic'/'custom'.
     """
-    domain_clean = str(data_domain).strip().lower().replace("-", "_")
+    domain_clean = data_domain.strip().lower().replace("-", "_")
 
     if domain_clean in ("image", "vision"):
         return HFVisionDatasetLoader(
@@ -99,8 +99,13 @@ def get_dataset_loader(
             **kwargs,
         )
     elif domain_clean in ("text", "nlp"):
+        candidate_id = kwargs.get("data") or dataset_name
+        resolved_file = resolve_dataset_file(
+            candidate_id, [".txt", ".csv", ".tsv", ".json", ".jsonl"]
+        )
+        target_name = resolved_file or dataset_name
         return HFTextDatasetLoader(
-            dataset_name=dataset_name,
+            dataset_name=target_name,
             tokenizer_name=processor_name,
             split=split,
             batch_size=batch_size,
@@ -110,25 +115,21 @@ def get_dataset_loader(
         inputs = kwargs.get("inputs")
         targets = kwargs.get("targets")
 
-        if inputs is None or targets is None:
-            # Dynamically resolve file from data arg or dataset_name without hardcoded names
+        if inputs is None:
+            # Dynamically resolve file from data arg or dataset_name
             candidate_id = kwargs.get("data") or dataset_name
             model_id = kwargs.get("model_name") or kwargs.get("model_id")
             resolved_file = resolve_dataset_file(
-                candidate_id, [".pt", ".pth", ".npz", ".npy"], model_identifier=model_id
+                candidate_id,
+                [".pt", ".pth", ".npz", ".npy", ".csv", ".tsv", ".parquet"],
+                model_identifier=model_id,
             )
             if resolved_file:
-                import torch
-                loaded = torch.load(resolved_file, map_location="cpu", weights_only=False)
-                if isinstance(loaded, dict):
-                    inputs = loaded.get("inputs", loaded.get("X"))
-                    targets = loaded.get("targets", loaded.get("y"))
-                elif isinstance(loaded, tuple) and len(loaded) == 2:
-                    inputs, targets = loaded
+                inputs = resolved_file
 
-        if inputs is None or targets is None:
+        if inputs is None:
             raise ValueError(
-                "TimeSeriesDatasetLoader requires both 'inputs' and 'targets' keyword arguments."
+                f"TimeSeriesDatasetLoader requires 'inputs' and 'targets' keyword arguments or a resolvable time-series file for '{dataset_name}'."
             )
         return TimeSeriesDatasetLoader(
             inputs=inputs,
@@ -139,15 +140,18 @@ def get_dataset_loader(
     elif domain_clean in ("tabular", "csv", "table"):
         data_source = kwargs.get("data")
         if data_source is None:
-            # Dynamically resolve dataset file without hardcoded names
+            # Dynamically resolve dataset file across all supported tabular formats
             model_id = kwargs.get("model_name") or kwargs.get("model_id")
             data_source = resolve_dataset_file(
-                dataset_name, [".csv", ".tsv"], model_identifier=model_id
+                dataset_name,
+                [".csv", ".tsv", ".parquet", ".xlsx", ".json", ".jsonl"],
+                model_identifier=model_id,
             )
 
         if data_source is None:
             raise ValueError(
-                "TabularDatasetLoader requires 'data' keyword argument (file path or (X, y) tuple)."
+                f"TabularDatasetLoader requires 'data' keyword argument (file path or DataFrame). "
+                f"Could not locate tabular dataset for '{dataset_name}'."
             )
         return TabularDatasetLoader(
             data=data_source,

@@ -234,23 +234,170 @@ def test_resolve_dataset_file_and_dynamic_tabular_loader():
 
 def test_resolve_dataset_file_and_dynamic_timeseries_loader():
     """Verify general dynamic dataset file resolution and automatic time-series loading."""
+    from pathlib import Path
+    import torch
     from app.evaluation.dataset_loader.factory import get_dataset_loader, resolve_dataset_file
 
-    # 1. Model-based resolution for TS
-    resolved_ts = resolve_dataset_file(None, [".pt"], model_identifier="models/time-series-ecg-classifier.pt")
-    assert resolved_ts is not None
-    assert resolved_ts.endswith(".pt")
+    data_dir = Path("data")
+    data_dir.mkdir(exist_ok=True)
+    test_ts_file = data_dir / "time_series_ecg.pt"
+    created_here = False
+    if not test_ts_file.exists():
+        torch.save({"inputs": torch.randn(16, 1, 50), "targets": torch.randint(0, 2, (16,))}, test_ts_file)
+        created_here = True
 
-    # 2. Dynamic loading without explicit kwargs['inputs'] or kwargs['targets']
-    ts_loader = get_dataset_loader(
-        dataset_name="time_series_ecg",
-        data_domain="time-series",
-        batch_size=8,
-    )
-    assert len(ts_loader) > 0
-    batch_x, batch_y, labels = next(ts_loader.iterate_batches())
-    assert batch_x.shape[0] == 8
-    assert batch_y.shape[0] == 8
+    try:
+        # 1. Model-based resolution for TS
+        resolved_ts = resolve_dataset_file(None, [".pt"], model_identifier="models/time-series-ecg-classifier.pt")
+        assert resolved_ts is not None
+        assert resolved_ts.endswith(".pt")
+
+        # 2. Dynamic loading without explicit kwargs['inputs'] or kwargs['targets']
+        ts_loader = get_dataset_loader(
+            dataset_name="time_series_ecg",
+            data_domain="time-series",
+            batch_size=8,
+        )
+        assert len(ts_loader) > 0
+        batch_x, batch_y, labels = next(ts_loader.iterate_batches())
+        assert batch_x.shape[0] == 8
+        assert batch_y.shape[0] == 8
+    finally:
+        if created_here and test_ts_file.exists():
+            test_ts_file.unlink()
+
+
+def test_tabular_loader_multi_format():
+    """Verify TabularDatasetLoader supports .tsv, .parquet, .json, and .jsonl."""
+    import tempfile
+    from pathlib import Path
+    import pandas as pd
+    from app.evaluation.dataset_loader import TabularDatasetLoader
+
+    df = pd.DataFrame({
+        "feat_a": [1.0, 2.0, 3.0, 4.0],
+        "feat_b": [10.0, 20.0, 30.0, 40.0],
+        "target": [0, 1, 0, 1],
+    })
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        # 1. TSV
+        tsv_path = Path(tmpdir) / "data.tsv"
+        df.to_csv(tsv_path, sep="\t", index=False)
+        loader_tsv = TabularDatasetLoader(data_path=tsv_path, target_column="target", batch_size=2)
+        assert len(loader_tsv) == 4
+        x_tsv, y_tsv, _ = next(loader_tsv.iterate_batches())
+        assert x_tsv.shape == (2, 2)  # target must not be in features
+        assert y_tsv.shape == (2,)
+
+        # 2. Parquet
+        pq_path = Path(tmpdir) / "data.parquet"
+        df.to_parquet(pq_path, index=False)
+        loader_pq = TabularDatasetLoader(data_path=pq_path, target_column="target", batch_size=2)
+        assert len(loader_pq) == 4
+        x_pq, y_pq, _ = next(loader_pq.iterate_batches())
+        assert x_pq.shape == (2, 2)
+
+        # 3. JSON
+        json_path = Path(tmpdir) / "data.json"
+        df.to_json(json_path, orient="records")
+        loader_json = TabularDatasetLoader(data_path=json_path, target_column="target", batch_size=2)
+        assert len(loader_json) == 4
+        x_json, y_json, _ = next(loader_json.iterate_batches())
+        assert x_json.shape == (2, 2)
+
+        # 4. JSONL
+        jsonl_path = Path(tmpdir) / "data.jsonl"
+        df.to_json(jsonl_path, orient="records", lines=True)
+        loader_jsonl = TabularDatasetLoader(data_path=jsonl_path, target_column="target", batch_size=2)
+        assert len(loader_jsonl) == 4
+        x_jsonl, y_jsonl, _ = next(loader_jsonl.iterate_batches())
+        assert x_jsonl.shape == (2, 2)
+
+
+def test_tabular_loader_target_separation_and_validation():
+    """Verify strict target/feature separation and missing target column detection."""
+    import tempfile
+    from pathlib import Path
+    import pandas as pd
+    from app.evaluation.dataset_loader import TabularDatasetLoader
+    from app.ingestion.exceptions import DatasetFormatError
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        # Empty file check
+        empty_csv = Path(tmpdir) / "empty.csv"
+        empty_csv.write_text("")
+        with pytest.raises(DatasetFormatError, match="empty"):
+            TabularDatasetLoader(data_path=empty_csv)
+
+        # Missing target column check
+        csv_path = Path(tmpdir) / "data.csv"
+        df = pd.DataFrame({"feat_1": [1.0, 2.0], "feat_2": [3.0, 4.0]})
+        df.to_csv(csv_path, index=False)
+        with pytest.raises(ValueError, match="Specified target column 'nonexistent_col' not found"):
+            TabularDatasetLoader(data_path=csv_path, target_column="nonexistent_col")
+
+
+def test_tabular_loader_xlsx_missing_dependency():
+    """Verify TabularDatasetLoader raises MissingDependencyError when openpyxl is not installed."""
+    import tempfile
+    from pathlib import Path
+    from app.evaluation.dataset_loader import TabularDatasetLoader
+    from app.ingestion.exceptions import MissingDependencyError
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        xlsx_path = Path(tmpdir) / "test.xlsx"
+        xlsx_path.touch()
+
+        try:
+            import openpyxl
+        except ImportError:
+            with pytest.raises(MissingDependencyError, match="pip install openpyxl"):
+                TabularDatasetLoader(data_path=xlsx_path)
+
+
+def test_timeseries_loader_multi_format():
+    """Verify TimeSeriesDatasetLoader loads .npy, .npz, and .csv data."""
+    import tempfile
+    from pathlib import Path
+    import numpy as np
+    import pandas as pd
+    from app.evaluation.dataset_loader import TimeSeriesDatasetLoader
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        # 1. NPY (3D array)
+        npy_path = Path(tmpdir) / "series.npy"
+        arr = np.random.randn(6, 20, 2).astype(np.float32)
+        np.save(npy_path, arr)
+        loader_npy = TimeSeriesDatasetLoader(data_path=npy_path, batch_size=3)
+        assert len(loader_npy) == 6
+        b_x, b_y, _ = next(loader_npy.iterate_batches())
+        assert b_x.shape == (3, 20, 2)
+        assert b_y.shape == (3,)
+
+        # 2. NPZ (inputs + targets dictionary)
+        npz_path = Path(tmpdir) / "series.npz"
+        np.savez(npz_path, inputs=arr, targets=np.array([0, 1, 0, 1, 0, 1]))
+        loader_npz = TimeSeriesDatasetLoader(data_path=npz_path, batch_size=2)
+        assert len(loader_npz) == 6
+        b_x_npz, b_y_npz, _ = next(loader_npz.iterate_batches())
+        assert b_x_npz.shape == (2, 20, 2)
+        assert b_y_npz.shape == (2,)
+
+        # 3. CSV time series with target column
+        csv_path = Path(tmpdir) / "ts.csv"
+        df = pd.DataFrame({
+            "val_t0": [1.0, 2.0, 3.0, 4.0],
+            "val_t1": [1.5, 2.5, 3.5, 4.5],
+            "val_t2": [1.8, 2.8, 3.8, 4.8],
+            "label": [0, 1, 0, 1],
+        })
+        df.to_csv(csv_path, index=False)
+        loader_csv = TimeSeriesDatasetLoader(data_path=csv_path, target_column="label", batch_size=2)
+        assert len(loader_csv) == 4
+        b_x_csv, b_y_csv, _ = next(loader_csv.iterate_batches())
+        assert b_x_csv.shape == (2, 1, 3)  # [batch, 1, seq_len]
+        assert b_y_csv.shape == (2,)
 
 
 
