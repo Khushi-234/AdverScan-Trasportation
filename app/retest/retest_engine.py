@@ -181,10 +181,22 @@ class RetestEngine:
             after_adv_evaluations_dict[attack_name] = adv_eval_res
 
         # Step 3: Run Vulnerability Analysis on Hardened Model
+        predictions_dict = {}
+        for atk_name, adv_res in after_adv_evaluations_dict.items():
+            y_true = adv_res.targets or after_baseline_result.targets
+            y_clean_pred = after_baseline_result.predictions
+            y_adv_pred = adv_res.predictions
+            predictions_dict[atk_name] = {
+                "y_true": y_true,
+                "y_clean_pred": y_clean_pred,
+                "y_adv_pred": y_adv_pred,
+            }
+
         after_vuln_raw = self.vulnerability_engine.analyze_pipeline(
             baseline_result=after_baseline_result,
             attack_results=after_attack_results_coll,
             adversarial_results=after_adv_evaluations_dict,
+            predictions_dict=predictions_dict,
         )
 
         after_vulnerability_analysis: Dict[str, Dict[str, Any]] = {}

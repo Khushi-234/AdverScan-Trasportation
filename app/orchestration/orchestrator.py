@@ -463,16 +463,33 @@ class AdverScanOrchestrator:
         print("  ⏳ [Step 5/9] M5 Vulnerability Analysis...", end="", flush=True)
         try:
             vuln_engine = VulnerabilityEngine()
+            predictions_dict = {}
+            for atk_name, adv_res in adv_evaluations_dict.items():
+                y_true = adv_res.targets or baseline_result.targets
+                y_clean_pred = baseline_result.predictions
+                y_adv_pred = adv_res.predictions
+                predictions_dict[atk_name] = {
+                    "y_true": y_true,
+                    "y_clean_pred": y_clean_pred,
+                    "y_adv_pred": y_adv_pred,
+                }
+
             vuln_out = vuln_engine.analyze_pipeline(
                 baseline_result=baseline_result,
                 attack_results=attack_results_coll,
                 adversarial_results=adv_evaluations_dict,
+                predictions_dict=predictions_dict,
             )
-            for atk_k, atk_v in vuln_out.items():
+            pipeline_items = vuln_out.items() if hasattr(vuln_out, "items") else getattr(vuln_out, "results", {}).items()
+            for atk_k, atk_v in pipeline_items:
+                assessment_obj = getattr(atk_v, "assessment", atk_v.get("assessment") if isinstance(atk_v, dict) else None)
+                scoring_obj = getattr(atk_v, "scoring", atk_v.get("scoring") if isinstance(atk_v, dict) else None)
                 result.vulnerability_analysis[atk_k] = {
-                    "assessment": atk_v["assessment"].to_dict(),
-                    "scoring": atk_v["scoring"].to_dict(),
+                    "assessment": assessment_obj.to_dict() if hasattr(assessment_obj, "to_dict") else assessment_obj,
+                    "scoring": scoring_obj.to_dict() if hasattr(scoring_obj, "to_dict") else scoring_obj,
                 }
+            if hasattr(vuln_out, "model_robustness") and vuln_out.model_robustness:
+                result.vulnerability_analysis["__model_robustness__"] = vuln_out.model_robustness.to_dict()
             module_timings["M5_vulnerability_analysis"] = round(time.time() - step_start, 4)
             print(f" Done ({time.time() - step_start:.2f}s)")
         except Exception as e:
