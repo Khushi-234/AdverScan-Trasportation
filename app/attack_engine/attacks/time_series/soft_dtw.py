@@ -285,7 +285,7 @@ class SoftDTWAttack(BaseAttack):
                 )
             with torch.no_grad():
                 out = forward_model(x_orig)
-                logits = out.logits if hasattr(out, "logits") else out
+                logits = self._extract_logits(out)
                 labels = logits.argmax(dim=-1)
         else:
             if not isinstance(labels, torch.Tensor):
@@ -365,35 +365,36 @@ class SoftDTWAttack(BaseAttack):
                     x_orig, theta_warp, max_warp=max_warp
                 )
 
-                outputs = forward_model(x_warped)
-                logits = outputs.logits if hasattr(outputs, "logits") else outputs
-                cls_loss = loss_fn(logits, labels)
+                with torch.backends.cudnn.flags(enabled=False):
+                    outputs = forward_model(x_warped)
+                    logits = self._extract_logits(outputs)
+                    cls_loss = loss_fn(logits, labels)
 
-                # Differentiable Soft-DTW alignment loss to keep sequence temporally close
-                dtw_loss = compute_soft_dtw(
-                    x_orig,
-                    x_warped,
-                    gamma=gamma,
-                    downsample_threshold=downsample_threshold,
-                )
-
-                # Differentiable smoothness penalty on temporal displacement field
-                smooth_loss = torch.mean(
-                    torch.square(warp_disp[:, 1:] - warp_disp[:, :-1])
-                )
-
-                if targeted:
-                    # Minimize classification loss towards target + Soft-DTW distance
-                    total_loss = (
-                        cls_loss + lambda_dtw * dtw_loss + lambda_smooth * smooth_loss
-                    )
-                else:
-                    # Maximize classification loss away from true - minimize Soft-DTW distance
-                    total_loss = (
-                        -cls_loss + lambda_dtw * dtw_loss + lambda_smooth * smooth_loss
+                    # Differentiable Soft-DTW alignment loss to keep sequence temporally close
+                    dtw_loss = compute_soft_dtw(
+                        x_orig,
+                        x_warped,
+                        gamma=gamma,
+                        downsample_threshold=downsample_threshold,
                     )
 
-                total_loss.backward()
+                    # Differentiable smoothness penalty on temporal displacement field
+                    smooth_loss = torch.mean(
+                        torch.square(warp_disp[:, 1:] - warp_disp[:, :-1])
+                    )
+
+                    if targeted:
+                        # Minimize classification loss towards target + Soft-DTW distance
+                        total_loss = (
+                            cls_loss + lambda_dtw * dtw_loss + lambda_smooth * smooth_loss
+                        )
+                    else:
+                        # Maximize classification loss away from true - minimize Soft-DTW distance
+                        total_loss = (
+                            -cls_loss + lambda_dtw * dtw_loss + lambda_smooth * smooth_loss
+                        )
+
+                    total_loss.backward()
 
                 if theta_warp.grad is None:
                     raise AttackExecutionError(
