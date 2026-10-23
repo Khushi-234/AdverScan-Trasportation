@@ -255,7 +255,7 @@ class TimeSeriesPGD(BaseAttack):
                 )
             with torch.no_grad():
                 out = self.raw_model(x_orig)
-                logits = out.logits if hasattr(out, "logits") else out
+                logits = self._extract_logits(out)
                 labels = logits.argmax(dim=-1)
         else:
             if not isinstance(labels, torch.Tensor):
@@ -354,17 +354,18 @@ class TimeSeriesPGD(BaseAttack):
             for _ in range(num_steps):
                 x_adv.requires_grad_(True)
 
-                outputs = self.raw_model(x_adv)
-                logits = outputs.logits if hasattr(outputs, "logits") else outputs
-                loss = loss_fn(logits, labels)
+                with torch.backends.cudnn.flags(enabled=False):
+                    outputs = self.raw_model(x_adv)
+                    logits = self._extract_logits(outputs)
+                    loss = loss_fn(logits, labels)
 
-                grad = torch.autograd.grad(
-                    loss,
-                    x_adv,
-                    retain_graph=False,
-                    create_graph=False,
-                    allow_unused=True,
-                )[0]
+                    grad = torch.autograd.grad(
+                        loss,
+                        x_adv,
+                        retain_graph=False,
+                        create_graph=False,
+                        allow_unused=True,
+                    )[0]
 
                 if grad is None:
                     grad = torch.zeros_like(x_adv)

@@ -9,6 +9,7 @@ M1 Model Ingestion -> M2 Baseline Evaluation -> M3 Attack Engine
 -> M8 Re-Test & Comparison -> M9 Security Report Generator.
 """
 
+import numpy as np
 import argparse
 import json
 import os
@@ -830,6 +831,26 @@ def build_dataset_and_sample_input(
         num_ch = preset_info.get("num_channels", 1)
         num_classes = preset_info.get("num_classes", 2)
 
+        # Detect channel-last (Transformer / PatchTST) vs channel-first (1D-CNN)
+        is_channel_last = (
+            "patchtst" in model_id.lower()
+            or "patchtsmixer" in model_id.lower()
+            or "transformer" in str(preset_info.get("model_type", "")).lower()
+        )
+
+        # Introspect Hugging Face config if sequence_length was not explicitly declared
+        if "sequence_length" not in preset_info and ("huggingface" in str(preset_info.get("framework", "")).lower() or "/" in model_id):
+            try:
+                from transformers import AutoConfig
+                cfg = AutoConfig.from_pretrained(model_id)
+                seq_len = getattr(cfg, "context_length", getattr(cfg, "sequence_length", seq_len))
+                num_ch = getattr(cfg, "num_input_channels", getattr(cfg, "in_channels", num_ch))
+                num_cls_val = getattr(cfg, "num_classes", getattr(cfg, "num_targets", getattr(cfg, "num_labels", None)))
+                if num_cls_val is not None:
+                    num_classes = int(num_cls_val)
+            except Exception:
+                pass
+
         if resolved_ts and Path(resolved_ts).is_file():
             print(f"  ✓ Resolved time-series dataset file: '{resolved_ts}'")
             loaded = torch.load(resolved_ts, map_location="cpu", weights_only=False)
@@ -840,6 +861,20 @@ def build_dataset_and_sample_input(
                 x_ts, y_ts = loaded
             else:
                 x_ts, y_ts = loaded, None
+
+            if isinstance(x_ts, np.ndarray):
+                x_ts = torch.from_numpy(x_ts).float()
+            elif isinstance(x_ts, torch.Tensor):
+                x_ts = x_ts.float()
+
+            if isinstance(x_ts, torch.Tensor):
+                if x_ts.ndim == 2:
+                    x_ts = x_ts.unsqueeze(-1) if is_channel_last else x_ts.unsqueeze(1)
+                elif x_ts.ndim == 3:
+                    if is_channel_last and x_ts.shape[1] == num_ch and x_ts.shape[2] == seq_len and num_ch != seq_len:
+                        x_ts = x_ts.transpose(1, 2)
+                    elif not is_channel_last and x_ts.shape[1] == seq_len and x_ts.shape[2] == num_ch and num_ch != seq_len:
+                        x_ts = x_ts.transpose(1, 2)
 
             if samples > 0 and len(x_ts) > samples:
                 x_ts = x_ts[:samples]
@@ -856,7 +891,10 @@ def build_dataset_and_sample_input(
         else:
             print(f"  [INFO] No local time-series tensor file found; using synthetic sequence samples.")
             n_eval = samples if samples > 0 else 100
-            x_ts = torch.randn(n_eval, num_ch, seq_len)
+            if is_channel_last:
+                x_ts = torch.randn(n_eval, seq_len, num_ch)
+            else:
+                x_ts = torch.randn(n_eval, num_ch, seq_len)
             y_ts = torch.randint(0, num_classes, (n_eval,))
             dataset_loader = get_dataset_loader(
                 dataset_name=dataset_name,
@@ -866,11 +904,8 @@ def build_dataset_and_sample_input(
                 targets=y_ts,
             )
 
-        # Build sample input for time-series
-        if "patchtst" in model_id.lower() or "patchtsmixer" in model_id.lower():
-            sample_input = torch.randn(1, seq_len, num_ch)
-        else:
-            sample_input = torch.randn(1, num_ch, seq_len)
+        # Build sample input for time-series matching data shape
+        sample_input = torch.randn(1, *tuple(x_ts.shape[1:]))
         return dataset_loader, sample_input
 
     elif domain_clean == "text":

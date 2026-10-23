@@ -12,6 +12,7 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 
 import torch
 from dotenv import load_dotenv
+import numpy as np
 
 # Ensure framework root directory is in sys.path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -282,7 +283,22 @@ def run_single_evaluation(
             else:
                 x_ts, y_ts = loaded, None
 
-            if samples > 0 and x_ts is not None and len(x_ts) > samples:
+            if isinstance(x_ts, np.ndarray):
+                x_ts = torch.from_numpy(x_ts).float()
+            elif isinstance(x_ts, torch.Tensor):
+                x_ts = x_ts.float()
+
+            if isinstance(x_ts, torch.Tensor) and isinstance(sample_input, torch.Tensor) and sample_input.ndim == 3:
+                if x_ts.ndim == 2:
+                    if sample_input.shape[1] == 1:
+                        x_ts = x_ts.unsqueeze(1)
+                    else:
+                        x_ts = x_ts.unsqueeze(-1)
+                elif x_ts.ndim == 3 and tuple(x_ts.shape[1:]) != tuple(sample_input.shape[1:]):
+                    if tuple(x_ts.shape[1:]) == (sample_input.shape[2], sample_input.shape[1]):
+                        x_ts = x_ts.transpose(1, 2)
+
+            if samples > 0 and len(x_ts) > samples:
                 x_ts = x_ts[:samples]
                 if y_ts is not None:
                     y_ts = y_ts[:samples]

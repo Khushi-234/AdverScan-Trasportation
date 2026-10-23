@@ -6,6 +6,7 @@ from collections.abc import Mapping
 from datetime import datetime
 from pathlib import Path
 from typing import Any, List, Optional, Union
+from typing import Any, List, Optional, Union
 import numpy as np
 import torch
 
@@ -87,6 +88,7 @@ class BaselineEvaluator:
         if show_progress:
             try:
                 from tqdm import tqdm  # type: ignore[import-untyped]
+                from tqdm import tqdm  # type: ignore[import-untyped]
                 batch_iter = tqdm(
                     batch_iter,
                     total=total_batches,
@@ -115,9 +117,13 @@ class BaselineEvaluator:
                 # Perform inference using M1 adapter
                 outputs = self.adapter.predict(batch_pixels)
                 
-                # Support HuggingFace model outputs (ImageClassifierOutput)
-                if hasattr(outputs, "logits"):
+                # Support HuggingFace model outputs (ImageClassifierOutput, PatchTST, etc.)
+                if hasattr(outputs, "logits") and outputs.logits is not None:
                     outputs = outputs.logits
+                elif hasattr(outputs, "prediction_logits") and outputs.prediction_logits is not None:
+                    outputs = outputs.prediction_logits
+                elif hasattr(outputs, "prediction_outputs") and outputs.prediction_outputs is not None:
+                    outputs = outputs.prediction_outputs
 
                 # Convert to PyTorch Tensor if outputs are NumPy array
                 if isinstance(outputs, np.ndarray):
@@ -146,6 +152,13 @@ class BaselineEvaluator:
 
                 if torch.cuda.is_available():
                     torch.cuda.empty_cache()
+
+        if self.num_classes is None:
+            if all_targets:
+                self.num_classes = max(all_targets) + 1
+            else:
+                self.num_classes = 2
+        num_classes_int = self.num_classes
 
         y_true = np.array(all_targets, dtype=np.int64)
         y_pred = np.array(all_preds, dtype=np.int64)
