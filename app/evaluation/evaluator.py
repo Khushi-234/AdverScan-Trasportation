@@ -54,6 +54,7 @@ class BaselineEvaluator:
         self,
         output_dir: Optional[Union[str, Path]] = "results/baseline",
         log_mlflow: bool = False,
+        show_progress: bool = True,
     ) -> EvaluationResult:
         """
         Run baseline evaluation over full dataset split.
@@ -61,6 +62,7 @@ class BaselineEvaluator:
         Args:
             output_dir: Optional directory to save evaluation result JSON artifact.
             log_mlflow: Whether to log metrics to MLflow.
+            show_progress: Whether to display a progress bar for batch evaluation.
 
         Returns:
             EvaluationResult dataclass containing full metrics.
@@ -71,44 +73,71 @@ class BaselineEvaluator:
         all_preds: list[int] = []
         all_probs_list: list[np.ndarray] = []
 
-        # Batch inference loop
-        for batch_pixels, batch_targets, _ in self.dataset_loader.iterate_batches():
-            # Perform inference using M1 adapter
-            outputs = self.adapter.predict(batch_pixels)
-            
-            # Support HuggingFace model outputs (ImageClassifierOutput)
-            if hasattr(outputs, "logits"):
-                outputs = outputs.logits
+        # Determine total batches for progress display
+        total_batches = None
+        if hasattr(self.dataset_loader, "__len__"):
+            try:
+                total_batches = len(self.dataset_loader)
+            except Exception:
+                total_batches = None
 
-            # Convert to PyTorch Tensor if outputs are NumPy array
-            if isinstance(outputs, np.ndarray):
-                logits_tensor = torch.from_numpy(outputs)
-            else:
-                logits_tensor = outputs
+        batch_iter = self.dataset_loader.iterate_batches()
+        if show_progress:
+            try:
+                from tqdm import tqdm
+                batch_iter = tqdm(
+                    batch_iter,
+                    total=total_batches,
+                    desc=f"  Evaluating {self.dataset_loader.dataset_name}",
+                    unit="batch",
+                    leave=False,
+                )
+            except ImportError:
+                pass
 
-            # Dynamically infer num_classes from output dimension if not explicitly provided
-            if self.num_classes is None:
-                self.num_classes = int(logits_tensor.shape[-1])
+        # Batch inference loop with torch.no_grad() to prevent VRAM memory accumulation
+        with torch.no_grad():
+            for batch_pixels, batch_targets, _ in batch_iter:
+                # Perform inference using M1 adapter
+                outputs = self.adapter.predict(batch_pixels)
+                
+                # Support HuggingFace model outputs (ImageClassifierOutput, PatchTST, etc.)
+                if hasattr(outputs, "logits") and outputs.logits is not None:
+                    outputs = outputs.logits
+                elif hasattr(outputs, "prediction_logits") and outputs.prediction_logits is not None:
+                    outputs = outputs.prediction_logits
+                elif hasattr(outputs, "prediction_outputs") and outputs.prediction_outputs is not None:
+                    outputs = outputs.prediction_outputs
 
-            # Slice logits to active target classes if output contains unused buffer classes
-            if logits_tensor.shape[-1] > self.num_classes:
-                logits_tensor = logits_tensor[:, : self.num_classes]
+                # Convert to PyTorch Tensor if outputs are NumPy array
+                if isinstance(outputs, np.ndarray):
+                    logits_tensor = torch.from_numpy(outputs)
+                else:
+                    logits_tensor = outputs
 
-            # Compute probabilities & predictions
-            probs_tensor = torch.softmax(logits_tensor, dim=-1)
-            preds_tensor = torch.argmax(probs_tensor, dim=-1)
+                # Dynamically infer num_classes from output dimension if not explicitly provided
+                if self.num_classes is None:
+                    self.num_classes = int(logits_tensor.shape[-1])
 
-            all_targets.extend(batch_targets.cpu().numpy().tolist())
-            all_preds.extend(preds_tensor.cpu().numpy().tolist())
-            all_probs_list.append(probs_tensor.cpu().numpy())
+                # Slice logits to active target classes if output contains unused buffer classes
+                if logits_tensor.shape[-1] > self.num_classes:
+                    logits_tensor = logits_tensor[:, : self.num_classes]
+
+                # Compute probabilities & predictions
+                probs_tensor = torch.softmax(logits_tensor, dim=-1)
+                preds_tensor = torch.argmax(probs_tensor, dim=-1)
+
+                all_targets.extend(batch_targets.cpu().numpy().tolist())
+                all_preds.extend(preds_tensor.cpu().numpy().tolist())
+                all_probs_list.append(probs_tensor.cpu().numpy())
+
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
 
         y_true = np.array(all_targets, dtype=np.int64)
         y_pred = np.array(all_preds, dtype=np.int64)
-        y_probs = np.concatenate(all_probs_list, axis=0)
-
-        # Fallback dynamic calculation of num_classes if dataset labels exceed num_classes
-        if self.num_classes is None or (len(y_true) > 0 and int(np.max(y_true)) >= self.num_classes):
-            self.num_classes = max(int(np.max(y_true)) + 1 if len(y_true) > 0 else 1, y_probs.shape[-1])
+        y_probs = np.concatenate(all_probs_list, axis=0) if all_probs_list else np.empty((0, self.num_classes))
+        sample_confidences = np.max(y_probs, axis=-1).tolist() if len(y_probs) > 0 else []
 
         # Compute classification, confidence, entropy, and confusion matrix metrics
         metrics = MetricsCalculator.compute_metrics(
@@ -175,10 +204,13 @@ class BaselineEvaluator:
             batch_size=getattr(self.dataset_loader, "batch_size", 32),
             device=device_str,
             timestamp=timestamp,
-            total_parameters=total_params,
-            trainable_parameters=trainable_params,
-            model_architecture=model_arch,
-            class_names=class_names,
+            extra_metadata={
+                "predictions": y_pred.tolist(),
+                "targets": y_true.tolist(),
+                "y_pred": y_pred.tolist(),
+                "y_true": y_true.tolist(),
+                "sample_confidences": sample_confidences,
+            },
         )
 
         # Persist results JSON if output_dir is provided
