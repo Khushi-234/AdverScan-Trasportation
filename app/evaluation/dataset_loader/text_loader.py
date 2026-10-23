@@ -47,23 +47,56 @@ class HFTextDatasetLoader(BaseDatasetLoader):
                 return load_dataset(target[0], target[1], split=split)
             return load_dataset(target, split=split)
 
-        try:
-            self._dataset = _load_hf_ds(resolved_name, split=split)
-        except Exception as e:
-            if "Config name is missing" in str(e) and not isinstance(resolved_name, (tuple, list)):
-                resolved_name = (resolved_name, "sentiment")
-                self._dataset = _load_hf_ds(resolved_name, split=split)
-            else:
-                slice_suffix = ""
-                if "[" in split and "]" in split:
-                    slice_suffix = split[split.index("[") : split.index("]") + 1]
+        from pathlib import Path
+        local_p = Path(dataset_name)
+        if local_p.is_file():
+            suffix = local_p.suffix.lower()
+            import pandas as pd
+            from datasets import Dataset
+
+            if suffix == ".txt":
+                with open(local_p, "r", encoding="utf-8", errors="ignore") as f:
+                    lines = [line.strip() for line in f if line.strip()]
+                if not lines:
+                    raise ValueError(f"Text dataset file '{local_p}' is empty.")
+                self._dataset = Dataset.from_dict({"text": lines, "label": [0] * len(lines)})
+            elif suffix in (".csv", ".tsv"):
+                df = pd.read_csv(local_p, sep="\t" if suffix == ".tsv" else ",")
+                if df.empty:
+                    raise ValueError(f"Text dataset file '{local_p}' is empty.")
+                self._dataset = Dataset.from_pandas(df)
+            elif suffix in (".json", ".jsonl"):
+                lines_mode = suffix == ".jsonl"
                 try:
-                    fallback_split = f"validation{slice_suffix}"
-                    self._dataset = _load_hf_ds(resolved_name, split=fallback_split)
-                    self.split = fallback_split
+                    df = pd.read_json(local_p, lines=lines_mode)
                 except Exception:
-                    self._dataset = _load_hf_ds(resolved_name, split="train")
-                    self.split = "train"
+                    df = pd.read_json(local_p, lines=not lines_mode)
+                if df.empty:
+                    raise ValueError(f"Text dataset file '{local_p}' is empty.")
+                self._dataset = Dataset.from_pandas(df)
+            else:
+                raise ValueError(
+                    f"Unsupported text file format '{suffix}'. "
+                    f"Supported text formats: .txt, .csv, .tsv, .json, .jsonl"
+                )
+        else:
+            try:
+                self._dataset = _load_hf_ds(resolved_name, split=split)
+            except Exception as e:
+                if "Config name is missing" in str(e) and not isinstance(resolved_name, (tuple, list)):
+                    resolved_name = (resolved_name, "sentiment")
+                    self._dataset = _load_hf_ds(resolved_name, split=split)
+                else:
+                    slice_suffix = ""
+                    if "[" in split and "]" in split:
+                        slice_suffix = split[split.index("[") : split.index("]") + 1]
+                    try:
+                        fallback_split = f"validation{slice_suffix}"
+                        self._dataset = _load_hf_ds(resolved_name, split=fallback_split)
+                        self.split = fallback_split
+                    except Exception:
+                        self._dataset = _load_hf_ds(resolved_name, split="train")
+                        self.split = "train"
 
         self._tokenizer = None
         if tokenizer_name:

@@ -1032,17 +1032,38 @@ def main():
             print("  Assessment aborted by user.")
             sys.exit(0)
 
+    # Unpack strongly-typed pipeline configuration parameters
+    domain_val: str = str(opts["domain"])
+    model_id_val: str = str(opts["model_id"])
+    model_name_val: str = str(opts["model_name"])
+    dataset_name_val: str = str(opts["dataset_name"])
+    proc_name_val: Optional[str] = str(opts["processor_name"]) if opts.get("processor_name") else None
+    num_classes_val: int = int(opts["num_classes"]) if "num_classes" in opts and isinstance(opts["num_classes"], (int, float, str)) else 2
+    preset_info_val: Dict[str, Any] = opts["preset_info"] if isinstance(opts.get("preset_info"), dict) else {}
+    samples_val: int = int(opts["samples"]) if "samples" in opts and isinstance(opts["samples"], (int, float, str)) else 0
+    attacks_val: List[str] = [str(a) for a in opts["attacks"]] if isinstance(opts.get("attacks"), list) else ["fgsm"]
+    mode_val: str = str(opts.get("mode", "full"))
+    device_val: str = str(opts.get("device", "cpu"))
+    batch_size_val: int = int(opts["batch_size"]) if "batch_size" in opts and isinstance(opts["batch_size"], (int, float, str)) else 32
+    enable_xai_val: bool = bool(opts.get("enable_xai", False))
+    xai_techniques_val: List[str] = [str(t) for t in opts["xai_techniques"]] if isinstance(opts.get("xai_techniques"), list) else []
+    enable_hardening_val: bool = bool(opts.get("enable_hardening", False))
+    defense_val: str = str(opts.get("defense", "auto"))
+    enable_retest_val: bool = bool(opts.get("enable_retest", True))
+    enable_report_val: bool = bool(opts.get("enable_report", True))
+    output_dir_val: Optional[str] = str(opts["output_dir"]) if opts.get("output_dir") else None
+
     # 1. Prepare Dataset Loader and Sample Input
-    print(f"\n[1/3] Preparing dataset loader for '{opts['dataset_name']}' ({opts['domain'].upper()})...")
+    print(f"\n[1/3] Preparing dataset loader for '{dataset_name_val}' ({domain_val.upper()})...")
     try:
         dataset_loader, sample_input = build_dataset_and_sample_input(
-            domain=opts["domain"],
-            model_id=opts["model_id"],
-            dataset_name=opts["dataset_name"],
-            processor_name=opts.get("processor_name"),
-            samples=opts["samples"],
-            batch_size=opts["batch_size"],
-            preset_info=opts.get("preset_info", {}),
+            domain=domain_val,
+            model_id=model_id_val,
+            dataset_name=dataset_name_val,
+            processor_name=proc_name_val,
+            samples=samples_val,
+            batch_size=batch_size_val,
+            preset_info=preset_info_val,
         )
     except Exception as e:
         print(f"  ❌ Error initializing dataset loader: {e}")
@@ -1050,7 +1071,7 @@ def main():
 
     # Prepare attack-specific configs if required (e.g. VAE for tabular manifold attacks)
     attack_configs = {}
-    if opts["domain"] == "tabular" and any(a.lower() == "vae_attack" for a in opts["attacks"]):
+    if domain_val == "tabular" and any(a.lower() == "vae_attack" for a in attacks_val):
         class _SimpleTabularVAE(torch.nn.Module):
             def __init__(self, num_features: int, latent_dim: int = 4):
                 super().__init__()
@@ -1066,35 +1087,36 @@ def main():
                 return self.decoder(z)
 
         n_feats = sample_input.shape[-1] if hasattr(sample_input, "shape") else 30
-        fallback_vae = _SimpleTabularVAE(num_features=n_feats).to(opts["device"])
+        fallback_vae = _SimpleTabularVAE(num_features=n_feats).to(device_val)
         attack_configs["vae_attack"] = {
             "epsilon": 0.5,
             "params": {"vae": fallback_vae, "num_steps": 5, "alpha": 0.05},
         }
 
     # 2. Build PipelineConfig
-    print(f"[2/3] Configuring AdverScan Pipeline (Mode: {opts['mode'].upper()})...")
+    print(f"[2/3] Configuring AdverScan Pipeline (Mode: {mode_val.upper()})...")
+    sample_cnt = samples_val if samples_val > 0 else None
     pipeline_config = PipelineConfig(
         attack_configs=attack_configs,
-        model_path=opts["model_id"],
+        model_path=model_id_val,
         sample_input=sample_input,
-        device=opts["device"],
-        model_name=opts["model_name"],
-        num_classes=opts["num_classes"],
-        dataset_name=opts["dataset_name"],
-        processor_name=opts.get("processor_name") or opts["model_id"],
-        mode=opts["mode"],
-        attacks=opts["attacks"],
-        sample_count=opts["samples"] if opts["samples"] > 0 else None,
-        batch_size=opts["batch_size"],
+        device=device_val,
+        model_name=model_name_val,
+        num_classes=num_classes_val,
+        dataset_name=dataset_name_val,
+        processor_name=proc_name_val or model_id_val,
+        mode=mode_val,
+        attacks=attacks_val,
+        sample_count=sample_cnt,
+        batch_size=batch_size_val,
         custom_dataset_loader=dataset_loader,
-        enable_xai=opts["enable_xai"],
-        xai_techniques=opts["xai_techniques"],
-        enable_hardening=opts["enable_hardening"],
-        defense=opts["defense"],
-        enable_retest=opts["enable_retest"],
-        enable_report=opts["enable_report"],
-        output_dir=opts["output_dir"],
+        enable_xai=enable_xai_val,
+        xai_techniques=xai_techniques_val,
+        enable_hardening=enable_hardening_val,
+        defense=defense_val,
+        enable_retest=enable_retest_val,
+        enable_report=enable_report_val,
+        output_dir=output_dir_val,
     )
 
     # 3. Execute Orchestrator
@@ -1114,9 +1136,16 @@ def main():
     print(f"Overall Status:            {result.status}")
     print(f"Execution Mode:            {result.execution_mode.upper()}")
     print(f"Total Pipeline Runtime:    {time_fmt}")
-    print(f"Target Modality / Domain:  {opts['domain'].upper()}")
+    print(f"Target Modality / Domain:  {str(opts['domain']).upper()}")
     print(f"Evaluated Model:           {opts['model_name']} ({opts['model_id']})")
     print(f"Evaluated Dataset:         {opts['dataset_name']}")
+
+    if result.errors:
+        print("\n" + "-" * 70)
+        print("PIPELINE ERRORS & DIAGNOSTICS")
+        print("-" * 70)
+        for err in result.errors:
+            print(f"  ❌ [{err.get('module')}]: {err.get('error_type')} — {err.get('message')}")
 
     # M1 — Ingested Model Specifications & Parameter Details
     print("\n" + "-" * 70)
@@ -1147,11 +1176,11 @@ def main():
     print("\n" + "-" * 70)
     print("DATASET & EVALUATION DETAILS")
     print("-" * 70)
-    print(f"  • Dataset Identifier:      {opts['dataset_name']}")
-    print(f"  • Target Domain:           {opts['domain'].upper()}")
-    samples_disp = f"{opts['samples']:,}" if opts['samples'] > 0 else "Full Dataset"
+    print(f"  • Dataset Identifier:      {dataset_name_val}")
+    print(f"  • Target Domain:           {domain_val.upper()}")
+    samples_disp = f"{samples_val:,}" if samples_val > 0 else "Full Dataset"
     print(f"  • Evaluated Samples:       {samples_disp}")
-    print(f"  • Evaluation Batch Size:   {opts['batch_size']}")
+    print(f"  • Evaluation Batch Size:   {batch_size_val}")
 
     # Clean Baseline Results
     print("\n" + "-" * 70)

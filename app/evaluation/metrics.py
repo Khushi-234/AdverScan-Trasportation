@@ -66,17 +66,21 @@ class MetricsCalculator:
         )
 
         # Per-class metrics
-        prec_class, rec_class, f1_class, support_class = precision_recall_fscore_support(
-            y_true, y_pred, labels=list(range(num_classes)), zero_division=0
+        prec_res, rec_res, f1_res, supp_res = precision_recall_fscore_support(
+            y_true, y_pred, labels=list(range(num_classes)), average=None, zero_division=0
         )
+        prec_arr = np.asarray(prec_res)
+        rec_arr = np.asarray(rec_res)
+        f1_arr = np.asarray(f1_res)
+        supp_arr = np.asarray(supp_res) if supp_res is not None else np.zeros(num_classes, dtype=int)
 
         per_class_metrics: Dict[str, Dict[str, float]] = {}
         for c in range(num_classes):
             per_class_metrics[str(c)] = {
-                "precision": float(prec_class[c]),
-                "recall": float(rec_class[c]),
-                "f1": float(f1_class[c]),
-                "support": int(support_class[c]),
+                "precision": float(prec_arr[c]),
+                "recall": float(rec_arr[c]),
+                "f1": float(f1_arr[c]),
+                "support": int(supp_arr[c]),
             }
 
         # Confidence statistics
