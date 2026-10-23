@@ -49,12 +49,15 @@ class XAIExplainer:
         Returns:
             Tuple of (predicted_class, confidence_score).
         """
+        from collections.abc import Mapping
         if isinstance(inputs, torch.Tensor):
             t_input = inputs
         elif isinstance(inputs, np.ndarray):
             t_input = torch.from_numpy(inputs).float()
         elif isinstance(inputs, (list, tuple)):
             t_input = torch.tensor(inputs).float()
+        elif isinstance(inputs, (dict, Mapping)):
+            t_input = inputs
         else:
             raise TypeError(f"Unsupported input type: {type(inputs)}")
 

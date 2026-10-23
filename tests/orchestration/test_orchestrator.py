@@ -2,7 +2,7 @@
 Integration unit tests for AdverScanOrchestrator in Module 8 (Orchestration).
 """
 
-from typing import Generator, List, Tuple
+from typing import Any, Generator, List, Tuple
 import pytest
 import torch
 import torch.nn as nn
@@ -209,5 +209,94 @@ def test_orchestrator_module_timings(dummy_setup):
     assert "M2_baseline" in module_ids
     assert all(m.status == "SUCCESS" for m in exec_summary.modules)
     assert exec_summary.total_elapsed_seconds == res.execution_time_seconds
+
+
+class DummyTextModel(nn.Module):
+    """Synthetic text classification model for fast unit testing."""
+
+    def __init__(self, vocab_size: int = 100, embed_dim: int = 16, num_classes: int = 2):
+        super().__init__()
+        self.embedding = nn.Embedding(vocab_size, embed_dim)
+        self.fc = nn.Linear(embed_dim, num_classes)
+
+    def forward(self, input_ids: Any = None, attention_mask: Any = None, **kwargs: Any) -> Any:
+        if isinstance(input_ids, dict):
+            attention_mask = input_ids.get("attention_mask")
+            input_ids = input_ids.get("input_ids")
+        if attention_mask is None:
+            attention_mask = torch.ones_like(input_ids)
+        emb = self.embedding(input_ids)
+        mask = attention_mask.unsqueeze(-1).float()
+        pooled = (emb * mask).sum(dim=1) / torch.clamp(mask.sum(dim=1), min=1.0)
+        return self.fc(pooled)
+
+
+class DummyTextDatasetLoader(BaseDatasetLoader):
+    """Synthetic text dataset loader yielding batches of variable sequence lengths."""
+
+    def __init__(self):
+        self.batch_size = 4
+        # Batch 0 has sequence length 12, Batch 1 has sequence length 9
+        self.batches = [
+            (
+                {
+                    "input_ids": torch.randint(1, 90, (4, 12)),
+                    "attention_mask": torch.ones(4, 12, dtype=torch.long),
+                },
+                torch.tensor([0, 1, 0, 1], dtype=torch.long),
+                [0, 1, 0, 1],
+            ),
+            (
+                {
+                    "input_ids": torch.randint(1, 90, (4, 9)),
+                    "attention_mask": torch.ones(4, 9, dtype=torch.long),
+                },
+                torch.tensor([1, 1, 0, 0], dtype=torch.long),
+                [1, 1, 0, 0],
+            ),
+        ]
+
+    @property
+    def dataset_name(self) -> str:
+        return "DummyVariableLengthTextDataset"
+
+    def __len__(self) -> int:
+        return 8
+
+    def iterate_batches(self):
+        for b in self.batches:
+            yield b
+
+
+def test_orchestrator_variable_length_text_multibatch():
+    """Verify orchestrator successfully evaluates and attacks multi-batch text with variable sequence lengths."""
+    model = DummyTextModel()
+    dataset_loader = DummyTextDatasetLoader()
+    sample_input = {
+        "input_ids": torch.randint(1, 90, (1, 8)),
+        "attention_mask": torch.ones(1, 8, dtype=torch.long),
+    }
+
+    config = PipelineConfig(
+        model_path=model,
+        sample_input=sample_input,
+        num_classes=2,
+        mode="attack_assessment",
+        attacks=["embedding_pgd"],
+        enable_xai=False,
+        enable_hardening=False,
+        custom_dataset_loader=dataset_loader,
+    )
+
+    orchestrator = AdverScanOrchestrator()
+    res: OrchestrationResult = orchestrator.run(config)
+
+    assert res.status == "SUCCESS"
+    assert "embedding_pgd" in res.attack_results
+    assert res.baseline_evaluation["num_samples"] == 8
+    assert res.adversarial_evaluations["embedding_pgd"]["num_samples"] == 8
+    assert "embedding_pgd" in res.vulnerability_analysis
+    assert res.vulnerability_analysis["embedding_pgd"]["assessment"]["num_samples"] == 8
+
 
 
