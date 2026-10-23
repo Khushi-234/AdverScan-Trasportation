@@ -135,10 +135,10 @@ class BaselineEvaluator:
 
         if self.num_classes is None:
             if all_targets:
-                self.num_classes = int(max(all_targets)) + 1
+                self.num_classes = max(all_targets) + 1
             else:
                 self.num_classes = 2
-        num_classes_int = int(self.num_classes)
+        num_classes_int = self.num_classes
 
         y_true = np.array(all_targets, dtype=np.int64)
         y_pred = np.array(all_preds, dtype=np.int64)

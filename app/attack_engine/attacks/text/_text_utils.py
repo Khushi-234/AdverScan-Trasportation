@@ -21,24 +21,24 @@ from app.ingestion.adapters.base_adapter import BaseModelAdapter
 def get_raw_model(model: Any) -> Any:
     """Extract raw framework model if model is wrapped in a BaseModelAdapter."""
     if isinstance(model, BaseModelAdapter):
-            return model.get_model()
+        return model.get_model()
     return model
 
 
-    def get_embedding_layer(
-        model: Any, config_params: Optional[Dict[str, Any]] = None
-    ) -> nn.Embedding:
-        """
-        Locate and return the word embedding layer (nn.Embedding) of a target model.
-        Supports HuggingFace transformer models (BERT, RoBERTa, DistilBERT, etc.)
-        and generic PyTorch modules.
+def get_embedding_layer(
+    model: Any, config_params: Optional[Dict[str, Any]] = None
+) -> nn.Embedding:
+    """
+    Locate and return the word embedding layer (nn.Embedding) of a target model.
+    Supports HuggingFace transformer models (BERT, RoBERTa, DistilBERT, etc.)
+    and generic PyTorch modules.
 
-        Args:
-            model: Target model or adapter.
-            config_params: Optional dictionary of attack parameters.
+    Args:
+        model: Target model or adapter.
+        config_params: Optional dictionary of attack parameters.
 
-        Returns:
-            The nn.Embedding layer.
+    Returns:
+        The nn.Embedding layer.
 
     Raises:
         UnsupportedModelError: If no embedding layer can be identified.
