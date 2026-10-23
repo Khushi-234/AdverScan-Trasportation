@@ -515,7 +515,7 @@ def prompt_model_selection(domain: str) -> Dict[str, Any]:
                     "dataset_name": None,
                     "data_domain": domain if domain != "all" else "image",
                     "num_classes": num_classes,
-                    "preset_info": {},
+                    "preset_info": {"framework": "huggingface"},
                     "is_custom": True,
                 }
             elif val == opt_local:
