@@ -101,9 +101,13 @@ class BaselineEvaluator:
                 # Perform inference using M1 adapter
                 outputs = self.adapter.predict(batch_pixels)
                 
-                # Support HuggingFace model outputs (ImageClassifierOutput)
-                if hasattr(outputs, "logits"):
+                # Support HuggingFace model outputs (ImageClassifierOutput, PatchTST, etc.)
+                if hasattr(outputs, "logits") and outputs.logits is not None:
                     outputs = outputs.logits
+                elif hasattr(outputs, "prediction_logits") and outputs.prediction_logits is not None:
+                    outputs = outputs.prediction_logits
+                elif hasattr(outputs, "prediction_outputs") and outputs.prediction_outputs is not None:
+                    outputs = outputs.prediction_outputs
 
                 # Convert to PyTorch Tensor if outputs are NumPy array
                 if isinstance(outputs, np.ndarray):
