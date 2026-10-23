@@ -2,6 +2,7 @@
 Text utility functions and shared helpers for white-box text adversarial attacks.
 """
 
+from collections.abc import Mapping
 from typing import Any, Dict, List, Optional, Set, Tuple, Union
 
 import numpy as np
@@ -20,24 +21,24 @@ from app.ingestion.adapters.base_adapter import BaseModelAdapter
 def get_raw_model(model: Any) -> Any:
     """Extract raw framework model if model is wrapped in a BaseModelAdapter."""
     if isinstance(model, BaseModelAdapter):
-        return model.get_model()
+            return model.get_model()
     return model
 
 
-def get_embedding_layer(
-    model: Any, config_params: Optional[Dict[str, Any]] = None
-) -> nn.Embedding:
-    """
-    Locate and return the word embedding layer (nn.Embedding) of a target model.
-    Supports HuggingFace transformer models (BERT, RoBERTa, DistilBERT, etc.)
-    and generic PyTorch modules.
+    def get_embedding_layer(
+        model: Any, config_params: Optional[Dict[str, Any]] = None
+    ) -> nn.Embedding:
+        """
+        Locate and return the word embedding layer (nn.Embedding) of a target model.
+        Supports HuggingFace transformer models (BERT, RoBERTa, DistilBERT, etc.)
+        and generic PyTorch modules.
 
-    Args:
-        model: Target model or adapter.
-        config_params: Optional dictionary of attack parameters.
+        Args:
+            model: Target model or adapter.
+            config_params: Optional dictionary of attack parameters.
 
-    Returns:
-        The nn.Embedding layer.
+        Returns:
+            The nn.Embedding layer.
 
     Raises:
         UnsupportedModelError: If no embedding layer can be identified.
@@ -284,8 +285,8 @@ def prepare_text_inputs(
 
         return input_ids, attention_mask, "tensor", original_texts
 
-    # 4. Dictionary containing 'input_ids'
-    if isinstance(inputs, dict):
+    # 4. Dictionary containing 'input_ids' (including BatchEncoding/Mapping)
+    if isinstance(inputs, (dict, Mapping)):
         if "input_ids" not in inputs:
             raise AttackExecutionError(
                 "Inputs dictionary must contain 'input_ids' key."
@@ -369,7 +370,7 @@ def reconstruct_output(
         return adv_input_ids
 
     if input_type == "dict":
-        result = dict(original_input) if isinstance(original_input, dict) else {}
+        result = dict(original_input) if isinstance(original_input, (dict, Mapping)) else {}
         result["input_ids"] = adv_input_ids
         if "attention_mask" in result and hasattr(result["attention_mask"], "shape"):
             # Ensure attention mask matches new sequence length if changed

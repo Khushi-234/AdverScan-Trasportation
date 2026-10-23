@@ -159,9 +159,7 @@ class JSMA(BaseAttack):
         # Obtain initial predictions
         with torch.no_grad():
             initial_out = forward_model(x_orig)
-            initial_logits = (
-                initial_out.logits if hasattr(initial_out, "logits") else initial_out
-            )
+            initial_logits = self._extract_logits(initial_out)
             initial_preds = initial_logits.argmax(dim=-1)
             num_classes = initial_logits.size(-1)
 
@@ -237,9 +235,7 @@ class JSMA(BaseAttack):
                 # Check current status
                 with torch.no_grad():
                     curr_out = forward_model(x_adv)
-                    curr_logits = (
-                        curr_out.logits if hasattr(curr_out, "logits") else curr_out
-                    )
+                    curr_logits = self._extract_logits(curr_out)
                     curr_preds = curr_logits.argmax(dim=-1)
 
                     if targeted:
@@ -251,24 +247,25 @@ class JSMA(BaseAttack):
                     break
 
                 # Compute Jacobian matrix: d(logits_c) / d(x_adv)
-                x_adv.requires_grad_(True)
-                out = forward_model(x_adv)
-                logits = out.logits if hasattr(out, "logits") else out
+                with torch.backends.cudnn.flags(enabled=False):
+                    x_adv.requires_grad_(True)
+                    out = forward_model(x_adv)
+                    logits = self._extract_logits(out)
 
-                jacobian_list = []
-                for c in range(num_classes):
-                    grad_c = torch.autograd.grad(
-                        logits[:, c].sum(),
-                        x_adv,
-                        retain_graph=(c < num_classes - 1),
-                        create_graph=False,
-                        allow_unused=True,
-                    )[0]
-                    if grad_c is None:
-                        grad_c = torch.zeros_like(x_adv)
-                    # Guard NaN/Inf in Jacobian
-                    grad_c = torch.nan_to_num(grad_c, nan=0.0, posinf=0.0, neginf=0.0)
-                    jacobian_list.append(grad_c)
+                    jacobian_list = []
+                    for c in range(num_classes):
+                        grad_c = torch.autograd.grad(
+                            logits[:, c].sum(),
+                            x_adv,
+                            retain_graph=(c < num_classes - 1),
+                            create_graph=False,
+                            allow_unused=True,
+                        )[0]
+                        if grad_c is None:
+                            grad_c = torch.zeros_like(x_adv)
+                        # Guard NaN/Inf in Jacobian
+                        grad_c = torch.nan_to_num(grad_c, nan=0.0, posinf=0.0, neginf=0.0)
+                        jacobian_list.append(grad_c)
 
                 # Jacobian shape: (B, num_classes, T, D)
                 jacobian = torch.stack(jacobian_list, dim=1).detach()

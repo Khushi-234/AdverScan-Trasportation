@@ -72,11 +72,11 @@ def execute_attack(
                 with torch.no_grad():
                     device = next(raw_model.parameters()).device if list(raw_model.parameters()) else torch.device("cpu")
                     out_orig = raw_model(inputs.to(device))
-                    logits_orig = out_orig.logits if hasattr(out_orig, "logits") else out_orig
+                    logits_orig = attack_instance._extract_logits(out_orig)
                     orig_preds = logits_orig.argmax(dim=-1).cpu()
 
                     out_adv = raw_model(adv_inputs.to(device))
-                    logits_adv = out_adv.logits if hasattr(out_adv, "logits") else out_adv
+                    logits_adv = attack_instance._extract_logits(out_adv)
                     adv_preds = logits_adv.argmax(dim=-1).cpu()
 
                     success = (orig_preds != adv_preds)

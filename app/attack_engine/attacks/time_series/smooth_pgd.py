@@ -224,7 +224,7 @@ class SmoothPGD(BaseAttack):
                 )
             with torch.no_grad():
                 out = self.raw_model(x_orig)
-                logits = out.logits if hasattr(out, "logits") else out
+                logits = self._extract_logits(out)
                 labels = logits.argmax(dim=-1)
         else:
             if not isinstance(labels, torch.Tensor):
@@ -331,35 +331,36 @@ class SmoothPGD(BaseAttack):
             for _ in range(num_steps):
                 x_adv.requires_grad_(True)
 
-                outputs = self.raw_model(x_adv)
-                logits = outputs.logits if hasattr(outputs, "logits") else outputs
-                cls_loss = loss_fn(logits, labels)
+                with torch.backends.cudnn.flags(enabled=False):
+                    outputs = self.raw_model(x_adv)
+                    logits = self._extract_logits(outputs)
+                    cls_loss = loss_fn(logits, labels)
 
-                if tv_weight > 0.0:
-                    # Differentiable temporal smoothness regularization
-                    signal_to_smooth = (
-                        (x_adv - x_orig) if regularize_perturbation else x_adv
-                    )
-                    tv_loss = compute_temporal_total_variation(
-                        signal_to_smooth, tv_norm=tv_norm
-                    )
+                    if tv_weight > 0.0:
+                        # Differentiable temporal smoothness regularization
+                        signal_to_smooth = (
+                            (x_adv - x_orig) if regularize_perturbation else x_adv
+                        )
+                        tv_loss = compute_temporal_total_variation(
+                            signal_to_smooth, tv_norm=tv_norm
+                        )
 
-                    if targeted:
-                        # In targeted attack: minimize classification loss towards target + TV loss
-                        total_loss = cls_loss + tv_weight * tv_loss
+                        if targeted:
+                            # In targeted attack: minimize classification loss towards target + TV loss
+                            total_loss = cls_loss + tv_weight * tv_loss
+                        else:
+                            # In untargeted attack: maximize classification loss away from true - TV loss
+                            total_loss = cls_loss - tv_weight * tv_loss
                     else:
-                        # In untargeted attack: maximize classification loss away from true - TV loss
-                        total_loss = cls_loss - tv_weight * tv_loss
-                else:
-                    total_loss = cls_loss
+                        total_loss = cls_loss
 
-                grad = torch.autograd.grad(
-                    total_loss,
-                    x_adv,
-                    retain_graph=False,
-                    create_graph=False,
-                    allow_unused=True,
-                )[0]
+                    grad = torch.autograd.grad(
+                        total_loss,
+                        x_adv,
+                        retain_graph=False,
+                        create_graph=False,
+                        allow_unused=True,
+                    )[0]
 
                 if grad is None:
                     grad = torch.zeros_like(x_adv)
