@@ -313,9 +313,9 @@ class TabularProcessor(BaseProcessor):
             if self.target_column:
                 if self.target_column in sample_data.columns:
                     y_series = sample_data[self.target_column]
-                    target_dist = {k: int(v) for k, v in y_series.value_counts().to_dict().items()}
+                    target_dist = y_series.value_counts().to_dict()
                     if self.num_classes is None:
-                        self.num_classes = int(y_series.nunique())
+                        self.num_classes = y_series.nunique()
                     if self.class_mapping is None and y_series.dtype == "object":
                         # Preserve original unique labels mapping in order of appearance
                         unique_labels = list(dict.fromkeys(y_series.dropna()))
@@ -505,16 +505,16 @@ class TabularProcessor(BaseProcessor):
             # If explicit feature_names known, align columns
             if self.feature_names and all(col in raw_inputs.columns for col in self.feature_names):
                 raw_inputs = raw_inputs[self.feature_names]
-            return raw_inputs.values.astype(np.float32)
+            return np.asarray(raw_inputs, dtype=np.float32)
         elif isinstance(raw_inputs, pd.Series):
-            return raw_inputs.values.astype(np.float32)
+            return np.asarray(raw_inputs, dtype=np.float32)
         elif isinstance(raw_inputs, np.ndarray):
             return raw_inputs.astype(np.float32)
         elif isinstance(raw_inputs, torch.Tensor):
             return raw_inputs.float()
         elif isinstance(raw_inputs, (list, tuple)):
             return np.array(raw_inputs, dtype=np.float32)
-        return raw_inputs
+        return np.asarray(raw_inputs, dtype=np.float32)
 
     def inverse_transform(self, model_inputs: Any) -> Any:
         """
@@ -652,7 +652,7 @@ class TabularProcessor(BaseProcessor):
                 f"Expected 2D tabular model input [batch_size, num_features], got shape {tuple(proc_input.shape)}"
             )
 
-        actual_processed_features = int(proc_input.shape[1])
+        actual_processed_features = proc_input.shape[1]
         if expected_features is not None and expected_features != actual_processed_features:
             raise ModelValidationError(
                 f"Feature count mismatch: model expects {expected_features} features but the provided tabular data contains {actual_processed_features}."
@@ -739,7 +739,7 @@ class TabularProcessor(BaseProcessor):
                 orig_v = orig_df[feat].iloc[0] if len(orig_df) > 0 else None
                 pert_v = pert_df[feat].iloc[0] if len(pert_df) > 0 else None
                 ftype = self.feature_types.get(feat, "numerical")
-                if ftype == "numerical":
+                if ftype == "numerical" and orig_v is not None and pert_v is not None:
                     try:
                         delta = float(pert_v) - float(orig_v)
                         deltas[feat] = {
@@ -776,8 +776,8 @@ class TabularProcessor(BaseProcessor):
 
     def check_attack_compatibility(
         self,
-        attack_name: Optional[Any] = None,
-        adapter: Optional[BaseModelAdapter] = None,
+        attack_name: Optional[Union[str, BaseModelAdapter, Any]] = None,
+        adapter: Optional[Union[BaseModelAdapter, str, Any]] = None,
         **kwargs: Any,
     ) -> AttackCompatibility:
         """

@@ -11,6 +11,8 @@ from app.ingestion.adapters import (
 )
 from app.ingestion.exceptions import (
     ConfigurationError,
+    DatasetFormatError,
+    MissingDependencyError,
     ModelIngestionError,
     ModelLoadError,
     ModelValidationError,
@@ -77,6 +79,8 @@ __all__ = [
     "ModelLoadError",
     "ModelValidationError",
     "ConfigurationError",
+    "DatasetFormatError",
+    "MissingDependencyError",
     "UnsupportedDomainError",
     "UnsupportedModelError",
     "UnsupportedTaskError",

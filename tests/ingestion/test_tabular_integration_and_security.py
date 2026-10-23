@@ -153,6 +153,7 @@ def test_end_to_end_real_sklearn_random_forest():
 
     adapter, meta = result
     proc = result.processor
+    assert isinstance(proc, TabularProcessor)
 
     assert isinstance(adapter, SklearnAdapter)
     assert meta.framework == "sklearn"
@@ -190,6 +191,7 @@ def test_end_to_end_real_pytorch_tabular_mlp():
 
     adapter, meta = result
     proc = result.processor
+    assert isinstance(proc, TabularProcessor)
 
     assert isinstance(adapter, PyTorchAdapter)
     assert meta.framework == "pytorch"
@@ -437,6 +439,7 @@ def test_registered_tabular_model_presets_and_attack_compatibility():
     res_adult = ingest_model("tabular-mlp-adult-census")
     assert res_adult.metadata.data_domain == "tabular"
     assert res_adult.metadata.framework == "pytorch"
+    assert isinstance(res_adult.processor, TabularProcessor)
     assert res_adult.processor.num_features == 14
     compat_adult = res_adult.processor.check_attack_compatibility("PGD", res_adult.adapter)
     assert compat_adult.compatible is True
@@ -445,6 +448,7 @@ def test_registered_tabular_model_presets_and_attack_compatibility():
     res_credit = ingest_model("tabular-mlp-credit-fraud")
     assert res_credit.metadata.data_domain == "tabular"
     assert res_credit.metadata.framework == "pytorch"
+    assert isinstance(res_credit.processor, TabularProcessor)
     assert res_credit.processor.num_features == 30
     compat_credit = res_credit.processor.check_attack_compatibility("PGD", res_credit.adapter)
     assert compat_credit.compatible is True

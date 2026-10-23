@@ -137,6 +137,7 @@ def test_split_features_and_target_with_explicit_target():
     X, y = proc.split_features_and_target(df)
 
     assert list(X.columns) == ["feat_a", "feat_b"]
+    assert y is not None
     assert list(y.values) == ["A", "B", "A"]
     assert proc.tabular_metadata.target_available is True
 
@@ -155,6 +156,7 @@ def test_split_features_and_target_without_target_column():
     assert y is None
     assert list(X.columns) == ["feat_a", "feat_b", "feat_c"]
     assert proc.tabular_metadata.target_available is False
+    assert proc.tabular_metadata.target_status is not None
     assert "unavailable" in proc.tabular_metadata.target_status.lower()
 
 
@@ -226,7 +228,7 @@ def test_tabular_processor_raw_and_model_space_transformations():
     else:
         reconstructed_vals = reconstructed_raw
 
-    np.testing.assert_allclose(reconstructed_vals, raw_data, atol=1e-5)
+    np.testing.assert_allclose(np.asarray(reconstructed_vals, dtype=np.float32), raw_data, atol=1e-5)
 
 
 def test_tabular_processor_without_preprocessor_reports_cleanly():
@@ -310,9 +312,9 @@ def test_end_to_end_tabular_ingestion_acceptance():
     11. IngestionResult container exposes adapter, metadata, and processor.
     """
     # Real dataset: Iris (4 features, 3 classes)
-    iris = load_iris()
-    X = pd.DataFrame(iris.data, columns=["sepal_length", "sepal_width", "petal_length", "petal_width"])
-    y = pd.Series(iris.target, name="species")
+    iris_obj: Any = load_iris()
+    X = pd.DataFrame(iris_obj.data, columns=["sepal_length", "sepal_width", "petal_length", "petal_width"])
+    y = pd.Series(iris_obj.target, name="species")
     df = pd.concat([X, y], axis=1)
 
     # Real Tabular MLP classification model
@@ -374,6 +376,7 @@ def test_end_to_end_tabular_ingestion_acceptance():
     assert tab_meta.target_column == "species"
 
     # 6. Preprocessing awareness
+    assert tab_meta.preprocessing_info is not None
     assert tab_meta.preprocessing_info["status"] == "present"
     assert tab_meta.preprocessing_info["type"] == "MinMaxScaler"
 

@@ -41,3 +41,13 @@ class UnsupportedTaskError(ModelIngestionError):
     """Raised when an unsupported task (e.g. forecasting or regression) is provided."""
     pass
 
+
+class MissingDependencyError(ModelIngestionError):
+    """Raised when an optional third-party runtime dependency is required but not installed."""
+    pass
+
+
+class DatasetFormatError(ModelValidationError):
+    """Raised when a dataset format or structure is invalid or unsupported."""
+    pass
+

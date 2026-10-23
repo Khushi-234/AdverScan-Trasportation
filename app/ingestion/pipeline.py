@@ -126,7 +126,7 @@ def ingest_model(
     target_device = DeviceManager.get_device(device)
     resolved_domain = data_domain or domain
     if resolved_domain:
-        resolved_domain = str(resolved_domain).lower().strip().replace("_", "-")
+        resolved_domain = resolved_domain.lower().strip().replace("_", "-")
         if resolved_domain == "timeseries":
             resolved_domain = "time-series"
     resolved_task = task_type or "classification"
@@ -140,7 +140,7 @@ def ingest_model(
             model_class=model_class,
         )
     resolved_domain = resolved_domain or "unknown"
-    if str(resolved_domain).lower().strip().replace("_", "-") in ("timeseries", "time-series"):
+    if resolved_domain.lower().strip().replace("_", "-") in ("timeseries", "time-series"):
         resolved_domain = "time-series"
 
     from app.ingestion.model_registry import is_forecasting_or_regression
@@ -364,7 +364,13 @@ def ingest_model(
         elif processor is not None:
             try:
                 proc_in = processor.process(sample_input)
-                input_shape = tuple(proc_in.shape)
+                if hasattr(proc_in, "shape"):
+                    input_shape = tuple(proc_in.shape)
+                elif isinstance(proc_in, dict):
+                    for k in ("input_ids", "pixel_values", "inputs", "x"):
+                        if k in proc_in and hasattr(proc_in[k], "shape"):
+                            input_shape = tuple(proc_in[k].shape)
+                            break
             except Exception:
                 pass
 
@@ -372,11 +378,11 @@ def ingest_model(
         if isinstance(out, torch.Tensor):
             output_shape = tuple(out.shape)
             if len(output_shape) > 1:
-                num_classes = int(output_shape[-1])
+                num_classes = output_shape[-1]
         elif isinstance(out, np.ndarray):
             output_shape = tuple(out.shape)
             if len(output_shape) > 1:
-                num_classes = int(output_shape[-1])
+                num_classes = output_shape[-1]
     elif config_dict.get("input_resolution") and domain_clean == "image":
         res = config_dict["input_resolution"]
         input_shape = (1, *res) if len(res) == 3 else (1, 3, *res)
