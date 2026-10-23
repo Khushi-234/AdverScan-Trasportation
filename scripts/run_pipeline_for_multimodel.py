@@ -515,7 +515,7 @@ def prompt_model_selection(domain: str) -> Dict[str, Any]:
                     "dataset_name": None,
                     "data_domain": domain if domain != "all" else "image",
                     "num_classes": num_classes,
-                    "preset_info": {},
+                    "preset_info": {"framework": "huggingface"},
                     "is_custom": True,
                 }
             elif val == opt_local:
@@ -1201,35 +1201,120 @@ def main():
         print("\n" + "-" * 70)
         print("M3 — ADVERSARIAL ATTACK ENGINE RESULTS")
         print("-" * 70)
+        total_attack_time = sum(atk_data.get("execution_time_seconds", 0.0) for atk_data in result.attack_results.values())
+        print(f"Total Attack Execution Time: {total_attack_time:.2f}s across {len(result.attack_results)} attack(s)")
         for atk_name, atk_data in result.attack_results.items():
-            print(f"  ▶ Attack: [{atk_name.upper()}]")
-            print(f"    Class:            {atk_data.get('attack_class')}")
-            print(f"    Execution Time:   {atk_data.get('execution_time_seconds', 0.0):.2f}s")
+            print(f"\n  ▶ Attack: [{atk_name.upper()}]")
+            print(f"    • Attack Class:          {atk_data.get('attack_class')}")
+            print(f"    • Execution Time:        {atk_data.get('execution_time_seconds', 0.0):.2f}s")
             params = atk_data.get("parameters", {})
             if params:
-                print(f"    Parameters:       {params}")
+                param_strs = [f"{k}={v}" for k, v in params.items()]
+                print(f"    • Configuration:         {', '.join(param_strs)}")
 
-    # Vulnerability Scoring Results
+    # Vulnerability Scoring & Security Assessment Results
     if result.vulnerability_analysis:
         print("\n" + "-" * 70)
-        print("M5 — VULNERABILITY ANALYSIS & RISK SCORING")
+        print("M5 — VULNERABILITY ANALYSIS & SECURITY RISK SCORING")
         print("-" * 70)
+
+        # Display Model-Level Roll-up if available
+        model_rob = result.vulnerability_analysis.get("__model_robustness__")
+        if model_rob:
+            m_vscore = model_rob.get("vulnerability_score")
+            m_vscore_str = f"{m_vscore:.2f} / 100" if m_vscore is not None else "INCONCLUSIVE"
+            m_rscore = model_rob.get("robustness_score")
+            m_rscore_str = f"{m_rscore:.2f} / 100" if m_rscore is not None else "N/A"
+            m_risk = model_rob.get("risk_level", "UNKNOWN").upper()
+            driving = model_rob.get("driving_attack") or "None"
+
+            print(f"  ★ MODEL-LEVEL UNIFIED SECURITY ASSESSMENT:")
+            print(f"    • Model Vulnerability Score: {m_vscore_str}")
+            print(f"    • Model Robustness Score:    {m_rscore_str}")
+            print(f"    • Unified Security Risk:     {m_risk}")
+            print(f"    • Primary Driving Threat:    {driving.upper()}")
+            print(f"    • Conclusive Evaluations:    {model_rob.get('valid_attacks_count', 0)} / {model_rob.get('evaluated_attacks_count', 0)}")
+            print("-" * 70)
+
+        # Iterate over individual attack assessments
         for atk_name, vuln in result.vulnerability_analysis.items():
+            if atk_name.startswith("__"):
+                continue
             assessment = vuln.get("assessment", {})
             scoring = vuln.get("scoring", {})
+
+            # Performance metrics
+            clean_acc = assessment.get("clean_accuracy", 0.0)
+            adv_acc = assessment.get("adversarial_accuracy", 0.0)
+            acc_drop = assessment.get("accuracy_drop", 0.0)
+
+            clean_conf = assessment.get("clean_confidence", 0.0)
+            adv_conf = assessment.get("adversarial_confidence", 0.0)
+            conf_drop = assessment.get("confidence_drop", 0.0)
+
+            clean_f1 = assessment.get("clean_f1", 0.0)
+            adv_f1 = assessment.get("adversarial_f1", 0.0)
+            f1_drop = assessment.get("f1_drop", 0.0)
+
+            model_deg = assessment.get("model_degradation", 0.0)
+
+            # ASR and efficacy
             asr = assessment.get("attack_success_rate")
             asr_str = f"{asr * 100:.2f}%" if asr is not None else "N/A"
-            adv_acc = assessment.get("adversarial_accuracy")
-            adv_acc_str = f"{adv_acc * 100:.2f}%" if adv_acc is not None else "N/A"
-            v_score = scoring.get("vulnerability_score")
-            v_score_str = f"{v_score:.2f} / 100" if v_score is not None else "N/A"
-            risk = scoring.get("risk_level", "UNKNOWN").upper()
+            asr_reason = assessment.get("attack_success_rate_reason")
+            asr_display = f"{asr_str} ({asr_reason})" if asr_reason and asr is None else asr_str
 
-            print(f"  ▶ Attack: [{atk_name.upper()}]")
-            print(f"    Adversarial Accuracy:    {adv_acc_str}")
-            print(f"    Attack Success Rate:     {asr_str}")
-            print(f"    Vulnerability Score:     {v_score_str}")
-            print(f"    Assessed Risk Level:     {risk}")
+            atk_meta = assessment.get("metadata") or assessment.get("extra_metadata") or {}
+            eff = atk_meta.get("attack_effective")
+            eff_str = "Effective (Perturbations Applied)" if eff is True else ("No-op / Ineffective" if eff is False else "Estimated")
+
+            # Perturbations
+            pert = assessment.get("perturbation", {})
+            linf = pert.get("linf_mean") if isinstance(pert, dict) else getattr(pert, "linf_mean", None)
+            l2 = pert.get("l2_mean") if isinstance(pert, dict) else getattr(pert, "l2_mean", None)
+            l0 = pert.get("l0_mean") if isinstance(pert, dict) else getattr(pert, "l0_mean", None)
+            tok_changed = atk_meta.get("tokens_changed_rate") or l0
+
+            # Scoring
+            v_score = scoring.get("vulnerability_score")
+            v_score_str = f"{v_score:.2f} / 100" if v_score is not None else "INCONCLUSIVE"
+            risk = scoring.get("risk_level", "UNKNOWN").upper()
+            sub = scoring.get("sub_scores", {})
+
+            # Execution time
+            atk_exec_time = result.attack_results.get(atk_name, {}).get("execution_time_seconds", 0.0)
+
+            print(f"\n  ▶ Attack: [{atk_name.upper()}]")
+            print(f"    • Risk Severity Level:   {risk}")
+            print(f"    • Vulnerability Score:   {v_score_str}")
+            print(f"    • Attack Success Rate:   {asr_display}")
+            print(f"    • Attack Efficacy:       {eff_str}")
+            print(f"    • Attack Execution Time: {atk_exec_time:.2f}s")
+            print(f"    • Accuracy Impact:       {clean_acc * 100:.2f}% → {adv_acc * 100:.2f}% (Drop: -{acc_drop * 100:.2f}%)")
+            print(f"    • Confidence Impact:     {clean_conf * 100:.2f}% → {adv_conf * 100:.2f}% (Drop: -{conf_drop * 100:.2f}%)")
+            print(f"    • Macro F1 Impact:       {clean_f1 * 100:.2f}% → {adv_f1 * 100:.2f}% (Drop: -{f1_drop * 100:.2f}%)")
+            print(f"    • Model Degradation:     {model_deg * 100:.2f}%")
+
+            pert_details = []
+            if linf is not None:
+                pert_details.append(f"L_inf: {linf:.4f}")
+            if l2 is not None:
+                pert_details.append(f"L_2: {l2:.4f}")
+            if tok_changed is not None:
+                pert_details.append(f"Tokens/L_0: {tok_changed * 100:.2f}%")
+            if pert_details:
+                print(f"    • Perturbation Norms:    {', '.join(pert_details)}")
+
+            if sub:
+                sub_parts = []
+                if "asr_score" in sub and sub["asr_score"] is not None:
+                    sub_parts.append(f"ASR={sub['asr_score']:.1f}")
+                if "degradation_score" in sub and sub["degradation_score"] is not None:
+                    sub_parts.append(f"Degradation={sub['degradation_score']:.1f}")
+                if "stealth_score" in sub and sub["stealth_score"] is not None:
+                    sub_parts.append(f"Stealth={sub['stealth_score']:.1f}")
+                if sub_parts:
+                    print(f"    • Score Components:      {', '.join(sub_parts)}")
 
     # Hardening & Re-Test Results (if available)
     if result.hardening_results and result.hardening_results.get("selected_defense"):

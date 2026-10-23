@@ -6,7 +6,7 @@ from app.report_generator import ReportWriter
 from datetime import datetime
 import time
 from collections.abc import Mapping
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple, Union
 import numpy as np
 import torch
 
@@ -208,7 +208,13 @@ class AdverScanOrchestrator:
                 break
             if config.sample_count is not None and samples_collected + len(batch_targets) > config.sample_count:
                 limit = config.sample_count - samples_collected
-                batch_pixels = batch_pixels[:limit]
+                if isinstance(batch_pixels, (dict, Mapping)):
+                    batch_pixels = {
+                        k: (v[:limit] if hasattr(v, "__getitem__") else v)
+                        for k, v in batch_pixels.items()
+                    }
+                elif hasattr(batch_pixels, "__getitem__"):
+                    batch_pixels = batch_pixels[:limit]
                 batch_targets = batch_targets[:limit]
             dataset_batches.append((batch_pixels, batch_targets))
             samples_collected += len(batch_targets)
@@ -272,22 +278,96 @@ class AdverScanOrchestrator:
                     total_atk_time += atk_res_b.metadata.execution_time_seconds
                     last_metadata = atk_res_b.metadata
 
+                # Determine model/tokenizer pad token ID for padding sequences across batches
+                pad_token_id = 0
+                try:
+                    if hasattr(dataset_loader, "_tokenizer") and dataset_loader._tokenizer is not None:
+                        tok_pad = getattr(dataset_loader._tokenizer, "pad_token_id", None)
+                        if tok_pad is not None:
+                            pad_token_id = int(tok_pad)
+                    elif hasattr(adapter, "processor") and adapter.processor is not None:
+                        tok_pad = getattr(adapter.processor, "pad_token_id", None)
+                        if tok_pad is not None:
+                            pad_token_id = int(tok_pad)
+                    if pad_token_id == 0:
+                        raw_m = adapter.get_model() if hasattr(adapter, "get_model") else None
+                        if raw_m is not None and hasattr(raw_m, "config") and hasattr(raw_m.config, "pad_token_id"):
+                            cfg_pad = getattr(raw_m.config, "pad_token_id")
+                            if cfg_pad is not None:
+                                pad_token_id = int(cfg_pad)
+                except Exception:
+                    pad_token_id = 0
+
+                def _concat_tensors(tensors: List[torch.Tensor], pad_value: Union[int, float] = 0) -> Optional[torch.Tensor]:
+                    if not tensors:
+                        return None
+                    first = tensors[0]
+                    if first.ndim == 0:
+                        return torch.stack(tensors, dim=0)
+                    if first.ndim == 1:
+                        return torch.cat(tensors, dim=0)
+                    target_shapes = [max(t.shape[d] for t in tensors) for d in range(1, first.ndim)]
+                    if all(tuple(t.shape[1:]) == tuple(target_shapes) for t in tensors):
+                        return torch.cat(tensors, dim=0)
+                    padded_tensors = []
+                    for t in tensors:
+                        if tuple(t.shape[1:]) == tuple(target_shapes):
+                            padded_tensors.append(t)
+                        else:
+                            padded = torch.full(
+                                (t.shape[0], *target_shapes),
+                                pad_value,
+                                dtype=t.dtype,
+                                device=t.device,
+                            )
+                            slices = tuple([slice(None)] + [slice(0, t.shape[d]) for d in range(1, t.ndim)])
+                            padded[slices] = t
+                            padded_tensors.append(padded)
+                    return torch.cat(padded_tensors, dim=0)
+
+                def _concat_ndarrays(arrs: List[np.ndarray], pad_value: Union[int, float] = 0) -> Optional[np.ndarray]:
+                    if not arrs:
+                        return None
+                    first = arrs[0]
+                    if first.ndim == 0:
+                        return np.stack(arrs, axis=0)
+                    if first.ndim == 1:
+                        return np.concatenate(arrs, axis=0)
+                    target_shapes = [max(a.shape[d] for a in arrs) for d in range(1, first.ndim)]
+                    if all(tuple(a.shape[1:]) == tuple(target_shapes) for a in arrs):
+                        return np.concatenate(arrs, axis=0)
+                    padded_arrs = []
+                    for a in arrs:
+                        if tuple(a.shape[1:]) == tuple(target_shapes):
+                            padded_arrs.append(a)
+                        else:
+                            padded = np.full(
+                                (a.shape[0], *target_shapes),
+                                pad_value,
+                                dtype=a.dtype,
+                            )
+                            slices = tuple([slice(None)] + [slice(0, a.shape[d]) for d in range(1, a.ndim)])
+                            padded[slices] = a
+                            padded_arrs.append(padded)
+                    return np.concatenate(padded_arrs, axis=0)
+
                 # Combine per-batch results across the full dataset
                 def _combine_batches(batch_list):
                     if not batch_list:
                         return None
                     first = batch_list[0]
                     if isinstance(first, torch.Tensor):
-                        return torch.cat(batch_list, dim=0)
+                        return _concat_tensors(batch_list, pad_value=pad_token_id)
                     if isinstance(first, (dict, Mapping)):
                         combined: Dict[Any, Any] = {}
                         for k in first.keys():
                             vals = [b[k] for b in batch_list if isinstance(b, (dict, Mapping)) and k in b and b[k] is not None]
                             if vals:
+                                pad_val = pad_token_id if ("input" in str(k).lower() or ("token" in str(k).lower() and "type" not in str(k).lower())) else 0
                                 if isinstance(vals[0], torch.Tensor):
-                                    combined[k] = torch.cat(vals, dim=0)
+                                    combined[k] = _concat_tensors(vals, pad_value=pad_val)
                                 elif isinstance(vals[0], np.ndarray):
-                                    combined[k] = np.concatenate(vals, axis=0)
+                                    combined[k] = _concat_ndarrays(vals, pad_value=pad_val)
                                 elif isinstance(vals[0], list):
                                     combined[k] = [item for sub in vals for item in sub]
                                 else:
@@ -296,7 +376,7 @@ class AdverScanOrchestrator:
                     if isinstance(first, list):
                         return [item for sub in batch_list for item in sub]
                     if isinstance(first, np.ndarray):
-                        return np.concatenate(batch_list, axis=0)
+                        return _concat_ndarrays(batch_list, pad_value=pad_token_id)
                     return batch_list
 
                 combined_orig = _combine_batches(batch_orig_list)
@@ -384,16 +464,33 @@ class AdverScanOrchestrator:
         print("  ⏳ [Step 5/9] M5 Vulnerability Analysis...", end="", flush=True)
         try:
             vuln_engine = VulnerabilityEngine()
+            predictions_dict = {}
+            for atk_name, adv_res in adv_evaluations_dict.items():
+                y_true = adv_res.targets or baseline_result.targets
+                y_clean_pred = baseline_result.predictions
+                y_adv_pred = adv_res.predictions
+                predictions_dict[atk_name] = {
+                    "y_true": y_true,
+                    "y_clean_pred": y_clean_pred,
+                    "y_adv_pred": y_adv_pred,
+                }
+
             vuln_out = vuln_engine.analyze_pipeline(
                 baseline_result=baseline_result,
                 attack_results=attack_results_coll,
                 adversarial_results=adv_evaluations_dict,
+                predictions_dict=predictions_dict,
             )
-            for atk_k, atk_v in vuln_out.items():
+            pipeline_items = vuln_out.items() if hasattr(vuln_out, "items") else getattr(vuln_out, "results", {}).items()
+            for atk_k, atk_v in pipeline_items:
+                assessment_obj = getattr(atk_v, "assessment", atk_v.get("assessment") if isinstance(atk_v, dict) else None)
+                scoring_obj = getattr(atk_v, "scoring", atk_v.get("scoring") if isinstance(atk_v, dict) else None)
                 result.vulnerability_analysis[atk_k] = {
-                    "assessment": atk_v["assessment"].to_dict(),
-                    "scoring": atk_v["scoring"].to_dict(),
+                    "assessment": assessment_obj.to_dict() if hasattr(assessment_obj, "to_dict") else assessment_obj,
+                    "scoring": scoring_obj.to_dict() if hasattr(scoring_obj, "to_dict") else scoring_obj,
                 }
+            if hasattr(vuln_out, "model_robustness") and vuln_out.model_robustness:
+                result.vulnerability_analysis["__model_robustness__"] = vuln_out.model_robustness.to_dict()
             module_timings["M5_vulnerability_analysis"] = round(time.time() - step_start, 4)
             print(f" Done ({time.time() - step_start:.2f}s)")
         except Exception as e:

@@ -35,7 +35,7 @@ class ModelPresetRegistry:
     @classmethod
     def get_preset(cls, model_id: str) -> Optional[Dict[str, Any]]:
         """Get model preset metadata by identifier if available."""
-        clean = str(model_id).strip()
+        clean = model_id.strip()
         if clean in MODEL_PRESETS:
             return MODEL_PRESETS[clean]
         for p in MODEL_PRESETS.values():
@@ -64,9 +64,10 @@ class ModelPresetRegistry:
         Build a normalized runtime configuration dictionary for either a preset model
         or a user-provided custom model.
         """
-        clean_id = str(model_id).strip()
-        if cls.has_preset(clean_id):
-            config = cls.get_preset(clean_id).copy()
+        clean_id = model_id.strip()
+        preset = cls.get_preset(clean_id)
+        if preset is not None:
+            config = preset.copy()
             if dataset_name is not None:
                 config["dataset_name"] = dataset_name
             if data_domain is not None:
@@ -89,20 +90,21 @@ class ModelPresetRegistry:
         if not resolved_domain:
             resolved_domain = detect_model_domain(model_or_path=clean_id, processor_name=processor_name)
         resolved_domain = resolved_domain or "unknown"
-        if str(resolved_domain).lower().strip().replace("_", "-") in ("timeseries", "time-series"):
+        if resolved_domain.lower().strip().replace("_", "-") in ("timeseries", "time-series"):
             resolved_domain = "time-series"
 
+        detected_source = detect_model_source(clean_id)
         detected_fw = detect_model_framework(clean_id)
         if framework:
             resolved_framework = framework
         elif is_local_file:
             resolved_framework = "sklearn" if p.suffix.lower() in (".joblib", ".pkl", ".pickle") else "pytorch_local"
-        elif detected_fw in ("sklearn", "pytorch"):
-            resolved_framework = detected_fw
-        elif resolved_domain == "tabular":
+        elif detected_source == "huggingface":
+            resolved_framework = "huggingface"
+        elif detected_fw == "sklearn":
             resolved_framework = "sklearn"
         else:
-            resolved_framework = "huggingface"
+            resolved_framework = detected_fw
 
         resolved_task = task_type
         if not resolved_task:
@@ -165,7 +167,7 @@ class ModelPresetRegistry:
         Resolve metadata for a model ID (preset or custom HF model), Kaggle dataset URL, or local file path.
         Distinguishes model_id, dataset_name, and processor_name, and infers domain without blindly assuming image.
         """
-        clean_input = str(model_id_or_path).strip()
+        clean_input = model_id_or_path.strip()
         lower_input = clean_input.lower()
         
         matched_dataset = None
@@ -179,8 +181,9 @@ class ModelPresetRegistry:
             matched_dataset = lower_input
             clean_input = DATASET_TO_RECOMMENDED_MODEL[lower_input]
 
-        if clean_input in MODEL_PRESETS:
-            preset = cls.get_preset(clean_input).copy()
+        preset_found = cls.get_preset(clean_input)
+        if preset_found is not None:
+            preset = preset_found.copy()
             if matched_dataset:
                 preset["dataset_name"] = matched_dataset
             return preset

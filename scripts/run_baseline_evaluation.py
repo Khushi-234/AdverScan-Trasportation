@@ -8,6 +8,8 @@ Supports interactive model selection from terminal, single model evaluation, and
 import argparse
 import sys
 from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple, Union
+
 import torch
 from dotenv import load_dotenv
 
@@ -17,6 +19,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from app.ingestion import ingest_model
 from app.ingestion.model_registry import ModelPresetRegistry, setup_model_environment
 from app.evaluation import evaluate_baseline
+from app.evaluation.results import EvaluationResult
 from app.utils import load_gtsrb_vit_model
 
 load_dotenv()
@@ -142,13 +145,13 @@ def prompt_model_selection():
 
 def run_single_evaluation(
     model_id: str,
-    dataset_name: str,
-    processor_name: str,
-    data_domain: str,
+    dataset_name: Optional[str] = None,
+    processor_name: Optional[str] = None,
+    data_domain: Optional[str] = None,
     samples: int = 100,
     device: str = "cpu",
     output_dir: str = "results/baseline",
-):
+) -> Optional[EvaluationResult]:
     print(f"\n[1/3] Standardizing & Setting Environment for '{model_id}'...")
     env_info = setup_model_environment(
         model_id_or_path=model_id,
@@ -189,6 +192,7 @@ def run_single_evaluation(
             sample_input=sample_input,
             model_name=env_info["model_name"],
             device=device,
+            framework=env_info.get("framework"),
             data_domain=env_info.get("data_domain"),
             dataset_name=dataset_name,
             processor_name=env_info.get("processor_name"),
@@ -203,6 +207,7 @@ def run_single_evaluation(
                 sample_input=sample_input,
                 model_name=env_info["model_name"],
                 device=device,
+                framework=env_info.get("framework"),
                 data_domain=env_info.get("data_domain"),
                 dataset_name=dataset_name,
                 processor_name=env_info.get("processor_name"),
@@ -240,7 +245,7 @@ def run_single_evaluation(
     print(f"\n[2/3] Running Clean Baseline Evaluation on '{dataset_name}' (test split, {samples} samples)...")
     split_str = f"test[:{samples}]" if samples > 0 else "test"
 
-    eval_kwargs = {}
+    eval_kwargs: Dict[str, Any] = {}
     from pathlib import Path
 
     from app.evaluation.dataset_loader.factory import resolve_dataset_file
@@ -255,7 +260,10 @@ def run_single_evaluation(
         else:
             print("  [INFO] No local CSV dataset path found; evaluating on synthetic sample inputs.")
             num_eval_samples = samples if samples > 0 else 100
-            input_shape_eval = (num_eval_samples,) + tuple(sample_input.shape[1:])
+            if isinstance(sample_input, torch.Tensor):
+                input_shape_eval = (num_eval_samples,) + tuple(sample_input.shape[1:])
+            else:
+                input_shape_eval = (num_eval_samples, 14)
             eval_inputs = torch.randn(input_shape_eval)
             eval_targets = torch.randint(0, num_classes, (num_eval_samples,))
             eval_kwargs["data"] = (eval_inputs, eval_targets)
@@ -274,16 +282,21 @@ def run_single_evaluation(
             else:
                 x_ts, y_ts = loaded, None
 
-            if samples > 0 and len(x_ts) > samples:
+            if samples > 0 and x_ts is not None and len(x_ts) > samples:
                 x_ts = x_ts[:samples]
                 if y_ts is not None:
                     y_ts = y_ts[:samples]
-            eval_kwargs["inputs"] = x_ts
-            eval_kwargs["targets"] = y_ts
+            if x_ts is not None:
+                eval_kwargs["inputs"] = x_ts
+            if y_ts is not None:
+                eval_kwargs["targets"] = y_ts
         else:
             print("  [INFO] No local tensor dataset path found; evaluating on synthetic sequence samples.")
             num_eval_samples = samples if samples > 0 else 100
-            input_shape_eval = (num_eval_samples,) + tuple(sample_input.shape[1:])
+            if isinstance(sample_input, torch.Tensor):
+                input_shape_eval = (num_eval_samples,) + tuple(sample_input.shape[1:])
+            else:
+                input_shape_eval = (num_eval_samples, 1, 14)
             eval_inputs = torch.randn(input_shape_eval)
             eval_targets = torch.randint(0, num_classes, (num_eval_samples,))
             eval_kwargs["inputs"] = eval_inputs
@@ -344,13 +357,23 @@ def run_single_evaluation(
 def main():
     args = parse_args()
 
+    model_id: str = "bazyl/gtsrb-model"
+    dataset_name: Optional[str] = "bazyl/GTSRB"
+    processor_name: Optional[str] = "bazyl/gtsrb-model"
+    data_domain: Optional[str] = "image"
+    evaluate_all = False
+
     if args.all:
         evaluate_all = True
     elif not args.non_interactive and args.model is None:
-        model_id, dataset_name, processor_name, data_domain = prompt_model_selection()
-        evaluate_all = (model_id == "__all__")
+        p_model, p_dataset, p_proc, p_dom = prompt_model_selection()
+        evaluate_all = (p_model == "__all__")
+        if not evaluate_all:
+            model_id = p_model
+            dataset_name = p_dataset
+            processor_name = p_proc
+            data_domain = p_dom
     else:
-        evaluate_all = False
         model_id = args.model or "bazyl/gtsrb-model"
         resolved_info = ModelPresetRegistry.resolve_model_info(model_id)
         dataset_name = args.dataset or resolved_info.get("dataset_name", "bazyl/GTSRB")
@@ -381,15 +404,18 @@ def main():
                     samples=args.samples,
                     device=device,
                 )
+                acc_val = f"{res.accuracy * 100:.2f}%" if res is not None and res.accuracy is not None else "N/A"
+                f1_val = f"{res.f1_macro * 100:.2f}%" if res is not None and res.f1_macro is not None else "N/A"
+                conf_val = f"{res.average_confidence * 100:.2f}%" if res is not None and res.average_confidence is not None else "N/A"
                 all_results.append({
                     "model_id": p_id,
                     "name": p_name,
                     "domain": dom,
-                    "dataset": d_name,
-                    "status": "SUCCESS",
-                    "accuracy": f"{res.accuracy * 100:.2f}%",
-                    "f1_macro": f"{res.f1_macro * 100:.2f}%",
-                    "confidence": f"{res.average_confidence * 100:.2f}%",
+                    "dataset": d_name or "N/A",
+                    "status": "SUCCESS" if res is not None else "FAILED",
+                    "accuracy": acc_val,
+                    "f1_macro": f1_val,
+                    "confidence": conf_val,
                     "error": None,
                 })
             except Exception as e:
@@ -414,7 +440,9 @@ def main():
         print("-" * len(header))
         for r in all_results:
             status_icon = "✓" if r["status"] == "SUCCESS" else "✗"
-            print(f"{r['model_id'][:35]:<35} | {r['domain'][:6].upper():<6} | {status_icon} {r['status']:<5} | {r['accuracy']:<9} | {r['f1_macro']:<9} | {r['confidence']:<8}")
+            m_id_str = str(r.get("model_id") or "")
+            dom_str = str(r.get("domain") or "")
+            print(f"{m_id_str[:35]:<35} | {dom_str[:6].upper():<6} | {status_icon} {r['status']:<5} | {r['accuracy']:<9} | {r['f1_macro']:<9} | {r['confidence']:<8}")
         print("=" * 90)
         return
 
