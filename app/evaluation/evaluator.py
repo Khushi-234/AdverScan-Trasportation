@@ -132,11 +132,8 @@ class BaselineEvaluator:
 
         y_true = np.array(all_targets, dtype=np.int64)
         y_pred = np.array(all_preds, dtype=np.int64)
-        y_probs = np.concatenate(all_probs_list, axis=0)
-
-        # Fallback dynamic calculation of num_classes if dataset labels exceed num_classes
-        if self.num_classes is None or (len(y_true) > 0 and int(np.max(y_true)) >= self.num_classes):
-            self.num_classes = max(int(np.max(y_true)) + 1 if len(y_true) > 0 else 1, y_probs.shape[-1])
+        y_probs = np.concatenate(all_probs_list, axis=0) if all_probs_list else np.empty((0, self.num_classes))
+        sample_confidences = np.max(y_probs, axis=-1).tolist() if len(y_probs) > 0 else []
 
         # Compute classification, confidence, entropy, and confusion matrix metrics
         metrics = MetricsCalculator.compute_metrics(
@@ -203,10 +200,13 @@ class BaselineEvaluator:
             batch_size=getattr(self.dataset_loader, "batch_size", 32),
             device=device_str,
             timestamp=timestamp,
-            total_parameters=total_params,
-            trainable_parameters=trainable_params,
-            model_architecture=model_arch,
-            class_names=class_names,
+            extra_metadata={
+                "predictions": y_pred.tolist(),
+                "targets": y_true.tolist(),
+                "y_pred": y_pred.tolist(),
+                "y_true": y_true.tolist(),
+                "sample_confidences": sample_confidences,
+            },
         )
 
         # Persist results JSON if output_dir is provided

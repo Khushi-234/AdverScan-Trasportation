@@ -38,6 +38,21 @@ class EvaluationResult:
     class_names: Optional[List[str]] = None
     extra_metadata: Dict[str, Any] = field(default_factory=dict)
 
+    @property
+    def predictions(self) -> Optional[List[int]]:
+        """Sample predictions vector if captured."""
+        return self.extra_metadata.get("predictions") or self.extra_metadata.get("y_pred")
+
+    @property
+    def targets(self) -> Optional[List[int]]:
+        """Sample ground-truth targets vector if captured."""
+        return self.extra_metadata.get("targets") or self.extra_metadata.get("y_true")
+
+    @property
+    def sample_confidences(self) -> Optional[List[float]]:
+        """Sample confidence scores if captured."""
+        return self.extra_metadata.get("sample_confidences")
+
     def to_dict(self) -> Dict[str, Any]:
         """Convert evaluation result object to dictionary."""
         return asdict(self)
