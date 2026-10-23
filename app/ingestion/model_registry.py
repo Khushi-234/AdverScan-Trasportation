@@ -92,17 +92,18 @@ class ModelPresetRegistry:
         if str(resolved_domain).lower().strip().replace("_", "-") in ("timeseries", "time-series"):
             resolved_domain = "time-series"
 
+        detected_source = detect_model_source(clean_id)
         detected_fw = detect_model_framework(clean_id)
         if framework:
             resolved_framework = framework
         elif is_local_file:
             resolved_framework = "sklearn" if p.suffix.lower() in (".joblib", ".pkl", ".pickle") else "pytorch_local"
-        elif detected_fw in ("sklearn", "pytorch"):
-            resolved_framework = detected_fw
-        elif resolved_domain == "tabular":
+        elif detected_source == "huggingface":
+            resolved_framework = "huggingface"
+        elif detected_fw == "sklearn":
             resolved_framework = "sklearn"
         else:
-            resolved_framework = "huggingface"
+            resolved_framework = detected_fw
 
         resolved_task = task_type
         if not resolved_task:
