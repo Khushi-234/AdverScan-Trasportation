@@ -308,3 +308,140 @@ def test_22_missing_checkpoint_handling(manager, tmp_path):
 
     with pytest.raises(CheckpointCorruptedError, match="Checkpoint file does not exist"):
         manager.load(missing_file)
+
+
+# 23. Deterministic Interrupted Multi-Batch Run Resumption Matching Uninterrupted Run
+def test_23_orchestrator_interrupted_run_resumes_matching_uninterrupted_run(tmp_path):
+    """
+    Sprint 1.6 Integration Test:
+    Interrupt a small multi-batch run, resume it from the saved checkpoint,
+    and verify that the final results and predictions match the uninterrupted run exactly.
+    """
+    import torch
+    import torch.nn as nn
+    from app.orchestration.orchestrator import AdverScanOrchestrator
+    from app.orchestration.pipeline_config import PipelineConfig
+    from app.orchestration.dataset_adapter import InMemoryDatasetLoader
+
+    # Fixed deterministic weights and inputs
+    torch.manual_seed(42)
+    model = nn.Sequential(
+        nn.Linear(10, 8),
+        nn.ReLU(),
+        nn.Linear(8, 3),
+    )
+    # Freeze model weights for determinism
+    for p in model.parameters():
+        p.requires_grad = False
+
+    inputs = torch.randn(8, 10)
+    targets = torch.tensor([0, 1, 2, 0, 1, 2, 0, 1], dtype=torch.long)
+
+    loader_1 = InMemoryDatasetLoader(inputs=inputs.clone(), targets=targets.clone(), batch_size=4)
+    loader_2 = InMemoryDatasetLoader(inputs=inputs.clone(), targets=targets.clone(), batch_size=4)
+    loader_3 = InMemoryDatasetLoader(inputs=inputs.clone(), targets=targets.clone(), batch_size=4)
+
+    # 1. Uninterrupted run
+    uninterrupted_dir = tmp_path / "uninterrupted"
+    cfg_uninterrupted = PipelineConfig(
+        model_path=model,
+        sample_input=inputs[:1],
+        num_classes=3,
+        mode="attack_assessment",
+        attacks=["fgsm"],
+        batch_size=4,
+        enable_xai=False,
+        enable_hardening=False,
+        enable_report=False,
+        enable_checkpoint=True,
+        checkpoint_dir=str(uninterrupted_dir),
+        custom_dataset_loader=loader_1,
+        seed=42,
+        deterministic=True,
+    )
+    orch_1 = AdverScanOrchestrator()
+    res_uninterrupted = orch_1.run(cfg_uninterrupted)
+    assert res_uninterrupted.status == "SUCCESS"
+
+    # 2. Simulated interrupted run (interrupted after batch 0 completes)
+    resumed_dir = tmp_path / "resumed"
+    resumed_dir.mkdir(parents=True, exist_ok=True)
+    cfg_interrupted = PipelineConfig(
+        model_path=model,
+        sample_input=inputs[:1],
+        num_classes=3,
+        mode="attack_assessment",
+        attacks=["fgsm"],
+        batch_size=4,
+        enable_xai=False,
+        enable_hardening=False,
+        enable_report=False,
+        enable_checkpoint=True,
+        checkpoint_dir=str(resumed_dir),
+        custom_dataset_loader=loader_2,
+        seed=42,
+        deterministic=True,
+    )
+
+    from app.attack_engine.attack_engine import AttackEngine
+    orig_run_attack = AttackEngine.run_attack
+    call_count = 0
+
+    def fail_after_first_batch(self, *args, **kwargs):
+        nonlocal call_count
+        call_count += 1
+        res = orig_run_attack(self, *args, **kwargs)
+        if call_count >= 2:
+            raise RuntimeError("Simulated interruption during batch 1!")
+        return res
+
+    AttackEngine.run_attack = fail_after_first_batch
+    try:
+        orch_2 = AdverScanOrchestrator()
+        orch_2.run(cfg_interrupted)
+    except Exception:
+        pass
+    finally:
+        AttackEngine.run_attack = orig_run_attack
+
+    # Verify that a checkpoint file was created containing batch 0 completed
+    ckpt_files = list(resumed_dir.glob("*.json"))
+    assert len(ckpt_files) == 1, "Expected one checkpoint file from interrupted run"
+    ckpt_file = ckpt_files[0]
+
+    with open(ckpt_file, "r") as f:
+        saved_state = json.load(f)
+    assert 0 in saved_state["completed_batch_indices"]
+    assert 1 not in saved_state["completed_batch_indices"]
+
+    # 3. Resume the run from the saved checkpoint
+    cfg_resume = PipelineConfig(
+        model_path=model,
+        sample_input=inputs[:1],
+        num_classes=3,
+        mode="attack_assessment",
+        attacks=["fgsm"],
+        batch_size=4,
+        enable_xai=False,
+        enable_hardening=False,
+        enable_report=False,
+        enable_checkpoint=True,
+        checkpoint_dir=str(resumed_dir),
+        resume_checkpoint_path=str(ckpt_file),
+        custom_dataset_loader=loader_3,
+        seed=42,
+        deterministic=True,
+    )
+    orch_3 = AdverScanOrchestrator()
+    res_resumed = orch_3.run(cfg_resume)
+    assert res_resumed.status == "SUCCESS"
+
+    # 4. Verify numerical and metric parity between uninterrupted and resumed runs
+    assert res_resumed.metadata["checkpoint"]["completed_batch_indices"] == [0, 1]
+    unint_acc = res_uninterrupted.adversarial_evaluations["fgsm"]["accuracy"]
+    resum_acc = res_resumed.adversarial_evaluations["fgsm"]["accuracy"]
+    assert unint_acc == resum_acc, f"Accuracy mismatch: {unint_acc} vs {resum_acc}"
+    assert res_uninterrupted.adversarial_evaluations["fgsm"]["num_samples"] == res_resumed.adversarial_evaluations["fgsm"]["num_samples"]
+    assert res_uninterrupted.adversarial_evaluations["fgsm"]["average_confidence"] == res_resumed.adversarial_evaluations["fgsm"]["average_confidence"]
+    assert res_uninterrupted.adversarial_evaluations["fgsm"]["average_entropy"] == res_resumed.adversarial_evaluations["fgsm"]["average_entropy"]
+

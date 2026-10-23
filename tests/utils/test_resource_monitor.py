@@ -145,3 +145,35 @@ def test_14_orchestration_result_resource_summary():
     )
     d = res.to_dict()
     assert d["resource_summary"] == {"monitoring_available": True, "duration_seconds": 1.5}
+
+
+def test_15_windows_compatibility_mocked(monkeypatch):
+    """Simulate Windows environment where resource module is unavailable."""
+    import app.utils.resource_monitor as rm
+
+    monkeypatch.setattr(rm, "_HAS_RESOURCE", False)
+    monkeypatch.setattr(rm, "resource", None)
+
+    monitor = rm.ResourceMonitor()
+    monitor.start()
+    snap = monitor.snapshot()
+    assert isinstance(snap, rm.ResourceSnapshot)
+    assert snap.ram_total_mb >= 0.0
+
+    summary = monitor.stop()
+    assert isinstance(summary, dict)
+    assert summary.get("monitoring_available") is True
+    assert "cpu" in summary
+    assert "memory" in summary
+
+
+def test_16_fallback_process_ram_when_resource_missing(monkeypatch):
+    """Verify fallback RAM returns 0.0 without crashing when resource module is absent."""
+    import app.utils.resource_monitor as rm
+
+    monkeypatch.setattr(rm, "_HAS_RESOURCE", False)
+    monkeypatch.setattr(rm, "resource", None)
+
+    fallback_val = rm.ResourceMonitor._get_fallback_process_ram_mb()
+    assert fallback_val == 0.0
+

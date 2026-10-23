@@ -8,13 +8,19 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime
 import os
 import platform
-import resource
 import time
 from typing import Any, Dict, List, Optional, Tuple
 import torch
 
 try:
-    import psutil
+    import resource
+    _HAS_RESOURCE = True
+except ImportError:
+    resource = None
+    _HAS_RESOURCE = False
+
+try:
+    import psutil  # type: ignore[import-untyped,import-not-found]
     _HAS_PSUTIL = True
 except ImportError:
     psutil = None
@@ -269,9 +275,13 @@ class ResourceMonitor:
     @staticmethod
     def _get_fallback_process_ram_mb() -> float:
         """Fallback to get process RAM in MB using standard library resource module."""
+        if not _HAS_RESOURCE or resource is None:
+            return 0.0
         try:
             rusage = resource.getrusage(resource.RUSAGE_SELF)
-            # ru_maxrss is in KB on Linux
+            # ru_maxrss is in KB on Linux, bytes on Darwin/BSD
+            if platform.system() == "Darwin":
+                return round(rusage.ru_maxrss / (1024.0 * 1024.0), 2)
             return round(rusage.ru_maxrss / 1024.0, 2)
         except Exception:
             return 0.0

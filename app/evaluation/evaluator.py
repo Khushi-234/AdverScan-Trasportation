@@ -2,10 +2,10 @@
 Baseline evaluator engine for executing clean baseline evaluations in AdverScan.
 """
 
-from ast import List
+from collections.abc import Mapping
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Optional, Union
+from typing import Any, List, Optional, Union
 import numpy as np
 import torch
 
@@ -55,14 +55,16 @@ class BaselineEvaluator:
         output_dir: Optional[Union[str, Path]] = "results/baseline",
         log_mlflow: bool = False,
         show_progress: bool = True,
+        max_samples: Optional[int] = None,
     ) -> EvaluationResult:
         """
-        Run baseline evaluation over full dataset split.
+        Run baseline evaluation over dataset split.
 
         Args:
             output_dir: Optional directory to save evaluation result JSON artifact.
             log_mlflow: Whether to log metrics to MLflow.
             show_progress: Whether to display a progress bar for batch evaluation.
+            max_samples: Optional maximum number of samples to evaluate.
 
         Returns:
             EvaluationResult dataclass containing full metrics.
@@ -84,7 +86,7 @@ class BaselineEvaluator:
         batch_iter = self.dataset_loader.iterate_batches()
         if show_progress:
             try:
-                from tqdm import tqdm
+                from tqdm import tqdm  # type: ignore[import-untyped]
                 batch_iter = tqdm(
                     batch_iter,
                     total=total_batches,
@@ -98,6 +100,18 @@ class BaselineEvaluator:
         # Batch inference loop with torch.no_grad() to prevent VRAM memory accumulation
         with torch.no_grad():
             for batch_pixels, batch_targets, _ in batch_iter:
+                if max_samples is not None and len(all_targets) >= max_samples:
+                    break
+                if max_samples is not None and len(all_targets) + len(batch_targets) > max_samples:
+                    limit = max_samples - len(all_targets)
+                    if isinstance(batch_pixels, (dict, Mapping)):
+                        batch_pixels = {
+                            k: (v[:limit] if hasattr(v, "__getitem__") else v)
+                            for k, v in batch_pixels.items()
+                        }
+                    elif hasattr(batch_pixels, "__getitem__"):
+                        batch_pixels = batch_pixels[:limit]
+                    batch_targets = batch_targets[:limit]
                 # Perform inference using M1 adapter
                 outputs = self.adapter.predict(batch_pixels)
                 
@@ -127,12 +141,21 @@ class BaselineEvaluator:
                 all_preds.extend(preds_tensor.cpu().numpy().tolist())
                 all_probs_list.append(probs_tensor.cpu().numpy())
 
+                if max_samples is not None and len(all_targets) >= max_samples:
+                    break
+
                 if torch.cuda.is_available():
                     torch.cuda.empty_cache()
 
         y_true = np.array(all_targets, dtype=np.int64)
         y_pred = np.array(all_preds, dtype=np.int64)
-        y_probs = np.concatenate(all_probs_list, axis=0) if all_probs_list else np.empty((0, self.num_classes))
+        num_classes_resolved: int = (
+            self.num_classes
+            if self.num_classes is not None
+            else (len(np.unique(y_true)) if len(y_true) > 0 else 2)
+        )
+        self.num_classes = num_classes_resolved
+        y_probs = np.concatenate(all_probs_list, axis=0) if all_probs_list else np.empty((0, num_classes_resolved))
         sample_confidences = np.max(y_probs, axis=-1).tolist() if len(y_probs) > 0 else []
 
         # Compute classification, confidence, entropy, and confusion matrix metrics
@@ -140,7 +163,7 @@ class BaselineEvaluator:
             y_true=y_true,
             y_pred=y_pred,
             y_probs=y_probs,
-            num_classes=self.num_classes,
+            num_classes=num_classes_resolved,
         )
 
         device_str = str(getattr(self.adapter, "device", "cpu"))
@@ -185,7 +208,7 @@ class BaselineEvaluator:
             dataset_name=self.dataset_loader.dataset_name,
             model_name=self.model_name,
             num_samples=len(y_true),
-            num_classes=self.num_classes,
+            num_classes=num_classes_resolved,
             accuracy=metrics["accuracy"],
             precision_macro=metrics["precision_macro"],
             recall_macro=metrics["recall_macro"],

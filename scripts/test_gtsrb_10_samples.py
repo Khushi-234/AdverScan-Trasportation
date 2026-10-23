@@ -117,6 +117,8 @@ def main():
     print(f"  Adapter Type:  {adapter.__class__.__name__}")
 
     # 2. Initialize GTSRB dataset loader for exactly 10 samples from test split
+    num_samples_target = args.samples
+    split_str = f"test[:{args.samples}]"
     print(f"\n[2/3] Loading exactly {num_samples_target} samples from '{dataset_name}' (test split) ...")
     loader = HFVisionDatasetLoader(
         dataset_name=dataset_name,
@@ -272,8 +274,8 @@ def main():
     else:
         combined_asr = 0.0
 
-    mean_asr = float(np.mean([res["attack_success_rate"] for res in attack_results.values()]))
-    mean_adv_acc = float(np.mean([res["adv_accuracy"] for res in attack_results.values()]))
+    mean_asr = float(np.mean([float(res["attack_success_rate"]) for res in attack_results.values()]))
+    mean_adv_acc = float(np.mean([float(res["adv_accuracy"]) for res in attack_results.values()]))
 
     # 7. Report Integration Test & Combined Results
     print("\n" + "=" * 70)

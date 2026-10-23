@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 import json
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
-import yaml
+import yaml  # type: ignore[import-untyped]
 
 VALID_METRICS = {
     "accuracy",
@@ -101,6 +101,11 @@ class PipelineConfig:
     mlflow_tracking_uri: Optional[str] = None
     mlflow_experiment_name: Optional[str] = None
 
+    # Checkpoint & Resume Configuration (Module 8 / CheckpointManager)
+    enable_checkpoint: bool = False
+    checkpoint_dir: str = "results/checkpoints"
+    resume_checkpoint_path: Optional[str] = None
+
     # Output Configuration
     output_dir: Optional[str] = "results/orchestration"
 
@@ -131,6 +136,10 @@ class PipelineConfig:
             if not isinstance(self.experiment_id, str) or not self.experiment_id.strip():
                 raise ValueError("experiment_id must be a non-empty string if provided.")
 
+        if self.resume_checkpoint_path is not None:
+            if not isinstance(self.resume_checkpoint_path, str) or not self.resume_checkpoint_path.strip():
+                raise ValueError("resume_checkpoint_path must be a non-empty string if provided.")
+
         for metric in self.evaluation_metrics:
             if metric.lower() not in VALID_METRICS:
                 raise ValueError(f"Unsupported evaluation metric '{metric}'. Must be one of {VALID_METRICS}")
@@ -150,32 +159,52 @@ class PipelineConfig:
         if isinstance(self.attack_configs, dict):
             for k in sorted(self.attack_configs.keys()):
                 val = self.attack_configs[k]
+                k_clean = str(k).lower().strip() if not isinstance(k, str) else k.lower().strip()
                 if hasattr(val, "to_dict") and callable(val.to_dict):
-                    norm_attack_configs[str(k).lower().strip()] = val.to_dict()
+                    norm_attack_configs[k_clean] = val.to_dict()
                 elif isinstance(val, dict):
-                    norm_attack_configs[str(k).lower().strip()] = val
+                    norm_attack_configs[k_clean] = val
                 else:
-                    norm_attack_configs[str(k).lower().strip()] = str(val)
+                    norm_attack_configs[k_clean] = str(val)
 
         # Normalize defense_config
         norm_defense_config = {}
         if isinstance(self.defense_config, dict):
             for k in sorted(self.defense_config.keys()):
-                norm_defense_config[str(k)] = self.defense_config[k]
+                k_str = str(k) if not isinstance(k, str) else k
+                norm_defense_config[k_str] = self.defense_config[k]
 
         # Normalize evaluation_metrics
-        norm_eval_metrics = sorted([str(m).lower().strip() for m in self.evaluation_metrics]) if self.evaluation_metrics else []
+        norm_eval_metrics = (
+            sorted([m.lower().strip() if isinstance(m, str) else str(m).lower().strip() for m in self.evaluation_metrics])
+            if self.evaluation_metrics
+            else []
+        )
+
+        norm_xai_techniques = (
+            sorted([t.lower().strip() if isinstance(t, str) else str(t).lower().strip() for t in self.xai_techniques])
+            if self.xai_techniques
+            else []
+        )
+
+        mode_str = self.mode.lower().strip() if isinstance(self.mode, str) else str(self.mode).lower().strip()
+        defense_str = (
+            (self.defense.lower().strip() if isinstance(self.defense, str) else str(self.defense).lower().strip())
+            if self.defense
+            else "auto"
+        )
 
         extra_params = {
             "seed": self.seed,
             "deterministic": self.deterministic,
-            "mode": str(self.mode).lower().strip(),
+            "mode": mode_str,
             "attack_configs": norm_attack_configs,
             "enable_hardening": self.enable_hardening,
-            "defense": str(self.defense).lower().strip() if self.defense else "auto",
+            "defense": defense_str,
             "defense_config": norm_defense_config,
             "evaluation_metrics": norm_eval_metrics,
             "enable_xai": self.enable_xai,
+            "xai_techniques": norm_xai_techniques,
         }
         return compute_configuration_hash(
             dataset_name=self.dataset_name,
@@ -237,7 +266,7 @@ class PipelineConfig:
             with open(json_str_or_path, "r", encoding="utf-8") as f:
                 data = json.load(f)
         else:
-            s = str(json_str_or_path).strip()
+            s = json_str_or_path.strip() if isinstance(json_str_or_path, str) else str(json_str_or_path).strip()
             if not s.startswith("{") and (s.endswith(".json") or len(s) < 256):
                 p = Path(s)
                 if p.exists() and p.is_file():
@@ -271,7 +300,7 @@ class PipelineConfig:
             with open(yaml_str_or_path, "r", encoding="utf-8") as f:
                 data = yaml.safe_load(f)
         else:
-            s = str(yaml_str_or_path).strip()
+            s = yaml_str_or_path.strip() if isinstance(yaml_str_or_path, str) else str(yaml_str_or_path).strip()
             if not s.startswith(("{", "---")) and (s.endswith((".yaml", ".yml")) or len(s) < 256):
                 p = Path(s)
                 if p.exists() and p.is_file():

@@ -35,7 +35,7 @@ class AttackMetadata:
         parameters: Additional attack-specific parameters.
     """
 
-    name: str
+    name: str = ""
     domain: str = "image"
     category: str = "gradient"
     attack_type: str = "white_box"
@@ -60,10 +60,12 @@ class AttackMetadata:
     parameters: Dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self):
-        if self.attack_name is None:
+        if not self.name and self.attack_name:
+            self.name = self.attack_name
+        elif self.name and not self.attack_name:
             self.attack_name = self.name
         if self.attack_class is None:
-            self.attack_class = self.name.upper()
+            self.attack_class = self.name.upper() if self.name else "ATTACK"
 
     @property
     def type(self) -> str:

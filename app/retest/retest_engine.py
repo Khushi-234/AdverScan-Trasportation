@@ -9,6 +9,7 @@ Reuses existing AttackEngine, BaselineEvaluator, VulnerabilityEngine, and Compar
 import time
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Union
+import numpy as np
 import torch
 import torch.nn as nn
 
@@ -19,7 +20,7 @@ from app.evaluation.dataset_loader import BaseDatasetLoader
 from app.evaluation.results import EvaluationResult
 from app.attack_engine.attack_engine import AttackEngine
 from app.attack_engine.config import AttackConfig
-from app.attack_engine.models import AttackResult, AttackResults
+from app.attack_engine.models import AttackMetadata, AttackResult, AttackResults
 from app.vulnerability_analysis.vulnerability_engine import VulnerabilityEngine
 from app.orchestration.dataset_adapter import InMemoryDatasetLoader
 from app.retest.comparison import ComparisonEngine
@@ -107,11 +108,12 @@ class RetestEngine:
         before_attack_results = before_attack_results or {}
 
         # Standardize before_baseline_result dict representation
-        before_baseline_dict = (
-            before_baseline_result.to_dict()
-            if hasattr(before_baseline_result, "to_dict")
-            else dict(before_baseline_result)
-        )
+        if isinstance(before_baseline_result, dict):
+            before_baseline_dict = dict(before_baseline_result)
+        elif hasattr(before_baseline_result, "to_dict"):
+            before_baseline_dict = before_baseline_result.to_dict()
+        else:
+            before_baseline_dict = {}
 
         # Step 1: Baseline Evaluation of Hardened Model
         baseline_evaluator = BaselineEvaluator(
@@ -123,16 +125,13 @@ class RetestEngine:
         after_baseline_result: EvaluationResult = baseline_evaluator.evaluate(output_dir=None, show_progress=False)
         after_baseline_dict = after_baseline_result.to_dict()
 
-        # Extract sample batch for attack execution
-        sample_batch = None
+        # Extract all batches for attack execution
+        all_batches = []
         for batch_pixels, batch_targets, _ in dataset_loader.iterate_batches():
-            sample_batch = (batch_pixels, batch_targets)
-            break
+            all_batches.append((batch_pixels, batch_targets))
 
-        if sample_batch is None:
+        if not all_batches:
             raise ValueError("Provided dataset_loader produced no batches.")
-
-        inputs, labels = sample_batch
 
         # Step 2: Execute Attacks on Hardened Model using AttackEngine
         attack_engine = AttackEngine(adapter)
@@ -148,25 +147,81 @@ class RetestEngine:
             elif isinstance(atk_cfg_raw, dict):
                 atk_config_obj = AttackConfig(**atk_cfg_raw)
 
-            # Execute attack via AttackEngine
-            atk_res: AttackResult = attack_engine.run_attack(
-                attack_name=attack_name,
-                inputs=inputs,
-                labels=labels,
-                config=atk_config_obj,
+            batch_orig_list = []
+            batch_adv_list = []
+            batch_labels_list = []
+            total_atk_time = 0.0
+            last_metadata = None
+
+            for b_pixels, b_targets in all_batches:
+                atk_res_b: AttackResult = attack_engine.run_attack(
+                    attack_name=attack_name,
+                    inputs=b_pixels,
+                    labels=b_targets,
+                    config=atk_config_obj,
+                )
+                batch_orig_list.append(atk_res_b.original_inputs if atk_res_b.original_inputs is not None else b_pixels)
+                batch_adv_list.append(atk_res_b.adversarial_examples)
+                b_lbls = atk_res_b.labels if atk_res_b.labels is not None else b_targets
+                batch_labels_list.append(b_lbls)
+                total_atk_time += atk_res_b.metadata.execution_time_seconds
+                last_metadata = atk_res_b.metadata
+
+            # Combine per-batch results
+            if isinstance(batch_adv_list[0], torch.Tensor):
+                combined_adv = torch.cat(batch_adv_list, dim=0)
+            elif isinstance(batch_adv_list[0], np.ndarray):
+                combined_adv = np.concatenate(batch_adv_list, axis=0)
+            elif isinstance(batch_adv_list[0], list):
+                combined_adv = [item for sub in batch_adv_list for item in sub]
+            else:
+                combined_adv = batch_adv_list[0]
+
+            if isinstance(batch_orig_list[0], torch.Tensor):
+                combined_orig = torch.cat(batch_orig_list, dim=0)
+            elif isinstance(batch_orig_list[0], np.ndarray):
+                combined_orig = np.concatenate(batch_orig_list, axis=0)
+            elif isinstance(batch_orig_list[0], list):
+                combined_orig = [item for sub in batch_orig_list for item in sub]
+            else:
+                combined_orig = batch_orig_list[0]
+
+            if isinstance(batch_labels_list[0], torch.Tensor):
+                combined_labels = torch.cat(batch_labels_list, dim=0)
+            elif isinstance(batch_labels_list[0], np.ndarray):
+                combined_labels = np.concatenate(batch_labels_list, axis=0)
+            elif isinstance(batch_labels_list[0], list):
+                combined_labels = [item for sub in batch_labels_list for item in sub]
+            else:
+                combined_labels = batch_labels_list[0]
+
+            combined_metadata = AttackMetadata(
+                name=attack_name,
+                attack_name=last_metadata.attack_name if last_metadata else attack_name,
+                attack_class=last_metadata.attack_class if last_metadata else attack_name.upper(),
+                execution_time_seconds=round(total_atk_time, 4),
+                parameters=last_metadata.parameters if last_metadata else {},
+                epsilon=last_metadata.epsilon if last_metadata else None,
             )
-            after_attack_results_coll[attack_name] = atk_res
+            combined_atk_res = AttackResult(
+                adversarial_examples=combined_adv,
+                metadata=combined_metadata,
+                original_inputs=combined_orig,
+                labels=combined_labels,
+            )
+
+            after_attack_results_coll[attack_name] = combined_atk_res
             after_attack_results_dict[attack_name] = {
-                "attack_name": atk_res.metadata.attack_name,
-                "attack_class": atk_res.metadata.attack_class,
-                "execution_time_seconds": atk_res.metadata.execution_time_seconds,
-                "parameters": atk_res.metadata.parameters,
+                "attack_name": combined_atk_res.metadata.attack_name,
+                "attack_class": combined_atk_res.metadata.attack_class,
+                "execution_time_seconds": combined_atk_res.metadata.execution_time_seconds,
+                "parameters": combined_atk_res.metadata.parameters,
             }
 
             # Evaluate Hardened Model on Adversarial Examples
-            adv_targets = atk_res.labels if atk_res.labels is not None else labels
+            adv_targets = combined_atk_res.labels
             in_mem_loader = InMemoryDatasetLoader(
-                inputs=atk_res.adversarial_examples,
+                inputs=combined_atk_res.adversarial_examples,
                 targets=adv_targets,
                 dataset_name=f"hardened_adv_{attack_name}",
                 batch_size=batch_size,

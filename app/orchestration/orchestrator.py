@@ -177,7 +177,11 @@ class AdverScanOrchestrator:
                 num_classes=config.num_classes,
                 model_name=config.model_name,
             )
-            baseline_result: EvaluationResult = baseline_evaluator.evaluate(output_dir=None, show_progress=True)
+            baseline_result: EvaluationResult = baseline_evaluator.evaluate(
+                output_dir=None,
+                show_progress=True,
+                max_samples=config.sample_count,
+            )
             result.baseline_evaluation = baseline_result.to_dict()
             resource_monitor.record_stage("M2_baseline")
             module_timings["M2_baseline"] = round(time.time() - step_start, 4)
@@ -240,6 +244,36 @@ class AdverScanOrchestrator:
 
         first_batch_inputs, first_batch_labels = dataset_batches[0]
 
+        # Checkpoint / Resume Manager
+        ckpt_mgr = None
+        ckpt_state = None
+        if config.enable_checkpoint or config.resume_checkpoint_path:
+            from pathlib import Path
+            from app.orchestration.checkpoint_manager import (
+                EvaluationCheckpointManager,
+                CheckpointIncompatibleError,
+                CheckpointCorruptedError,
+            )
+            ckpt_mgr = EvaluationCheckpointManager(checkpoint_dir=config.checkpoint_dir)
+            if config.resume_checkpoint_path:
+                ckpt_state = ckpt_mgr.load(config.resume_checkpoint_path)
+                expected_hash = config.get_configuration_hash()
+                if ckpt_state.configuration_hash and ckpt_state.configuration_hash != expected_hash:
+                    raise CheckpointIncompatibleError(
+                        f"Configuration hash mismatch on resume: checkpoint has '{ckpt_state.configuration_hash}', current config has '{expected_hash}'"
+                    )
+            else:
+                total_s = config.sample_count if config.sample_count is not None else len(dataset_loader)
+                ckpt_state = ckpt_mgr.create_checkpoint(
+                    dataset_name=config.dataset_name,
+                    total_samples=total_s,
+                    batch_size=config.batch_size,
+                    attacks=config.attacks,
+                    run_id=config.experiment_id,
+                )
+                ckpt_state.configuration_hash = config.get_configuration_hash()
+                ckpt_mgr.save(ckpt_state)
+
         # Step 3: M3 Attack Engine Execution
         step_start = time.time()
         print(f"\n  ⏳ [Step 3/9] M3 Attack Engine Execution ({', '.join(config.attacks).upper()})...")
@@ -264,19 +298,53 @@ class AdverScanOrchestrator:
             last_metadata = None
 
             try:
-                for b_pixels, b_targets in dataset_batches:
+                for b_idx, (b_pixels, b_targets) in enumerate(dataset_batches):
+                    batch_cache_path = None
+                    if ckpt_mgr and ckpt_state:
+                        from pathlib import Path
+                        batch_cache_path = Path(config.checkpoint_dir) / f"ckpt_batch_{ckpt_state.run_id}_{attack_name}_{b_idx}.pt"
+
+                    # If resuming and batch was already completed and cached
+                    if (
+                        ckpt_state
+                        and b_idx in ckpt_state.completed_batch_indices
+                        and batch_cache_path
+                        and batch_cache_path.exists()
+                    ):
+                        cached_batch = torch.load(batch_cache_path, weights_only=False, map_location="cpu")
+                        batch_orig_list.append(cached_batch["orig"])
+                        batch_adv_list.append(cached_batch["adv"])
+                        batch_labels_list.append(cached_batch["labels"])
+                        total_atk_time += cached_batch.get("time", 0.0)
+                        last_metadata = cached_batch.get("metadata", last_metadata)
+                        continue
+
                     atk_res_b: AttackResult = attack_engine.run_attack(
                         attack_name=attack_name,
                         inputs=b_pixels,
                         labels=b_targets,
                         config=atk_config_obj,
                     )
-                    batch_orig_list.append(atk_res_b.original_inputs if atk_res_b.original_inputs is not None else b_pixels)
-                    batch_adv_list.append(atk_res_b.adversarial_examples)
+                    b_orig = atk_res_b.original_inputs if atk_res_b.original_inputs is not None else b_pixels
+                    b_adv = atk_res_b.adversarial_examples
                     b_lbls = atk_res_b.labels if atk_res_b.labels is not None else b_targets
+
+                    batch_orig_list.append(b_orig)
+                    batch_adv_list.append(b_adv)
                     batch_labels_list.append(b_lbls)
                     total_atk_time += atk_res_b.metadata.execution_time_seconds
                     last_metadata = atk_res_b.metadata
+
+                    if ckpt_mgr and ckpt_state and batch_cache_path:
+                        torch.save({
+                            "orig": b_orig,
+                            "adv": b_adv,
+                            "labels": b_lbls,
+                            "time": atk_res_b.metadata.execution_time_seconds,
+                            "metadata": atk_res_b.metadata,
+                        }, batch_cache_path)
+                        ckpt_mgr.mark_batch_completed(ckpt_state, b_idx, len(b_targets))
+                        ckpt_mgr.save(ckpt_state)
 
                 # Determine model/tokenizer pad token ID for padding sequences across batches
                 pad_token_id = 0
@@ -455,6 +523,10 @@ class AdverScanOrchestrator:
         resource_monitor.record_stage("M3_attack_engine")
         module_timings["M3_attack_engine"] = round(time.time() - step_start, 4)
 
+        if ckpt_mgr and ckpt_state:
+            ckpt_mgr.finalize(ckpt_state)
+            result.metadata["checkpoint"] = ckpt_state.to_dict()
+
         if len(attack_results_coll) == 0:
             result.status = "FAILED" if result.status != "PARTIAL_SUCCESS" else "PARTIAL_SUCCESS"
             return _finish(result)
@@ -607,11 +679,24 @@ class AdverScanOrchestrator:
                     }
 
                 is_iterative_req = config.defense.lower().strip() in ("auto", "iterative", "loop")
+                inputs_tensor: Optional[torch.Tensor] = None
+                if isinstance(first_batch_inputs, torch.Tensor):
+                    inputs_tensor = first_batch_inputs
+                elif isinstance(first_batch_inputs, dict):
+                    for k in ("pixel_values", "inputs", "input_ids", "x"):
+                        val = first_batch_inputs.get(k)
+                        if isinstance(val, torch.Tensor):
+                            inputs_tensor = val
+                            break
+
+                labels_tensor: Optional[torch.Tensor] = (
+                    first_batch_labels if isinstance(first_batch_labels, torch.Tensor) else None
+                )
                 hard_res = hardening_engine.harden(
                     model=raw_model,
                     defense=config.defense,
-                    inputs=first_batch_inputs,
-                    labels=first_batch_labels,
+                    inputs=inputs_tensor,
+                    labels=labels_tensor,
                     attack_name=first_atk,
                     risk_level=risk_lvl,
                     vulnerability_score=score_val,

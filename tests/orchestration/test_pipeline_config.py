@@ -268,4 +268,79 @@ def test_pipeline_config_hashing_sensitivity():
     )
     assert det_mod.get_configuration_hash() != base_hash
 
+    # Changing batch_size MUST change hash
+    bs_mod = PipelineConfig(
+        model_path="dummy.pt",
+        dataset_name="GTSRB",
+        sample_count=100,
+        batch_size=64,
+        attacks=["fgsm"],
+        attack_configs={"fgsm": {"eps": 0.1}},
+        defense="gaussian_blur",
+        defense_config={"kernel_size": 3},
+        evaluation_metrics=["accuracy"],
+        deterministic=False,
+    )
+    assert bs_mod.get_configuration_hash() != base_hash
+
+    # Changing sample_count MUST change hash
+    sc_mod = PipelineConfig(
+        model_path="dummy.pt",
+        dataset_name="GTSRB",
+        sample_count=200,
+        attacks=["fgsm"],
+        attack_configs={"fgsm": {"eps": 0.1}},
+        defense="gaussian_blur",
+        defense_config={"kernel_size": 3},
+        evaluation_metrics=["accuracy"],
+        deterministic=False,
+    )
+    assert sc_mod.get_configuration_hash() != base_hash
+
+    # Changing seed MUST change hash
+    seed_mod = PipelineConfig(
+        model_path="dummy.pt",
+        dataset_name="GTSRB",
+        sample_count=100,
+        seed=1337,
+        attacks=["fgsm"],
+        attack_configs={"fgsm": {"eps": 0.1}},
+        defense="gaussian_blur",
+        defense_config={"kernel_size": 3},
+        evaluation_metrics=["accuracy"],
+        deterministic=False,
+    )
+    assert seed_mod.get_configuration_hash() != base_hash
+
+    # Changing mode MUST change hash
+    mode_mod = PipelineConfig(
+        model_path="dummy.pt",
+        dataset_name="GTSRB",
+        sample_count=100,
+        mode="baseline_only",
+        attacks=["fgsm"],
+        attack_configs={"fgsm": {"eps": 0.1}},
+        defense="gaussian_blur",
+        defense_config={"kernel_size": 3},
+        evaluation_metrics=["accuracy"],
+        deterministic=False,
+    )
+    assert mode_mod.get_configuration_hash() != base_hash
+
+    # Changing xai_techniques MUST change hash
+    xai_mod = PipelineConfig(
+        model_path="dummy.pt",
+        dataset_name="GTSRB",
+        sample_count=100,
+        attacks=["fgsm"],
+        attack_configs={"fgsm": {"eps": 0.1}},
+        defense="gaussian_blur",
+        defense_config={"kernel_size": 3},
+        evaluation_metrics=["accuracy"],
+        deterministic=False,
+        enable_xai=True,
+        xai_techniques=["lime"],
+    )
+    assert xai_mod.get_configuration_hash() != base_hash
+
 
