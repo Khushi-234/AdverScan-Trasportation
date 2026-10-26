@@ -38,7 +38,7 @@ class HuggingFaceLoader(BaseModelLoader):
     from Hugging Face Model Hub or local model directories.
     """
 
-    SUPPORTED_DOMAINS = {"image", "text", "time-series"}
+    SUPPORTED_DOMAINS = {"image", "text", "time-series" , "tabular"}
 
     def load(
         self,
