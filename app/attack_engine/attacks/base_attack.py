@@ -36,8 +36,16 @@ class BaseAttack(ABC):
     def get_metadata(cls) -> AttackMetadata:
         """
         Retrieve standardized metadata describing this attack class.
+
+        Raises:
+            NotImplementedError: If the attack class does not define metadata.
         """
-        return getattr(cls, "metadata", None)
+        meta = getattr(cls, "metadata", None)
+        if meta is None:
+            raise NotImplementedError(
+                f"Attack class '{cls.__name__}' must define class-level 'metadata' attribute of type AttackMetadata."
+            )
+        return meta
 
     @property
     def attack_metadata(self) -> AttackMetadata:
