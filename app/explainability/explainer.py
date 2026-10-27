@@ -130,9 +130,11 @@ class XAIExplainer:
         tech_name = (technique or self.default_technique).lower()
         explainer = self.registry.select_technique(mod, model=model, preferred=tech_name, **kwargs)
 
-        # 5. Get predictions and confidences
-        clean_pred, clean_conf = self._get_predictions_and_confidences(model, prep_clean, output_mode=output_mode)
-        adv_pred, adv_conf = self._get_predictions_and_confidences(model, prep_adv, output_mode=output_mode)
+        # 5. Get predictions, confidences, and probabilities
+        clean_probs = predict_proba_np(model, prep_clean, output_mode=output_mode)
+        adv_probs = predict_proba_np(model, prep_adv, output_mode=output_mode)
+        clean_pred, clean_conf = extract_prediction_and_confidence(clean_probs, output_mode=output_mode)
+        adv_pred, adv_conf = extract_prediction_and_confidence(adv_probs, output_mode=output_mode)
 
         # 6. Resolve target class for attribution comparison (apples-to-apples)
         is_classification = output_mode in ("classification", "auto")
@@ -234,6 +236,8 @@ class XAIExplainer:
             clean_top_features=clean_top_features,
             adv_top_features=adv_top_features,
             target_class=target_class,
+            clean_probs=clean_probs,
+            adv_probs=adv_probs,
         )
 
         # Non-classification relative change handling
@@ -257,13 +261,32 @@ class XAIExplainer:
             target_class=target_class,
         )
 
-        # 11. Optional metrics (Perturbation Alignment)
+        # 11. Optional metrics (Perturbation Alignment, Faithfulness, Stability)
         if compute_metrics:
+            from app.explainability.metrics.faithfulness import compute_faithfulness
             from app.explainability.metrics.perturbation_alignment import compute_perturbation_alignment
+            from app.explainability.metrics.stability import compute_stability
+
             comp_data["perturbation_alignment"] = compute_perturbation_alignment(
                 clean_input,
                 adversarial_input,
                 clean_attr,
+                top_k=kwargs.get("top_k", 5),
+                background_std=kwargs.get("background_std"),
+            )
+            comp_data["faithfulness"] = compute_faithfulness(
+                model=model,
+                inputs=clean_input,
+                attribution=clean_attr,
+                top_k=kwargs.get("top_k", 5),
+                background_inputs=kwargs.get("background_inputs"),
+            )
+            comp_data["stability"] = compute_stability(
+                explainer=explainer,
+                model=model,
+                inputs=clean_input,
+                target_class=eval_target if is_classification else 0,
+                background_inputs=kwargs.get("background_inputs"),
             )
 
         # 12. Metadata
