@@ -57,7 +57,51 @@ def is_prediction_correct(prediction: Any, true_label: Optional[Any]) -> Optiona
     try:
         return bool(norm_pred == norm_true)
     except Exception:
-        return bool(np.array_equal(norm_pred, norm_true))
+        try:
+            return np.array_equal(np.asarray(norm_pred), np.asarray(norm_true))
+        except Exception:
+            return False
+
+
+def _to_clean_value(val: Any) -> Any:
+    """Extract clean python primitive (int, float, list, str) from tensor or numpy scalar."""
+    if val is None:
+        return None
+    if hasattr(val, "detach"):
+        val = val.detach().cpu().numpy()
+    if isinstance(val, np.ndarray):
+        if val.size == 1:
+            return val.item()
+        return val.tolist()
+    if hasattr(val, "item") and callable(val.item):
+        try:
+            return val.item()
+        except Exception:
+            pass
+    return val
+
+
+def _is_equal(a: Any, b: Any) -> bool:
+    """Safely compare two predictions or labels for equality."""
+    norm_a = _normalize_label_scalar(a)
+    norm_b = _normalize_label_scalar(b)
+    if isinstance(norm_a, set) or isinstance(norm_b, set):
+        try:
+            return set(norm_a) == set(norm_b)
+        except Exception:
+            return bool(norm_a == norm_b)
+    if isinstance(norm_a, (list, tuple)) or isinstance(norm_b, (list, tuple)):
+        try:
+            return norm_a == norm_b
+        except Exception:
+            pass
+    try:
+        return bool(norm_a == norm_b)
+    except Exception:
+        try:
+            return np.array_equal(np.asarray(norm_a), np.asarray(norm_b))
+        except Exception:
+            return False
 
 
 def analyze_failure(
@@ -109,7 +153,7 @@ def analyze_failure(
         else:
             failure_mode = "prediction_unchanged_unknown_correctness"
     else:
-        attack_caused_failure = bool(clean_correct is True and adversarial_correct is False)
+        attack_caused_failure = clean_correct is True and adversarial_correct is False
 
         if clean_correct is True and adversarial_correct is False:
             failure_mode = "clean_correct_to_adversarial_incorrect"
@@ -132,7 +176,7 @@ def analyze_failure(
 
     if clean_arr is not None and adv_arr is not None and clean_arr.shape == adv_arr.shape:
         # 1. Time-series: evaluate (timestep, sensor) cells and per-sensor importance
-        if str(modality).lower() in ("timeseries", "time_series") and adv_arr.ndim in (2, 3):
+        if modality.lower() in ("timeseries", "time_series") and adv_arr.ndim in (2, 3):
             ts_adv = adv_arr[0] if adv_arr.ndim == 3 else adv_arr
             ts_clean = clean_arr[0] if clean_arr.ndim == 3 else clean_arr
             t_steps, n_sensors = ts_adv.shape
@@ -181,7 +225,7 @@ def analyze_failure(
                 })
 
         # 2. Image: group top features into grid patches if spatial dimensions
-        elif str(modality).lower() == "image" and adv_arr.ndim in (3, 4):
+        elif modality.lower() == "image" and adv_arr.ndim in (3, 4):
             img_adv = np.abs(adv_arr[0] if adv_arr.ndim == 4 else adv_arr)
             img_clean = np.abs(clean_arr[0] if clean_arr.ndim == 4 else clean_arr)
             if img_adv.ndim == 3 and img_adv.shape[0] in (1, 3, 4):
@@ -207,7 +251,7 @@ def analyze_failure(
                         "clean_importance": c_imp,
                         "importance_shift": float(a_imp - c_imp),
                     })
-            patches.sort(key=lambda x: abs(x["adversarial_importance"]), reverse=True)
+            patches.sort(key=lambda x: abs(float(x["adversarial_importance"])), reverse=True)
             for rank, p in enumerate(patches[:top_k]):
                 p["rank"] = rank + 1
                 contributing_features.append(p)

@@ -53,8 +53,8 @@ class ExplanationResult:
     technique: str
     clean_prediction: Any
     adversarial_prediction: Any
-    clean_confidence: float
-    adversarial_confidence: float
+    clean_confidence: Union[float, np.floating[Any]]
+    adversarial_confidence: Union[float, np.floating[Any]]
     prediction_changed: bool
     true_label: Optional[Any] = None
     attack_caused_failure: Optional[bool] = None

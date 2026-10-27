@@ -58,6 +58,7 @@ __all__ = [
     # Domain configuration
     "DomainProfile",
     "get_domain_profile",
+    "is_valid_adversarial",
     # Techniques
     "BaseExplainer",
     "SHAPExplainer",
