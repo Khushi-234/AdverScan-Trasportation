@@ -92,6 +92,7 @@ class XAIExplainer:
         output_mode: str = "auto",
         comparison_target: str = "clean_pred",
         compute_metrics: bool = False,
+        domain: Optional[str] = None,
         **kwargs: Any,
     ) -> ExplanationResult:
         """
@@ -111,6 +112,7 @@ class XAIExplainer:
             output_mode: 'classification', 'regression', 'anomaly_score', or 'auto'.
             comparison_target: Class used for clean/adv comparison ('clean_pred', 'adv_pred', 'ground_truth', 'both').
             compute_metrics: Whether to evaluate extra faithfulness/alignment metrics.
+            domain: Domain name preset ('fraud', 'ids', 'medical', 'maintenance') or custom.
 
         Returns:
             Structured ExplanationResult DTO.
@@ -119,6 +121,14 @@ class XAIExplainer:
         mod = detect_modality(clean_input, hint=modality)
         handler = get_modality_handler(mod)
 
+        # Domain profile resolution
+        domain_name = domain or kwargs.get("domain", mod.value)
+        try:
+            from app.explainability.domain_profiles import get_domain_profile, is_valid_adversarial
+            domain_prof = get_domain_profile(domain_name)
+        except Exception:
+            domain_prof = None
+
         # 2. Validate single sample (reject batches N > 1)
         validate_single_sample(clean_input, modality=mod.value)
         validate_single_sample(adversarial_input, modality=mod.value)
@@ -126,8 +136,13 @@ class XAIExplainer:
         # 3. Input preparation
         prep_clean, prep_adv = handler.prepare_batch(clean_input, adversarial_input)
 
+        # Domain validity check on adversarial sample
+        validity_flags = {}
+        if domain_prof is not None:
+            _, validity_flags = is_valid_adversarial(prep_clean, prep_adv, domain_prof)
+
         # 4. Select and validate technique
-        tech_name = (technique or self.default_technique).lower()
+        tech_name = (technique or (domain_prof.default_technique if domain_prof else self.default_technique)).lower()
         explainer = self.registry.select_technique(mod, model=model, preferred=tech_name, **kwargs)
 
         # 5. Get predictions, confidences, and probabilities
@@ -144,7 +159,6 @@ class XAIExplainer:
             elif comparison_target == "adv_pred":
                 eval_target = adv_pred
             elif comparison_target == "ground_truth" and true_label is not None:
-                # Handle one-hot or scalar true_label
                 if isinstance(true_label, (list, tuple, np.ndarray)) and len(true_label) > 1:
                     eval_target = int(np.argmax(true_label))
                 else:
@@ -171,6 +185,13 @@ class XAIExplainer:
             output_mode=output_mode,
             **kwargs,
         )
+
+        # Attribution status propagation
+        attribution_status = clean_attr_result.get("status", "success")
+        if clean_attr_result.get("status") in ("error", "unavailable"):
+            attribution_status = clean_attr_result.get("status")
+        elif adv_attr_result.get("status") in ("error", "unavailable"):
+            attribution_status = adv_attr_result.get("status")
 
         # If comparison_target is 'both', also compute adversarial attribution w.r.t adv_pred
         adv_attr_adv_class_result = None
@@ -259,6 +280,10 @@ class XAIExplainer:
             clean_top_features=clean_top_features,
             adv_top_features=adv_top_features,
             target_class=target_class,
+            feature_names=domain_prof.feature_names if domain_prof else kwargs.get("feature_names"),
+            sensor_names=domain_prof.sensor_names if domain_prof else kwargs.get("sensor_names"),
+            modality=mod.value,
+            top_k=kwargs.get("top_k", 5),
         )
 
         # 11. Optional metrics (Perturbation Alignment, Faithfulness, Stability)
@@ -296,6 +321,7 @@ class XAIExplainer:
             "modality": mod.value,
             "output_mode": output_mode,
             "comparison_target": comparison_target,
+            "domain": domain_prof.name if domain_prof else str(domain_name),
         }
         if assessment_result is not None:
             if hasattr(assessment_result, "to_dict"):
@@ -324,7 +350,14 @@ class XAIExplainer:
             failure_analysis=fail_data,
             metadata=meta,
             modality=mod.value,
+            domain=domain_prof.name if domain_prof else str(domain_name),
             feature_importance=feature_importance,
+            feature_names=domain_prof.feature_names if domain_prof else kwargs.get("feature_names"),
+            perturbation_metrics=comp_data.get("perturbation_alignment", {}),
+            faithfulness=comp_data.get("faithfulness", {}),
+            stability=comp_data.get("stability", {}),
+            validity_flags=validity_flags,
+            attribution_status=attribution_status,
         )
 
     def explain_batch(
