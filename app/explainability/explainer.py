@@ -20,6 +20,7 @@ from app.explainability.input_utils import (
     to_tensor,
     validate_single_sample,
 )
+from app.explainability.domain_profiles import get_domain_profile, is_valid_adversarial
 from app.explainability.modalities import get_modality_handler
 from app.explainability.modality import Modality, detect_modality
 from app.explainability.techniques.lime_explainer import LIMEExplainer
@@ -124,7 +125,6 @@ class XAIExplainer:
         # Domain profile resolution
         domain_name = domain or kwargs.get("domain", mod.value)
         try:
-            from app.explainability.domain_profiles import get_domain_profile, is_valid_adversarial
             domain_prof = get_domain_profile(domain_name)
         except Exception:
             domain_prof = None
@@ -471,11 +471,9 @@ class XAIExplainer:
         clean_input = attack_result.original_inputs
         adv_input = attack_result.adversarial_examples
         labels = attack_result.labels
-        attack_name = (
-            attack_result.metadata.attack_name
-            if hasattr(attack_result, "metadata") and hasattr(attack_result.metadata, "attack_name")
-            else "unknown_attack"
-        )
+        meta = getattr(attack_result, "metadata", None)
+        raw_attack_name = getattr(meta, "attack_name", None) if meta is not None else None
+        attack_name: str = raw_attack_name if raw_attack_name is not None else "unknown_attack"
 
         if clean_input is None:
             raise ValueError("AttackResult must contain 'original_inputs' for XAI explainability.")

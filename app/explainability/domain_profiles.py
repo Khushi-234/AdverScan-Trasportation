@@ -268,7 +268,7 @@ def get_domain_profile(name_or_modality: Union[str, Modality]) -> DomainProfile:
     if isinstance(name_or_modality, Modality):
         key = name_or_modality.value.lower()
     else:
-        key = str(name_or_modality).lower().strip()
+        key = name_or_modality.lower().strip()
 
     if key in DOMAIN_PROFILES:
         return DOMAIN_PROFILES[key]

@@ -72,6 +72,7 @@ def test_e4_2_domain_profiles_and_validity_rules():
     assert prof_fraud.name == "fraud"
     assert "oldbalanceOrg" in prof_fraud.feature_names
     assert "protocol_type" in prof_ids.integer_features
+    assert prof_maint.sensor_names is not None
     assert "T24" in prof_maint.sensor_names
 
     # 2. IDS validity check: fractional protocol_type & negative byte counts
