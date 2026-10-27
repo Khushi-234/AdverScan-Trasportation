@@ -33,8 +33,7 @@ results/*
 !results/.gitkeep
 reports/*
 !reports/.gitkeep
-data/*
-!data/.gitkeep             
+
 # IDEs and Editors
 .vscode/
 .idea/
