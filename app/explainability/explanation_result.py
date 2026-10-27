@@ -11,8 +11,8 @@ from typing import Any, Dict, Optional, Union
 @dataclass
 class ExplanationResult:
     """
-    Structured DTO holding XAI explanation outputs, clean vs. adversarial comparison,
-    and prediction failure analysis metrics.
+    Structured DTO holding standardized XAI explanation outputs across modalities,
+    clean vs. adversarial comparison, and prediction failure analysis metrics.
     """
 
     attack_name: str
@@ -28,6 +28,8 @@ class ExplanationResult:
     comparison: Dict[str, Any] = field(default_factory=dict)
     failure_analysis: Dict[str, Any] = field(default_factory=dict)
     metadata: Dict[str, Any] = field(default_factory=dict)
+    modality: str = "image"
+    feature_importance: Dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert ExplanationResult object to dictionary."""
