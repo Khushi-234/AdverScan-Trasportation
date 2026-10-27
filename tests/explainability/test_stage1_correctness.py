@@ -78,13 +78,14 @@ class MockAutoencoder(nn.Module):
 
 def test_e1_1_and_e1_6_tree_model_predict_proba_and_shap():
     """Verify RandomForest uses predict_proba (not hard labels), confidence < 1.0, and TreeSHAP works."""
-    X_train = np.random.randn(50, 4)
-    y_train = np.random.randint(0, 2, size=50)
+    rng = np.random.RandomState(42)
+    X_train = rng.randn(50, 4)
+    y_train = rng.randint(0, 2, size=50)
     rf = RandomForestClassifier(n_estimators=10, random_state=42).fit(X_train, y_train)
     adapted_rf = DummyAdapter(rf)
 
-    clean_x = np.array([[2.0, 2.0, 2.0, 2.0]])
-    adv_x = np.array([[-2.0, -2.0, -2.0, -2.0]])
+    clean_x = np.array([[0.2, 0.1, -0.1, 0.3]])
+    adv_x = np.array([[-1.5, -1.0, 1.2, -0.8]])
 
     # 1. predict_proba_np unwraps adapter and returns calibrated probabilities
     probs = predict_proba_np(adapted_rf, clean_x)

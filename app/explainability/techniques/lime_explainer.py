@@ -119,9 +119,9 @@ class LIMEExplainer(BaseExplainer):
 
         def predict_fn(images: np.ndarray) -> np.ndarray:
             if images.ndim == 4 and images.shape[-1] in (1, 3, 4):
-                images_t = np.transpose(images, (0, 3, 1, 2))
+                images_t = np.ascontiguousarray(np.transpose(images, (0, 3, 1, 2)))
             else:
-                images_t = images
+                images_t = np.ascontiguousarray(images)
             return predict_proba_np(model, images_t, output_mode=output_mode)
 
         explainer = lime_image.LimeImageExplainer()
@@ -135,10 +135,17 @@ class LIMEExplainer(BaseExplainer):
             num_samples=num_samples,
         )
 
-        top_label = target_class if target_class is not None else explanation.top_labels[0]
-        temp, mask = explanation.get_image_and_mask(
-            top_label, positive_only=False, num_features=5, hide_rest=False
+        top_label = target_class if target_class is not None else (
+            explanation.top_labels[0] if hasattr(explanation, "top_labels") and explanation.top_labels else 0
         )
+
+        # Build continuous weight map from local_exp[top_label] and segments
+        # Each pixel receives the continuous linear model weight of its superpixel segment
+        segments = explanation.segments  # shape (H, W)
+        continuous_map = np.zeros(segments.shape, dtype=np.float32)
+        local_weights = explanation.local_exp.get(top_label, [])
+        for seg_id, weight in local_weights:
+            continuous_map[segments == seg_id] = float(weight)
 
         return {
             "status": "success",
@@ -146,7 +153,7 @@ class LIMEExplainer(BaseExplainer):
             "technique": "lime",
             "message": "LIME explanation computed successfully.",
             "target_class": top_label,
-            "attribution": mask.tolist() if isinstance(mask, np.ndarray) else mask,
+            "attribution": continuous_map.tolist() if isinstance(continuous_map, np.ndarray) else continuous_map,
         }
 
     def _explain_tabular(
@@ -165,9 +172,11 @@ class LIMEExplainer(BaseExplainer):
         bg_data = kwargs.get("background_inputs")
         if bg_data is not None:
             training_data = to_numpy(bg_data)
+            if training_data.ndim == 1:
+                training_data = training_data.reshape(1, -1)
         else:
-            noise = np.random.normal(0, 0.1, size=(50, num_features))
-            training_data = single_sample + noise
+            scale = np.maximum(np.abs(single_sample) * 0.1, 0.05)
+            training_data = single_sample + np.random.normal(0, scale, size=(50, num_features))
 
         feature_names = kwargs.get("feature_names") or [f"feature_{i}" for i in range(num_features)]
 
@@ -182,6 +191,9 @@ class LIMEExplainer(BaseExplainer):
         )
 
         labels_to_explain = (target_class,) if target_class is not None else None
+        allowed_exp_kwargs = {"distance_metric", "model_regressor"}
+        filtered_kwargs = {k: v for k, v in kwargs.items() if k in allowed_exp_kwargs}
+
         exp = explainer.explain_instance(
             single_sample,
             predict_fn,
@@ -189,14 +201,17 @@ class LIMEExplainer(BaseExplainer):
             num_features=num_features,
             top_labels=1 if target_class is None else None,
             num_samples=num_samples,
+            **filtered_kwargs,
         )
 
-        top_label = target_class if target_class is not None else (exp.top_labels[0] if hasattr(exp, "top_labels") and exp.top_labels else 0)
+        top_label = target_class if target_class is not None else (
+            exp.top_labels[0] if hasattr(exp, "top_labels") and exp.top_labels else 0
+        )
         feature_weights = np.zeros(num_features, dtype=np.float32)
 
         for feat_idx, weight in exp.local_exp.get(top_label, []):
             if feat_idx < num_features:
-                feature_weights[feat_idx] = weight
+                feature_weights[feat_idx] = float(weight)
 
         return {
             "status": "success",
@@ -223,23 +238,33 @@ class LIMEExplainer(BaseExplainer):
 
         t_steps, n_vars = single_ts.shape
         flat_input = single_ts.reshape(1, -1)
-        flat_names = [f"t{t}_v{v}" for t in range(t_steps) for v in range(n_vars)]
+        sensor_names = kwargs.get("sensor_names") or [f"sensor_{v}" for v in range(n_vars)]
+        flat_names = [f"t{t}_{sensor_names[v]}" for t in range(t_steps) for v in range(n_vars)]
 
         def predict_fn(flat_data: np.ndarray) -> np.ndarray:
             orig_shape = flat_data.reshape(-1, t_steps, n_vars)
             return predict_proba_np(model, orig_shape, output_mode=output_mode)
 
-        noise = np.random.normal(0, 0.1, size=(50, t_steps * n_vars))
-        training_data = flat_input + noise
+        bg_data = kwargs.get("background_inputs")
+        if bg_data is not None:
+            bg_arr = to_numpy(bg_data)
+            flat_bg = bg_arr.reshape(len(bg_arr), -1)
+            training_data = flat_bg[:100]
+        else:
+            scale = np.maximum(np.abs(flat_input[0]) * 0.1, 0.05)
+            training_data = flat_input + np.random.normal(0, scale, size=(50, t_steps * n_vars))
 
         explainer = lime_tabular.LimeTabularExplainer(
             training_data=training_data,
             feature_names=flat_names,
-            mode="classification",
+            mode="classification" if output_mode in ("classification", "auto") else "regression",
             verbose=False,
         )
 
         labels_to_explain = (target_class,) if target_class is not None else None
+        allowed_exp_kwargs = {"distance_metric", "model_regressor"}
+        filtered_kwargs = {k: v for k, v in kwargs.items() if k in allowed_exp_kwargs}
+
         exp = explainer.explain_instance(
             flat_input[0],
             predict_fn,
@@ -247,13 +272,16 @@ class LIMEExplainer(BaseExplainer):
             num_features=t_steps * n_vars,
             top_labels=1 if target_class is None else None,
             num_samples=num_samples,
+            **filtered_kwargs,
         )
 
-        top_label = target_class if target_class is not None else exp.top_labels[0]
+        top_label = target_class if target_class is not None else (
+            exp.top_labels[0] if hasattr(exp, "top_labels") and exp.top_labels else 0
+        )
         flat_weights = np.zeros(t_steps * n_vars, dtype=np.float32)
         for feat_idx, weight in exp.local_exp.get(top_label, []):
             if feat_idx < len(flat_weights):
-                flat_weights[feat_idx] = weight
+                flat_weights[feat_idx] = float(weight)
 
         weights_2d = flat_weights.reshape(t_steps, n_vars)
         return {

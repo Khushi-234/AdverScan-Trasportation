@@ -80,26 +80,29 @@ class TreeSHAPExplainer(BaseExplainer):
             shap_values = explainer.shap_values(inputs_np)
 
             # Slicing for target_class:
-            # Case 1: list of arrays (one per class)
+            orig_shape = None
             if isinstance(shap_values, list):
+                orig_shape = [tuple(v.shape) for v in shap_values]
                 idx = target_class if (target_class is not None and 0 <= target_class < len(shap_values)) else 0
                 values = shap_values[idx]
-            # Case 2: 3D array (N, F, C)
-            elif isinstance(shap_values, np.ndarray) and shap_values.ndim == 3:
-                idx = target_class if (target_class is not None and 0 <= target_class < shap_values.shape[-1]) else 0
-                values = shap_values[..., idx]
-            # Case 3: 2D array (N, F)
             elif isinstance(shap_values, np.ndarray):
-                values = shap_values
+                orig_shape = tuple(shap_values.shape)
+                if shap_values.ndim == inputs_np.ndim + 1 and target_class is not None:
+                    idx = target_class if (0 <= target_class < shap_values.shape[-1]) else 0
+                    values = shap_values[..., idx]
+                else:
+                    values = shap_values
             elif hasattr(shap_values, "values"):
                 v = shap_values.values
-                if v.ndim == 3:
-                    idx = target_class if (target_class is not None and 0 <= target_class < v.shape[-1]) else 0
+                orig_shape = tuple(v.shape)
+                if v.ndim == inputs_np.ndim + 1 and target_class is not None:
+                    idx = target_class if (0 <= target_class < v.shape[-1]) else 0
                     values = v[..., idx]
                 else:
                     values = v
             else:
                 values = np.asarray(shap_values)
+                orig_shape = tuple(values.shape)
 
             return {
                 "status": "success",
@@ -107,6 +110,7 @@ class TreeSHAPExplainer(BaseExplainer):
                 "technique": "treeshap",
                 "message": "TreeSHAP explanation computed successfully.",
                 "attribution": values.tolist() if isinstance(values, np.ndarray) else values,
+                "unsliced_shape": orig_shape,
             }
         except Exception as e:
             return {
@@ -199,25 +203,102 @@ class SHAPExplainer(BaseExplainer):
             def predict_fn(x: np.ndarray) -> np.ndarray:
                 return predict_proba_np(model, x, output_mode=output_mode)
 
+            # Prepare background dataset respecting baseline_strategy
+            baseline_strategy = kwargs.get("baseline_strategy", "mean")
             if background_inputs is not None:
                 bg_np = to_numpy(background_inputs)
+                if len(bg_np) > 100:
+                    bg_np = bg_np[:100]
+                if baseline_strategy == "mean" and len(bg_np) > 1:
+                    bg_np = np.mean(bg_np, axis=0, keepdims=True)
             else:
                 bg_np = np.zeros_like(inputs_np)
 
-            # Build Explainer
-            explainer = shap.Explainer(predict_fn, bg_np)
-            shap_values = explainer(inputs_np)
+            # For 3D or 4D data (timeseries or images), handle flattening for black-box or GradientExplainer for torch
+            is_multidim = inputs_np.ndim > 2
+            unwrapped = unwrap_model(model)
+            use_grad_explainer = (
+                is_multidim
+                and hasattr(shap, "GradientExplainer")
+                and hasattr(unwrapped, "parameters")
+                and callable(getattr(unwrapped, "parameters", None))
+            )
 
-            values = shap_values.values if hasattr(shap_values, "values") else np.asarray(shap_values)
+            values = None
+            orig_shape = None
 
-            # Filter by target class if multidimensional outputs
-            if values is not None and isinstance(values, np.ndarray):
-                # When output is (N, F, C) where C is class dimension
-                if values.ndim == inputs_np.ndim + 1 and target_class is not None:
-                    c_idx = target_class if target_class < values.shape[-1] else 0
-                    values = values[..., c_idx]
-                elif values.ndim >= 3 and target_class is not None and values.shape[-1] > target_class:
-                    values = values[..., target_class]
+            if use_grad_explainer:
+                try:
+                    import torch
+                    import torch.nn as nn
+                    if isinstance(unwrapped, nn.Module):
+                        device = next(unwrapped.parameters()).device if list(unwrapped.parameters()) else torch.device("cpu")
+                        bg_tensor = to_tensor(bg_np, device=device)
+                        inp_tensor = to_tensor(inputs_np, device=device)
+                        explainer = shap.GradientExplainer(unwrapped, bg_tensor)
+                        shap_vals = explainer.shap_values(inp_tensor)
+
+                        if isinstance(shap_vals, list):
+                            orig_shape = [tuple(v.shape) for v in shap_vals]
+                            idx = target_class if (target_class is not None and 0 <= target_class < len(shap_vals)) else 0
+                            values = shap_vals[idx]
+                        else:
+                            values = to_numpy(shap_vals)
+                            orig_shape = tuple(values.shape)
+                            if values.ndim == inputs_np.ndim + 1 and target_class is not None:
+                                c_idx = target_class if target_class < values.shape[-1] else 0
+                                values = values[..., c_idx]
+                except Exception:
+                    values = None
+
+            if values is None:
+                if is_multidim:
+                    # Flatten to 2D with a reshaping predict_fn
+                    flat_inputs = inputs_np.reshape(inputs_np.shape[0], -1)
+                    flat_bg = bg_np.reshape(bg_np.shape[0], -1)
+                    input_shape = inputs_np.shape
+
+                    def flat_predict_fn(x_flat: np.ndarray) -> np.ndarray:
+                        x_reshaped = x_flat.reshape((-1,) + input_shape[1:])
+                        return predict_fn(x_reshaped)
+
+                    explainer = shap.Explainer(flat_predict_fn, flat_bg)
+                    shap_values = explainer(flat_inputs)
+                    raw_vals = shap_values.values if hasattr(shap_values, "values") else np.asarray(shap_values)
+
+                    # Reshape back to input dimensions
+                    if isinstance(raw_vals, np.ndarray):
+                        if raw_vals.ndim == 2:  # (N, D_flat)
+                            values = raw_vals.reshape(input_shape)
+                            orig_shape = tuple(values.shape)
+                        elif raw_vals.ndim == 3:  # (N, D_flat, C)
+                            c_dim = raw_vals.shape[-1]
+                            reshaped = raw_vals.reshape(input_shape + (c_dim,))
+                            orig_shape = tuple(reshaped.shape)
+                            if target_class is not None:
+                                c_idx = target_class if target_class < c_dim else 0
+                                values = reshaped[..., c_idx]
+                            else:
+                                values = reshaped[..., 0]
+                        else:
+                            values = raw_vals
+                            orig_shape = tuple(values.shape)
+                else:
+                    # Tabular 2D data
+                    explainer = shap.Explainer(predict_fn, bg_np)
+                    shap_values = explainer(inputs_np)
+                    values = shap_values.values if hasattr(shap_values, "values") else np.asarray(shap_values)
+
+                    if isinstance(values, list):
+                        orig_shape = [tuple(v.shape) for v in values]
+                        idx = target_class if (target_class is not None and 0 <= target_class < len(values)) else 0
+                        values = values[idx]
+                    elif isinstance(values, np.ndarray):
+                        orig_shape = tuple(values.shape)
+                        # Slice ONLY when values.ndim == inputs_np.ndim + 1
+                        if values.ndim == inputs_np.ndim + 1 and target_class is not None:
+                            c_idx = target_class if target_class < values.shape[-1] else 0
+                            values = values[..., c_idx]
 
             return {
                 "status": "success",
@@ -225,6 +306,7 @@ class SHAPExplainer(BaseExplainer):
                 "technique": "shap",
                 "message": "SHAP explanation computed successfully.",
                 "attribution": values.tolist() if isinstance(values, np.ndarray) else values,
+                "unsliced_shape": orig_shape,
             }
         except Exception as e:
             return {

@@ -3,6 +3,7 @@ Gradient-based XAI techniques for AdverScan.
 Implements Saliency (Vanilla Gradient), Integrated Gradients, and Grad-CAM.
 """
 
+import contextlib
 from typing import Any, Dict, List, Optional
 import numpy as np
 import torch
@@ -12,6 +13,17 @@ import torch.nn.functional as F
 from app.explainability.input_utils import to_numpy, to_tensor, unwrap_model
 from app.explainability.modality import Modality
 from app.explainability.techniques.base import BaseExplainer
+
+
+@contextlib.contextmanager
+def disable_cudnn():
+    """Context manager to temporarily disable cuDNN during backward passes to prevent LSTM eval errors."""
+    orig = torch.backends.cudnn.enabled
+    torch.backends.cudnn.enabled = False
+    try:
+        yield
+    finally:
+        torch.backends.cudnn.enabled = orig
 
 
 class GradientExplainer(BaseExplainer):
@@ -45,7 +57,7 @@ class GradientExplainer(BaseExplainer):
         if not isinstance(unwrapped, nn.Module) and not hasattr(unwrapped, "parameters"):
             return False
         if self.method == "gradcam":
-            if modality != Modality.IMAGE:
+            if modality not in (Modality.IMAGE, Modality.TIMESERIES):
                 return False
             has_conv = any(isinstance(m, (nn.Conv2d, nn.Conv1d)) for m in unwrapped.modules())
             return has_conv
@@ -124,7 +136,8 @@ class GradientExplainer(BaseExplainer):
             model.zero_grad()
             if x.grad is not None:
                 x.grad.zero_()
-            score.backward(retain_graph=False)
+            with disable_cudnn():
+                score.backward(retain_graph=False)
 
             if x.grad is None:
                 return {
@@ -161,7 +174,7 @@ class GradientExplainer(BaseExplainer):
         baseline: Optional[Any] = None,
         **kwargs: Any,
     ) -> Dict[str, Any]:
-        """Compute Integrated Gradients w.r.t. a baseline."""
+        """Compute Integrated Gradients w.r.t. a baseline (or background mean)."""
         try:
             if not isinstance(model, nn.Module):
                 return {
@@ -176,7 +189,17 @@ class GradientExplainer(BaseExplainer):
             x = to_tensor(inputs).to(device)
 
             if baseline is None:
-                b = torch.zeros_like(x)
+                bg_data = kwargs.get("background_inputs")
+                if bg_data is not None:
+                    bg_np = to_numpy(bg_data)
+                    mean_bg = np.mean(bg_np, axis=0, keepdims=True)
+                    b = to_tensor(mean_bg, device=device)
+                    if b.ndim < x.ndim:
+                        b = b.expand_as(x)
+                    elif b.shape != x.shape:
+                        b = torch.zeros_like(x)
+                else:
+                    b = torch.zeros_like(x)
             else:
                 b = to_tensor(baseline).to(device)
                 if b.shape != x.shape:
@@ -203,7 +226,8 @@ class GradientExplainer(BaseExplainer):
 
             model.zero_grad()
             total_score = scores.sum()
-            total_score.backward()
+            with disable_cudnn():
+                total_score.backward()
 
             if x_steps.grad is None:
                 return {
@@ -243,7 +267,7 @@ class GradientExplainer(BaseExplainer):
         target_layer: Optional[str] = None,
         **kwargs: Any,
     ) -> Dict[str, Any]:
-        """Compute Grad-CAM activation heatmap for convolutional networks."""
+        """Compute Grad-CAM activation heatmap for convolutional networks (Conv2d or Conv1d)."""
         try:
             if not isinstance(model, nn.Module):
                 return {
@@ -256,7 +280,7 @@ class GradientExplainer(BaseExplainer):
 
             conv_layer = None
             for name, layer in model.named_modules():
-                if isinstance(layer, nn.Conv2d):
+                if isinstance(layer, (nn.Conv2d, nn.Conv1d)):
                     if target_layer is None or name == target_layer:
                         conv_layer = layer
 
@@ -265,13 +289,15 @@ class GradientExplainer(BaseExplainer):
                     "status": "unsupported",
                     "executed": False,
                     "technique": "gradcam",
-                    "message": "Model contains no suitable Conv2d layers for Grad-CAM.",
+                    "message": "Model contains no suitable Conv2d layers (or Conv1d) for Grad-CAM.",
                     "attribution": None,
                 }
 
             device = next(model.parameters()).device if list(model.parameters()) else torch.device("cpu")
             x = to_tensor(inputs).to(device).clone().detach().requires_grad_(True)
-            if x.ndim == 3:
+            if x.ndim == 3 and isinstance(conv_layer, nn.Conv2d):
+                x = x.unsqueeze(0)
+            elif x.ndim == 2 and isinstance(conv_layer, nn.Conv1d):
                 x = x.unsqueeze(0)
 
             activations = []
@@ -291,7 +317,8 @@ class GradientExplainer(BaseExplainer):
                 score = self._get_target_score(out, c)
 
                 model.zero_grad()
-                score.backward(retain_graph=True)
+                with disable_cudnn():
+                    score.backward(retain_graph=True)
             finally:
                 h_fwd.remove()
 
@@ -304,15 +331,21 @@ class GradientExplainer(BaseExplainer):
                     "attribution": None,
                 }
 
-            act = activations[0]  # (B, C, H, W)
-            grad = gradients[0]   # (B, C, H, W)
+            act = activations[0]  # (B, C, H, W) or (B, C, L)
+            grad = gradients[0]   # (B, C, H, W) or (B, C, L)
 
-            weights = torch.mean(grad, dim=(2, 3), keepdim=True)
-            cam = torch.sum(weights * act, dim=1, keepdim=True)
-            cam = F.relu(cam)
-
-            if x.ndim == 4:
-                cam = F.interpolate(cam, size=x.shape[2:], mode="bilinear", align_corners=False)
+            if isinstance(conv_layer, nn.Conv1d) or act.ndim == 3:
+                weights = torch.mean(grad, dim=2, keepdim=True)
+                cam = torch.sum(weights * act, dim=1, keepdim=True)
+                cam = F.relu(cam)
+                if x.ndim == 3 and cam.shape[2] != x.shape[2]:
+                    cam = F.interpolate(cam, size=x.shape[2], mode="linear", align_corners=False)
+            else:
+                weights = torch.mean(grad, dim=(2, 3), keepdim=True)
+                cam = torch.sum(weights * act, dim=1, keepdim=True)
+                cam = F.relu(cam)
+                if x.ndim == 4 and cam.shape[2:] != x.shape[2:]:
+                    cam = F.interpolate(cam, size=x.shape[2:], mode="bilinear", align_corners=False)
 
             cam_np = cam.detach().cpu().numpy()
 

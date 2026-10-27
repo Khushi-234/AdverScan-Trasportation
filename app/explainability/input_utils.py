@@ -82,18 +82,19 @@ def to_tensor(
         torch.Tensor of converted data.
     """
     if isinstance(x, torch.Tensor):
-        t = x.to(dtype=dtype)
+        t = x.to(dtype=dtype).contiguous()
     elif isinstance(x, np.ndarray):
-        t = torch.from_numpy(x).to(dtype=dtype)
+        arr = np.ascontiguousarray(x)
+        t = torch.from_numpy(arr).to(dtype=dtype).contiguous()
     elif hasattr(x, "to_numpy"):  # pandas DataFrame/Series
-        t = torch.from_numpy(x.to_numpy().copy()).to(dtype=dtype)
+        t = torch.from_numpy(np.ascontiguousarray(x.to_numpy().copy())).to(dtype=dtype).contiguous()
     elif isinstance(x, (list, tuple)):
-        t = torch.tensor(x, dtype=dtype)
+        t = torch.tensor(x, dtype=dtype).contiguous()
     elif np.isscalar(x):
-        t = torch.tensor([x], dtype=dtype)
+        t = torch.tensor([x], dtype=dtype).contiguous()
     else:
-        arr = to_numpy(x)
-        t = torch.from_numpy(arr).to(dtype=dtype)
+        arr = np.ascontiguousarray(to_numpy(x))
+        t = torch.from_numpy(arr).to(dtype=dtype).contiguous()
 
     if device is not None:
         t = t.to(device)
