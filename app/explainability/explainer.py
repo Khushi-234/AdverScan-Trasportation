@@ -106,7 +106,7 @@ class XAIExplainer:
             true_label: Optional ground truth label for the sample.
             technique: XAI technique name ("shap", "treeshap", "lime", "saliency", "integrated_gradients", "gradcam").
             attack_name: Identifier of the attack executed.
-            assessment_result: Optional AssessmentResult from M5 for context enrichment.
+            assessment_result: Optional AssessmentResult from M3 for context enrichment.
             modality: Explicit modality hint ("image", "text", "tabular", "timeseries").
             target_class: Optional explicit class index to explain.
             output_mode: 'classification', 'regression', 'anomaly_score', or 'auto'.
@@ -455,13 +455,13 @@ class XAIExplainer:
         **kwargs: Any,
     ) -> Union[ExplanationResult, List[ExplanationResult]]:
         """
-        Generate explanation directly from an M3 AttackResult contract.
+        Generate explanation directly from an M2 AttackResult contract.
         Automatically routes single samples to explain() and batches to explain_batch().
 
         Args:
             model: Target ML model.
-            attack_result: M3 AttackResult instance.
-            assessment_result: Optional M5 AssessmentResult instance.
+            attack_result: M2 AttackResult instance.
+            assessment_result: Optional M3 AssessmentResult instance.
             technique: XAI technique name.
             modality: Optional explicit modality hint.
 

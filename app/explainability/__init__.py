@@ -1,5 +1,5 @@
 """
-M6 - XAI Explainability Module for AdverScan.
+M5 - XAI Explainability Module for AdverScan.
 
 Provides multi-modal model explainability (image, text, tabular, time-series),
 feature attribution, clean vs. adversarial comparison, failure analysis,
@@ -8,7 +8,7 @@ and structured result DTOs.
 
 from app.explainability.aggregate import aggregate_explanations
 from app.explainability.comparison import compare_attributions, compare_explanations
-from app.explainability.domain_profiles import DomainProfile, get_domain_profile
+from app.explainability.domain_profiles import DomainProfile, get_domain_profile, is_valid_adversarial
 from app.explainability.explainer import XAIExplainer
 from app.explainability.explanation_result import ExplanationResult
 from app.explainability.failure_analysis import analyze_failure, is_prediction_correct
