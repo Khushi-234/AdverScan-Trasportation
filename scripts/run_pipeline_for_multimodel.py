@@ -36,6 +36,7 @@ from app.ingestion.model_registry import ModelPresetRegistry
 from app.ingestion.presets import DATASET_TO_RECOMMENDED_MODEL, MODEL_PRESETS
 from app.orchestration import AdverScanOrchestrator, PipelineConfig
 from app.utils import get_execution_device_info, resolve_device
+from app.core.device_manager import DeviceManager
 
 load_dotenv()
 
@@ -732,7 +733,7 @@ def prompt_pipeline_options() -> Dict[str, Any]:
         print("  1. Auto-detect [CPU (CUDA unavailable)] (Default)")
         print("  2. CPU")
     dev_choice = input("Select Device [1]: ").strip() or "1"
-    target_device = "cpu" if dev_choice == "2" else resolve_device("auto")
+    target_device = "cpu" if dev_choice == "2" else str(DeviceManager.resolve_device(requested_device="auto"))
 
     return {
         "mode": selected_mode,
@@ -1131,6 +1132,26 @@ def main():
     # 2. Build PipelineConfig
     print(f"[2/3] Configuring AdverScan Pipeline (Mode: {mode_val.upper()})...")
     sample_cnt = samples_val if samples_val > 0 else None
+
+    # Hardware Guard: Enforce strict GPU binding or safe CPU workload scaling
+    resolved_dev = DeviceManager.resolve_device(device_val)
+    device_val = str(resolved_dev)
+
+    est_params = preset_info_val.get("parameters", 0) if isinstance(preset_info_val, dict) else 0
+    if not est_params:
+        mid_low = model_id_val.lower()
+        if any(k in mid_low for k in ("vit", "resnet", "gtsrb")):
+            est_params = 85_800_000
+        elif any(k in mid_low for k in ("bert", "roberta", "t5")):
+            est_params = 110_000_000
+
+    if sample_cnt is not None:
+        sample_cnt, safe_batch = DeviceManager.adjust_workload_for_hardware(
+            sample_count=sample_cnt,
+            model_param_count=est_params,
+            device=resolved_dev,
+        )
+        batch_size_val = min(batch_size_val, safe_batch)
     pipeline_config = PipelineConfig(
         attack_configs=attack_configs,
         model_path=model_id_val,

@@ -129,6 +129,10 @@ class AdverScanOrchestrator:
         step_start = time.time()
         print("  ⏳ [Step 1/9] M1 Model Ingestion...", end="", flush=True)
         try:
+            from app.core.device_manager import DeviceManager
+            target_device = DeviceManager.resolve_device(config.device)
+            config.device = str(target_device)
+
             adapter, metadata = ingest_model(
                 model_path=config.model_path,
                 sample_input=config.sample_input,
@@ -138,6 +142,18 @@ class AdverScanOrchestrator:
                 task_type=config.task_type,
             )
             result.model_metadata = metadata.to_dict() if hasattr(metadata, "to_dict") else metadata
+
+            # Hardware Guard: Enforce safe sample count and batch size if running large models on CPU
+            raw_m = adapter.get_model() if hasattr(adapter, "get_model") else None
+            param_count = sum(p.numel() for p in raw_m.parameters()) if (raw_m and hasattr(raw_m, "parameters")) else 0
+            if config.sample_count is not None:
+                config.sample_count, safe_batch = DeviceManager.adjust_workload_for_hardware(
+                    sample_count=config.sample_count,
+                    model_param_count=param_count,
+                    device=target_device,
+                )
+                config.batch_size = min(config.batch_size, safe_batch)
+
             resource_monitor.record_stage("M1_ingestion")
             module_timings["M1_ingestion"] = round(time.time() - step_start, 4)
             print(f" Done ({time.time() - step_start:.2f}s)")
@@ -451,6 +467,27 @@ class AdverScanOrchestrator:
                 combined_adv = _combine_batches(batch_adv_list)
                 combined_labels = _combine_batches(batch_labels_list)
 
+                # Ensure combined attack results strictly respect sample_count
+                if config.sample_count is not None:
+                    if isinstance(combined_orig, torch.Tensor):
+                        combined_orig = combined_orig[:config.sample_count]
+                    elif isinstance(combined_orig, (list, np.ndarray)):
+                        combined_orig = combined_orig[:config.sample_count]
+                    elif isinstance(combined_orig, dict):
+                        combined_orig = {k: (v[:config.sample_count] if hasattr(v, "__getitem__") else v) for k, v in combined_orig.items()}
+
+                    if isinstance(combined_adv, torch.Tensor):
+                        combined_adv = combined_adv[:config.sample_count]
+                    elif isinstance(combined_adv, (list, np.ndarray)):
+                        combined_adv = combined_adv[:config.sample_count]
+                    elif isinstance(combined_adv, dict):
+                        combined_adv = {k: (v[:config.sample_count] if hasattr(v, "__getitem__") else v) for k, v in combined_adv.items()}
+
+                    if isinstance(combined_labels, torch.Tensor):
+                        combined_labels = combined_labels[:config.sample_count]
+                    elif isinstance(combined_labels, (list, np.ndarray)):
+                        combined_labels = combined_labels[:config.sample_count]
+
                 combined_metadata = AttackMetadata(
                     name=attack_name,
                     attack_name=last_metadata.attack_name if last_metadata else attack_name,
@@ -492,6 +529,8 @@ class AdverScanOrchestrator:
             # Step 4: M2 Adversarial Evaluation via InMemoryDatasetLoader helper
             try:
                 adv_targets = combined_atk_res.labels
+                if config.sample_count is not None and isinstance(adv_targets, (list, np.ndarray, torch.Tensor)):
+                    adv_targets = adv_targets[:config.sample_count]
                 in_mem_loader = InMemoryDatasetLoader(
                     inputs=combined_atk_res.adversarial_examples,
                     targets=adv_targets,
@@ -504,7 +543,11 @@ class AdverScanOrchestrator:
                     num_classes=config.num_classes,
                     model_name=config.model_name,
                 )
-                adv_eval_res: EvaluationResult = adv_evaluator.evaluate(output_dir=None, show_progress=False)
+                adv_eval_res: EvaluationResult = adv_evaluator.evaluate(
+                    output_dir=None,
+                    show_progress=False,
+                    max_samples=config.sample_count,
+                )
                 adv_evaluations_dict[attack_name] = adv_eval_res
                 result.adversarial_evaluations[attack_name] = adv_eval_res.to_dict()
             except Exception as e:
@@ -541,6 +584,21 @@ class AdverScanOrchestrator:
                 y_true = adv_res.targets or baseline_result.targets
                 y_clean_pred = baseline_result.predictions
                 y_adv_pred = adv_res.predictions
+                if config.sample_count is not None:
+                    if y_true is not None:
+                        y_true = y_true[:config.sample_count]
+                    if y_clean_pred is not None:
+                        y_clean_pred = y_clean_pred[:config.sample_count]
+                    if y_adv_pred is not None:
+                        y_adv_pred = y_adv_pred[:config.sample_count]
+                if y_clean_pred is not None and y_adv_pred is not None:
+                    min_len = min(len(y_clean_pred), len(y_adv_pred))
+                    if y_true is not None:
+                        min_len = min(min_len, len(y_true))
+                        y_true = y_true[:min_len]
+                    y_clean_pred = y_clean_pred[:min_len]
+                    y_adv_pred = y_adv_pred[:min_len]
+
                 predictions_dict[atk_name] = {
                     "y_true": y_true,
                     "y_clean_pred": y_clean_pred,

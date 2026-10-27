@@ -6,7 +6,6 @@ from collections.abc import Mapping
 from datetime import datetime
 from pathlib import Path
 from typing import Any, List, Optional, Union
-from typing import Any, List, Optional, Union
 import numpy as np
 import torch
 
@@ -88,7 +87,6 @@ class BaselineEvaluator:
         if show_progress:
             try:
                 from tqdm import tqdm  # type: ignore[import-untyped]
-                from tqdm import tqdm  # type: ignore[import-untyped]
                 batch_iter = tqdm(
                     batch_iter,
                     total=total_batches,
@@ -114,9 +112,10 @@ class BaselineEvaluator:
                     elif hasattr(batch_pixels, "__getitem__"):
                         batch_pixels = batch_pixels[:limit]
                     batch_targets = batch_targets[:limit]
+
                 # Perform inference using M1 adapter
                 outputs = self.adapter.predict(batch_pixels)
-                
+
                 # Support HuggingFace model outputs (ImageClassifierOutput, PatchTST, etc.)
                 if hasattr(outputs, "logits") and outputs.logits is not None:
                     outputs = outputs.logits
@@ -130,15 +129,7 @@ class BaselineEvaluator:
                     logits_tensor = torch.from_numpy(outputs)
                 else:
                     logits_tensor = outputs
-                # Convert to PyTorch Tensor if outputs are NumPy array
-                if isinstance(outputs, np.ndarray):
-                    logits_tensor = torch.from_numpy(outputs)
-                else:
-                    logits_tensor = outputs
 
-                # Dynamically infer num_classes from output dimension if not explicitly provided
-                if self.num_classes is None:
-                    self.num_classes = int(logits_tensor.shape[-1])
                 # Dynamically infer num_classes from output dimension if not explicitly provided
                 if self.num_classes is None:
                     self.num_classes = int(logits_tensor.shape[-1])
@@ -146,20 +137,11 @@ class BaselineEvaluator:
                 # Slice logits to active target classes if output contains unused buffer classes
                 if logits_tensor.shape[-1] > self.num_classes:
                     logits_tensor = logits_tensor[:, : self.num_classes]
-                # Slice logits to active target classes if output contains unused buffer classes
-                if logits_tensor.shape[-1] > self.num_classes:
-                    logits_tensor = logits_tensor[:, : self.num_classes]
 
                 # Compute probabilities & predictions
                 probs_tensor = torch.softmax(logits_tensor, dim=-1)
                 preds_tensor = torch.argmax(probs_tensor, dim=-1)
-                # Compute probabilities & predictions
-                probs_tensor = torch.softmax(logits_tensor, dim=-1)
-                preds_tensor = torch.argmax(probs_tensor, dim=-1)
 
-                all_targets.extend(batch_targets.cpu().numpy().tolist())
-                all_preds.extend(preds_tensor.cpu().numpy().tolist())
-                all_probs_list.append(probs_tensor.cpu().numpy())
                 all_targets.extend(batch_targets.cpu().numpy().tolist())
                 all_preds.extend(preds_tensor.cpu().numpy().tolist())
                 all_probs_list.append(probs_tensor.cpu().numpy())
@@ -175,17 +157,21 @@ class BaselineEvaluator:
                 self.num_classes = max(all_targets) + 1
             else:
                 self.num_classes = 2
-        num_classes_int = self.num_classes
+        num_classes_resolved: int = self.num_classes
+
+        # Enforce strict max_samples slicing on metric arrays
+        if max_samples is not None:
+            all_targets = all_targets[:max_samples]
+            all_preds = all_preds[:max_samples]
+            if all_probs_list:
+                y_probs = np.concatenate(all_probs_list, axis=0)[:max_samples]
+            else:
+                y_probs = np.empty((0, self.num_classes))
+        else:
+            y_probs = np.concatenate(all_probs_list, axis=0) if all_probs_list else np.empty((0, self.num_classes))
 
         y_true = np.array(all_targets, dtype=np.int64)
         y_pred = np.array(all_preds, dtype=np.int64)
-        num_classes_resolved: int = (
-            self.num_classes
-            if self.num_classes is not None
-            else (len(np.unique(y_true)) if len(y_true) > 0 else 2)
-        )
-        self.num_classes = num_classes_resolved
-        y_probs = np.concatenate(all_probs_list, axis=0) if all_probs_list else np.empty((0, num_classes_resolved))
         sample_confidences = np.max(y_probs, axis=-1).tolist() if len(y_probs) > 0 else []
 
         # Compute classification, confidence, entropy, and confusion matrix metrics
