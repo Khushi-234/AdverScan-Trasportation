@@ -1351,6 +1351,91 @@ def main():
                 if sub_parts:
                     print(f"    • Score Components:      {', '.join(sub_parts)}")
 
+    # M6 — Explainable AI (XAI) Attribution & Feature Shift Analysis
+    if result.xai_results:
+        print("\n" + "-" * 70)
+        print("M6 — EXPLAINABLE AI (XAI) ATTRIBUTION & SHIFT ANALYSIS")
+        print("-" * 70)
+        for key, xai_data in result.xai_results.items():
+            atk_n = xai_data.get("attack_name", key).upper()
+            tech = xai_data.get("technique", "XAI").upper()
+            status = xai_data.get("attribution_status", "success").upper()
+            modality = xai_data.get("modality", "unknown").upper()
+
+            print(f"\n  ▶ Explanation: [{atk_n} — {tech}] (Modality: {modality}, Status: {status})")
+
+            clean_p = xai_data.get("clean_prediction")
+            adv_p = xai_data.get("adversarial_prediction")
+            clean_c = xai_data.get("clean_confidence")
+            adv_c = xai_data.get("adversarial_confidence")
+            pred_changed = xai_data.get("prediction_changed")
+            caused_fail = xai_data.get("attack_caused_failure")
+
+            if clean_p is not None and adv_p is not None:
+                chg_str = "YES (Adversarial Flip Induced)" if pred_changed else "NO (Prediction Preserved)"
+                clean_c_str = f"{clean_c * 100:.2f}%" if clean_c is not None else "N/A"
+                adv_c_str = f"{adv_c * 100:.2f}%" if adv_c is not None else "N/A"
+                print(f"    • Prediction Shift:      Clean: {clean_p} (Conf: {clean_c_str}) → Adv: {adv_p} (Conf: {adv_c_str})")
+                print(f"    • Decision Flipped:      {chg_str}")
+            if caused_fail is not None:
+                print(f"    • Attack Caused Failure: {'YES' if caused_fail else 'NO'}")
+
+            comp = xai_data.get("comparison", {})
+            if comp:
+                cos_sim = comp.get("cosine_similarity")
+                pearson = comp.get("pearson_correlation")
+                attr_shift = comp.get("attribution_shift")
+                topk_ov = comp.get("top_k_overlap")
+
+                metrics = []
+                if cos_sim is not None:
+                    metrics.append(f"Cosine Sim={cos_sim:.4f}")
+                if pearson is not None:
+                    metrics.append(f"Pearson r={pearson:.4f}")
+                if attr_shift is not None:
+                    metrics.append(f"Attr Shift={attr_shift:.4f}")
+                if topk_ov is not None:
+                    metrics.append(f"Top-K Overlap={topk_ov * 100:.1f}%")
+                if metrics:
+                    print(f"    • Attribution Alignment: {', '.join(metrics)}")
+
+            feat_imp = xai_data.get("feature_importance", {})
+            clean_top = feat_imp.get("clean_top_features") or []
+            adv_top = feat_imp.get("adversarial_top_features") or []
+            shifted_top = feat_imp.get("highest_shifted_features") or []
+
+            def _format_feats(feats):
+                if not feats:
+                    return "None"
+                items = []
+                for f in feats[:5]:
+                    if isinstance(f, dict):
+                        f_name = f.get("feature", f.get("token", f.get("name", "?")))
+                        f_score = f.get("score", f.get("weight", f.get("attribution", 0.0)))
+                        items.append(f"'{f_name}' ({f_score:+.3f})")
+                    elif isinstance(f, (list, tuple)) and len(f) >= 2:
+                        items.append(f"'{f[0]}' ({float(f[1]):+.3f})")
+                    else:
+                        items.append(str(f))
+                return ", ".join(items)
+
+            if clean_top:
+                print(f"    • Clean Top Features:    {_format_feats(clean_top)}")
+            if adv_top:
+                print(f"    • Adv Top Features:      {_format_feats(adv_top)}")
+            if shifted_top:
+                print(f"    • Most Shifted Features: {_format_feats(shifted_top)}")
+
+            if "batch_results" in xai_data:
+                b_res = xai_data["batch_results"]
+                print(f"    • Batch Explanations:    {len(b_res)} sample(s) evaluated")
+
+            # Check if artifact exists on disk
+            if pipeline_config and pipeline_config.output_dir:
+                expected_json = Path(pipeline_config.output_dir) / "xai" / f"{key}_explanation.json"
+                if expected_json.exists():
+                    print(f"    • Exported JSON Report:  {expected_json}")
+
     # Hardening & Re-Test Results (if available)
     if result.hardening_results and result.hardening_results.get("selected_defense"):
         print("\n" + "-" * 70)

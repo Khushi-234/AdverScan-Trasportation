@@ -4,6 +4,7 @@ Central AdverScanOrchestrator coordinator module for Module 8 (Orchestration).
 
 from app.report_generator import ReportWriter
 from datetime import datetime
+from pathlib import Path
 import time
 from collections.abc import Mapping
 from typing import Any, Dict, List, Optional, Tuple, Union
@@ -248,7 +249,6 @@ class AdverScanOrchestrator:
         ckpt_mgr = None
         ckpt_state = None
         if config.enable_checkpoint or config.resume_checkpoint_path:
-            from pathlib import Path
             from app.orchestration.checkpoint_manager import (
                 EvaluationCheckpointManager,
                 CheckpointIncompatibleError,
@@ -301,7 +301,6 @@ class AdverScanOrchestrator:
                 for b_idx, (b_pixels, b_targets) in enumerate(dataset_batches):
                     batch_cache_path = None
                     if ckpt_mgr and ckpt_state:
-                        from pathlib import Path
                         batch_cache_path = Path(config.checkpoint_dir) / f"ckpt_batch_{ckpt_state.run_id}_{attack_name}_{b_idx}.pt"
 
                     # If resuming and batch was already completed and cached
@@ -599,9 +598,39 @@ class AdverScanOrchestrator:
                             attack_result=atk_res,
                             assessment_result=assess_res,
                             technique=tech,
+                            modality=getattr(adapter, "data_domain", None) or getattr(config, "data_domain", None),
                         )
-                        result.xai_results[f"{atk_name}_{tech}"] = exp_res.to_dict()
+                        if isinstance(exp_res, list):
+                            res_dict = exp_res[0].to_dict() if exp_res else {}
+                            res_dict["batch_results"] = [r.to_dict() for r in exp_res]
+                            result.xai_results[f"{atk_name}_{tech}"] = res_dict
+                        else:
+                            result.xai_results[f"{atk_name}_{tech}"] = exp_res.to_dict()
+
+                        if config.output_dir:
+                            try:
+                                xai_out_dir = Path(config.output_dir) / "xai"
+                                xai_out_dir.mkdir(parents=True, exist_ok=True)
+                                json_path = xai_out_dir / f"{atk_name}_{tech}_explanation.json"
+                                if isinstance(exp_res, list) and exp_res and hasattr(exp_res[0], "save_json"):
+                                    exp_res[0].save_json(json_path)
+                                elif hasattr(exp_res, "save_json"):
+                                    exp_res.save_json(json_path)
+                            except Exception as ex:
+                                print(f" [Save err: {ex}]", end="")
+
                         print(f" Done ({time.time() - xai_start:.2f}s)")
+
+                if config.output_dir and result.xai_results:
+                    try:
+                        import json
+                        xai_out_dir = Path(config.output_dir) / "xai"
+                        xai_out_dir.mkdir(parents=True, exist_ok=True)
+                        with open(xai_out_dir / "xai_summary.json", "w", encoding="utf-8") as f:
+                            json.dump(result.xai_results, f, indent=2, default=str)
+                    except Exception as ex:
+                        print(f" [Summary save err: {ex}]", end="")
+
                 module_timings["M6_explainability"] = round(time.time() - step_start, 4)
             except Exception as e:
                 module_timings["M6_explainability"] = round(time.time() - step_start, 4)

@@ -104,39 +104,6 @@ def _is_equal(a: Any, b: Any) -> bool:
             return False
 
 
-def _to_clean_value(val: Any) -> Any:
-    """Extract clean python primitive (int, float, list, str) from tensor or numpy scalar."""
-    if val is None:
-        return None
-    if hasattr(val, "detach"):
-        val = val.detach().cpu().numpy()
-    if isinstance(val, np.ndarray):
-        if val.size == 1:
-            return val.item()
-        return val.tolist()
-    if hasattr(val, "item") and callable(val.item):
-        try:
-            return val.item()
-        except Exception:
-            pass
-    return val
-
-
-def _is_equal(a: Any, b: Any) -> bool:
-    """Safely compare two predictions or labels for equality."""
-    norm_a = _normalize_label_scalar(a)
-    norm_b = _normalize_label_scalar(b)
-    if isinstance(norm_a, (list, tuple, set)) or isinstance(norm_b, (list, tuple, set)):
-        try:
-            return bool(np.array_equal(norm_a, norm_b))
-        except Exception:
-            return False
-    try:
-        return bool(norm_a == norm_b)
-    except Exception:
-        return bool(np.array_equal(norm_a, norm_b))
-
-
 def analyze_failure(
     clean_prediction: Any,
     adversarial_prediction: Any,

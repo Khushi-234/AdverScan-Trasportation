@@ -130,15 +130,7 @@ class BaselineEvaluator:
                     logits_tensor = torch.from_numpy(outputs)
                 else:
                     logits_tensor = outputs
-                # Convert to PyTorch Tensor if outputs are NumPy array
-                if isinstance(outputs, np.ndarray):
-                    logits_tensor = torch.from_numpy(outputs)
-                else:
-                    logits_tensor = outputs
 
-                # Dynamically infer num_classes from output dimension if not explicitly provided
-                if self.num_classes is None:
-                    self.num_classes = int(logits_tensor.shape[-1])
                 # Dynamically infer num_classes from output dimension if not explicitly provided
                 if self.num_classes is None:
                     self.num_classes = int(logits_tensor.shape[-1])
@@ -146,20 +138,11 @@ class BaselineEvaluator:
                 # Slice logits to active target classes if output contains unused buffer classes
                 if logits_tensor.shape[-1] > self.num_classes:
                     logits_tensor = logits_tensor[:, : self.num_classes]
-                # Slice logits to active target classes if output contains unused buffer classes
-                if logits_tensor.shape[-1] > self.num_classes:
-                    logits_tensor = logits_tensor[:, : self.num_classes]
 
                 # Compute probabilities & predictions
                 probs_tensor = torch.softmax(logits_tensor, dim=-1)
                 preds_tensor = torch.argmax(probs_tensor, dim=-1)
-                # Compute probabilities & predictions
-                probs_tensor = torch.softmax(logits_tensor, dim=-1)
-                preds_tensor = torch.argmax(probs_tensor, dim=-1)
 
-                all_targets.extend(batch_targets.cpu().numpy().tolist())
-                all_preds.extend(preds_tensor.cpu().numpy().tolist())
-                all_probs_list.append(probs_tensor.cpu().numpy())
                 all_targets.extend(batch_targets.cpu().numpy().tolist())
                 all_preds.extend(preds_tensor.cpu().numpy().tolist())
                 all_probs_list.append(probs_tensor.cpu().numpy())

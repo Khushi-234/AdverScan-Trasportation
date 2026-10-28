@@ -28,7 +28,7 @@ class BaseModalityHandler(ABC):
         pass
 
     @abstractmethod
-    def prepare_batch(self, clean: Any, adversarial: Any) -> Tuple[Any, Any]:
+    def prepare_batch(self, clean: Any, adversarial: Any, **kwargs: Any) -> Tuple[Any, Any]:
         """
         Validate and format both clean and adversarial inputs to ensure compatibility.
         """

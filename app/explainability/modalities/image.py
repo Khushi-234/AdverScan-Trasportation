@@ -43,7 +43,7 @@ class ImageModalityHandler(BaseModalityHandler):
 
         return t
 
-    def prepare_batch(self, clean: Any, adversarial: Any) -> Tuple[torch.Tensor, torch.Tensor]:
+    def prepare_batch(self, clean: Any, adversarial: Any, **kwargs: Any) -> Tuple[torch.Tensor, torch.Tensor]:
         """
         Ensure clean and adversarial images match in shape and channel ordering.
         """

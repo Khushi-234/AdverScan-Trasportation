@@ -43,7 +43,7 @@ class TimeSeriesModalityHandler(BaseModalityHandler):
 
         return t
 
-    def prepare_batch(self, clean: Any, adversarial: Any) -> Tuple[torch.Tensor, torch.Tensor]:
+    def prepare_batch(self, clean: Any, adversarial: Any, **kwargs: Any) -> Tuple[torch.Tensor, torch.Tensor]:
         """
         Prepare and validate clean and adversarial time-series inputs.
         """

@@ -3,13 +3,15 @@ SHAP-based XAI technique implementations for AdverScan.
 Includes generic SHAPExplainer and specialized TreeSHAPExplainer for tree ensembles.
 """
 
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Union, cast
 import numpy as np
 
+shap: Any = None
 try:
     import shap  # type: ignore
+    import shap.maskers  # type: ignore
     _SHAP_AVAILABLE = True
-except ImportError:
+except (ImportError, Exception):
     shap = None
     _SHAP_AVAILABLE = False
 
@@ -59,7 +61,7 @@ class TreeSHAPExplainer(BaseExplainer):
         Returns:
             Structured attribution dictionary.
         """
-        if not self.is_available:
+        if not self.is_available or shap is None:
             return {
                 "status": "unavailable",
                 "executed": False,
@@ -67,6 +69,8 @@ class TreeSHAPExplainer(BaseExplainer):
                 "message": "SHAP library is not installed in the current environment.",
                 "attribution": None,
             }
+
+        assert shap is not None
 
         try:
             unwrapped = unwrap_model(model)
@@ -224,7 +228,7 @@ class SHAPExplainer(BaseExplainer):
         Returns:
             Structured attribution dictionary indicating execution status and result.
         """
-        if not self.is_available:
+        if not self.is_available or shap is None:
             return {
                 "status": "unavailable",
                 "executed": False,
@@ -232,6 +236,8 @@ class SHAPExplainer(BaseExplainer):
                 "message": "SHAP library is not installed in the current environment.",
                 "attribution": None,
             }
+
+        assert shap is not None
 
         try:
             # 1. Text input handling
@@ -241,9 +247,40 @@ class SHAPExplainer(BaseExplainer):
                 def text_predict_fn(texts: List[str]) -> np.ndarray:
                     return predict_proba_np(model, texts, output_mode=output_mode)
 
-                explainer = shap.Explainer(text_predict_fn)
-                shap_values = explainer(text_list)
-                values = shap_values.values if hasattr(shap_values, "values") else np.asarray(shap_values)
+                tok = kwargs.get("tokenizer")
+                if tok is None:
+                    proc = getattr(model, "processor", None)
+                    if hasattr(proc, "get_processor") and callable(proc.get_processor):
+                        tok = proc.get_processor()
+                    elif hasattr(proc, "_tokenizer"):
+                        tok = proc._tokenizer
+                    elif hasattr(proc, "tokenizer"):
+                        tok = proc.tokenizer
+                    elif hasattr(model, "tokenizer"):
+                        tok = model.tokenizer
+
+                masker = None
+                if tok is not None and hasattr(shap, "maskers") and hasattr(shap.maskers, "Text"):
+                    try:
+                        masker = shap.maskers.Text(tok)
+                    except Exception:
+                        masker = shap.maskers.Text()
+                elif hasattr(shap, "maskers") and hasattr(shap.maskers, "Text"):
+                    masker = shap.maskers.Text()
+
+                try:
+                    explainer = shap.Explainer(text_predict_fn, masker=masker) if masker is not None else shap.Explainer(text_predict_fn, masker=shap.maskers.Text())
+                    shap_values = explainer(text_list)
+                    values = shap_values.values if hasattr(shap_values, "values") else np.asarray(shap_values)
+                except Exception:
+                    fallback_masker = shap.maskers.Text() if hasattr(shap, "maskers") and hasattr(shap.maskers, "Text") else None
+                    explainer = shap.Explainer(text_predict_fn, masker=fallback_masker) if fallback_masker is not None else shap.Explainer(text_predict_fn)
+                    shap_values = explainer(text_list)
+                    values = shap_values.values if hasattr(shap_values, "values") else np.asarray(shap_values)
+
+                if isinstance(values, np.ndarray) and target_class is not None and values.ndim == 3:
+                    c_idx = target_class if target_class < values.shape[-1] else 0
+                    values = values[..., c_idx]
 
                 return {
                     "status": "success",
@@ -275,7 +312,8 @@ class SHAPExplainer(BaseExplainer):
 
             if inputs_np.ndim == 4 and "grid_size" in kwargs:
                 # 4D image inputs: (B, C, H, W) with spatial grid aggregation
-                B, C, H, W = inputs_np.shape
+                img_shape: Any = inputs_np.shape
+                B, C, H, W = int(img_shape[0]), int(img_shape[1]), int(img_shape[2]), int(img_shape[3])
                 grid_size = kwargs.get("grid_size", 4)
                 gh = min(grid_size, H)
                 gw = min(grid_size, W)
@@ -333,7 +371,7 @@ class SHAPExplainer(BaseExplainer):
                         device = next(unwrapped.parameters()).device if list(unwrapped.parameters()) else torch.device("cpu")
                         bg_tensor = to_tensor(bg_np, device=device)
                         inp_tensor = to_tensor(inputs_np, device=device)
-                        explainer = shap.GradientExplainer(unwrapped, bg_tensor)
+                        explainer = shap.GradientExplainer(unwrapped, cast(Any, bg_tensor))
                         shap_vals = explainer.shap_values(inp_tensor)
 
                         if isinstance(shap_vals, list):

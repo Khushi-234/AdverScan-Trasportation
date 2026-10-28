@@ -96,20 +96,49 @@ class HuggingFaceAdapter(BaseModelAdapter):
         # Dictionary or Mapping of tensors (e.g. from tokenizer, BatchEncoding, or AutoImageProcessor)
         if isinstance(inputs, Mapping) or hasattr(inputs, "items"):
             return {
-                k: (v.to(self._device) if isinstance(v, torch.Tensor) else v)
+                k: (
+                    v.to(self._device)
+                    if isinstance(v, torch.Tensor)
+                    else (torch.as_tensor(v, device=self._device) if isinstance(v, (list, tuple, np.ndarray)) else v)
+                )
                 for k, v in inputs.items()
             }
 
         # Process via attached processor if available
         if self.processor is not None:
-            processed = self.processor(inputs)
+            try:
+                processed = self.processor(
+                    inputs,
+                    return_tensors="pt",
+                    padding=True,
+                    truncation=True,
+                )
+            except (TypeError, ValueError):
+                try:
+                    processed = self.processor(inputs, return_tensors="pt")
+                except (TypeError, ValueError):
+                    processed = self.processor(inputs)
+
             if isinstance(processed, torch.Tensor):
                 return processed.to(self._device)
             elif isinstance(processed, Mapping) or hasattr(processed, "items"):
                 return {
-                    k: (v.to(self._device) if isinstance(v, torch.Tensor) else v)
+                    k: (
+                        v.to(self._device)
+                        if isinstance(v, torch.Tensor)
+                        else (torch.as_tensor(v, device=self._device) if isinstance(v, (list, tuple, np.ndarray)) else v)
+                    )
                     for k, v in processed.items()
                 }
+
+        # Direct tokenizer fallback if processor is None or didn't handle raw text
+        tok = getattr(self, "tokenizer", None) or getattr(self._model, "tokenizer", None)
+        if tok is not None and callable(tok) and isinstance(inputs, (str, list, tuple)):
+            try:
+                processed = tok(inputs, return_tensors="pt", padding=True, truncation=True)
+                return {k: v.to(self._device) for k, v in processed.items()}
+            except Exception:
+                pass
 
         # NumPy array
         if isinstance(inputs, np.ndarray):

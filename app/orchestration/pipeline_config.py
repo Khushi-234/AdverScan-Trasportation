@@ -49,6 +49,7 @@ class PipelineConfig:
     split: str = "test"
     batch_size: int = 32
     custom_dataset_loader: Optional[Any] = None
+    data_domain: Optional[str] = None
 
     # Reproducibility Configuration (A1.2)
     seed: Optional[int] = 42

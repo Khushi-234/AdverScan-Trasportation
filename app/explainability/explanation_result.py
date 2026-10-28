@@ -5,7 +5,7 @@ ExplanationResult DTO for the explainability module in AdverScan.
 import json
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Union, cast
 import numpy as np
 
 
@@ -25,7 +25,13 @@ def numpy_json_serializer(obj: Any) -> Any:
         return obj.to_dict()
     elif hasattr(obj, "__dict__"):
         return obj.__dict__
-    raise TypeError(f"Object of type {type(obj)} is not JSON serializable")
+    try:
+        import torch
+        if isinstance(obj, torch.Tensor):
+            return obj.detach().cpu().tolist()
+    except Exception:
+        pass
+    return str(obj)
 
 
 def _downsample_heatmap(arr: np.ndarray, max_dim: int = 16) -> List[Any]:
@@ -98,7 +104,7 @@ class ExplanationResult:
         res_dict = self.to_dict()
 
         if store_npz:
-            npz_arrays: Dict[str, np.ndarray] = {}
+            npz_arrays: Dict[str, Any] = {}
             # Check for large raw attributions
             for key in ("clean", "adversarial"):
                 attr_obj = res_dict.get("attribution", {}).get(key)
@@ -117,7 +123,7 @@ class ExplanationResult:
 
             if npz_arrays:
                 npz_path = path.with_suffix(".npz")
-                np.savez_compressed(npz_path, **npz_arrays)
+                cast(Any, np.savez_compressed)(npz_path, **npz_arrays)
                 res_dict["metadata"]["npz_arrays_path"] = str(npz_path)
 
         with open(path, "w", encoding="utf-8") as f:

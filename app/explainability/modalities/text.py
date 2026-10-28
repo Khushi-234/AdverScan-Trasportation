@@ -18,9 +18,10 @@ class TextModalityHandler(BaseModalityHandler):
     def __init__(self):
         super().__init__(modality=Modality.TEXT)
 
-    def prepare_input(self, inputs: Any) -> Any:
+    def prepare_input(self, inputs: Any, tokenizer: Optional[Any] = None) -> Any:
         """
         Validate and format text inputs into strings or list of strings.
+        Decodes token ID tensors or dictionaries using tokenizer if provided.
         """
         if isinstance(inputs, str):
             return inputs
@@ -29,14 +30,46 @@ class TextModalityHandler(BaseModalityHandler):
                 return list(inputs)
             # If list of tokens, join into text
             return " ".join(str(x) for x in inputs)
+        
+        # Check dict / Mapping with text or input_ids
+        if isinstance(inputs, dict) or hasattr(inputs, "items"):
+            if "text" in inputs:
+                return self.prepare_input(inputs["text"], tokenizer=tokenizer)
+            if "input_ids" in inputs:
+                ids = inputs["input_ids"]
+                if tokenizer is not None and hasattr(tokenizer, "decode"):
+                    try:
+                        import torch
+                        if isinstance(ids, torch.Tensor):
+                            ids_cpu = ids.detach().cpu()
+                            if ids_cpu.ndim == 2:
+                                return [tokenizer.decode(row, skip_special_tokens=True) for row in ids_cpu]
+                            return tokenizer.decode(ids_cpu, skip_special_tokens=True)
+                        elif isinstance(ids, (list, tuple)):
+                            return tokenizer.decode(ids, skip_special_tokens=True)
+                    except Exception:
+                        pass
+
+        # Check raw tensor of token IDs
+        try:
+            import torch
+            if isinstance(inputs, torch.Tensor) and tokenizer is not None and hasattr(tokenizer, "decode"):
+                ids_cpu = inputs.detach().cpu()
+                if ids_cpu.ndim == 2:
+                    return [tokenizer.decode(row, skip_special_tokens=True) for row in ids_cpu]
+                return tokenizer.decode(ids_cpu, skip_special_tokens=True)
+        except Exception:
+            pass
+
         return str(inputs)
 
-    def prepare_batch(self, clean: Any, adversarial: Any) -> Tuple[Any, Any]:
+    def prepare_batch(self, clean: Any, adversarial: Any, **kwargs: Any) -> Tuple[Any, Any]:
         """
         Prepare and validate clean and adversarial text inputs.
         """
-        clean_text = self.prepare_input(clean)
-        adv_text = self.prepare_input(adversarial)
+        tok = kwargs.get("tokenizer")
+        clean_text = self.prepare_input(clean, tokenizer=tok)
+        adv_text = self.prepare_input(adversarial, tokenizer=tok)
         return clean_text, adv_text
 
     def _tokenize(self, text: Any) -> List[str]:

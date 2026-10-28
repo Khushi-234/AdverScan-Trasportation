@@ -6,15 +6,16 @@ Supports image, tabular, text, and time-series inputs.
 from typing import Any, Dict, List, Optional, Union
 import numpy as np
 
+lime: Any = None
+lime_image: Any = None
+lime_tabular: Any = None
+lime_text: Any = None
+
 try:
-    import lime
-    from lime import lime_image, lime_tabular, lime_text
+    import lime  # type: ignore
+    from lime import lime_image, lime_tabular, lime_text  # type: ignore
     _LIME_AVAILABLE = True
 except ImportError:
-    lime = None
-    lime_image = None
-    lime_tabular = None
-    lime_text = None
     _LIME_AVAILABLE = False
 
 from app.explainability.input_utils import predict_proba_np, to_numpy, to_tensor
@@ -124,6 +125,9 @@ class LIMEExplainer(BaseExplainer):
                 images_t = np.ascontiguousarray(images)
             return predict_proba_np(model, images_t, output_mode=output_mode)
 
+        if lime_image is None:
+            raise RuntimeError("lime.lime_image is not available.")
+
         explainer = lime_image.LimeImageExplainer()
         labels_to_explain = (target_class,) if target_class is not None else None
         explanation = explainer.explain_instance(
@@ -182,6 +186,9 @@ class LIMEExplainer(BaseExplainer):
 
         def predict_fn(data: np.ndarray) -> np.ndarray:
             return predict_proba_np(model, data, output_mode=output_mode)
+
+        if lime_tabular is None:
+            raise RuntimeError("lime.lime_tabular is not available.")
 
         explainer = lime_tabular.LimeTabularExplainer(
             training_data=training_data,
@@ -254,6 +261,9 @@ class LIMEExplainer(BaseExplainer):
             scale = np.maximum(np.abs(flat_input[0]) * 0.1, 0.05)
             training_data = flat_input + np.random.normal(0, scale, size=(50, t_steps * n_vars))
 
+        if lime_tabular is None:
+            raise RuntimeError("lime.lime_tabular is not available.")
+
         explainer = lime_tabular.LimeTabularExplainer(
             training_data=training_data,
             feature_names=flat_names,
@@ -308,7 +318,10 @@ class LIMEExplainer(BaseExplainer):
         def predict_fn(texts: List[str]) -> np.ndarray:
             return predict_proba_np(model, texts, output_mode=output_mode)
 
-        explainer = lime_text.LimeTextExplainer(mode="classification")
+        if lime_text is None:
+            raise RuntimeError("lime.lime_text is not available.")
+
+        explainer = lime_text.LimeTextExplainer()
         labels_to_explain = (target_class,) if target_class is not None else None
         exp = explainer.explain_instance(
             text_str,
@@ -318,11 +331,17 @@ class LIMEExplainer(BaseExplainer):
             top_labels=1 if target_class is None else None,
         )
 
-        top_label = target_class if target_class is not None else exp.top_labels[0]
+        top_labels = getattr(exp, "top_labels", None)
+        top_label = target_class if target_class is not None else (top_labels[0] if top_labels else 0)
         words = text_str.split()
         word_weights = np.zeros(len(words), dtype=np.float32)
 
-        word_weight_map = dict(exp.as_list(label=top_label))
+        try:
+            word_weight_map = dict(exp.as_list(label=top_label))
+        except Exception:
+            available = getattr(exp, "available_labels", lambda: [])()
+            alt_label = available[0] if available else None
+            word_weight_map = dict(exp.as_list(label=alt_label)) if alt_label is not None else {}
         for i, word in enumerate(words):
             if word in word_weight_map:
                 word_weights[i] = word_weight_map[word]

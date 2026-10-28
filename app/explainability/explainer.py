@@ -18,6 +18,7 @@ from app.explainability.input_utils import (
     safe_predict,
     to_numpy,
     to_tensor,
+    unwrap_model,
     validate_single_sample,
 )
 from app.explainability.domain_profiles import get_domain_profile, is_valid_adversarial
@@ -133,8 +134,23 @@ class XAIExplainer:
         validate_single_sample(clean_input, modality=mod.value)
         validate_single_sample(adversarial_input, modality=mod.value)
 
+        # Resolve tokenizer if available
+        tok = kwargs.get("tokenizer")
+        if tok is None:
+            if hasattr(model, "tokenizer") and model.tokenizer is not None:
+                tok = model.tokenizer
+            elif hasattr(model, "processor") and model.processor is not None:
+                tok = getattr(model.processor, "tokenizer", model.processor)
+                if hasattr(tok, "get_processor"):
+                    tok = tok.get_processor()
+            elif hasattr(unwrap_model(model), "tokenizer"):
+                tok = unwrap_model(model).tokenizer
+
         # 3. Input preparation
-        prep_clean, prep_adv = handler.prepare_batch(clean_input, adversarial_input)
+        if mod == Modality.TEXT:
+            prep_clean, prep_adv = handler.prepare_batch(clean_input, adversarial_input, tokenizer=tok, **kwargs)
+        else:
+            prep_clean, prep_adv = handler.prepare_batch(clean_input, adversarial_input)
 
         # Domain validity check on adversarial sample
         validity_flags = {}
@@ -168,6 +184,10 @@ class XAIExplainer:
         else:
             eval_target = None
 
+        call_kwargs = dict(kwargs)
+        if mod == Modality.TEXT and tok is not None:
+            call_kwargs["tokenizer"] = tok
+
         # 7. Run XAI technique with common target class
         clean_attr_result = explainer.explain(
             model,
@@ -175,7 +195,7 @@ class XAIExplainer:
             target_class=eval_target,
             modality=mod,
             output_mode=output_mode,
-            **kwargs,
+            **call_kwargs,
         )
         adv_attr_result = explainer.explain(
             model,
@@ -183,7 +203,7 @@ class XAIExplainer:
             target_class=eval_target,
             modality=mod,
             output_mode=output_mode,
-            **kwargs,
+            **call_kwargs,
         )
 
         # Attribution status propagation
@@ -202,18 +222,21 @@ class XAIExplainer:
                 target_class=adv_pred,
                 modality=mod,
                 output_mode=output_mode,
-                **kwargs,
+                **call_kwargs,
             )
 
         # 8. Postprocess attributions using modality handler
+        target_clean_inp = prep_clean if mod == Modality.TEXT else clean_input
+        target_adv_inp = prep_adv if mod == Modality.TEXT else adversarial_input
+
         clean_postprocessed = handler.postprocess_attribution(
             clean_attr_result.get("attribution"),
-            clean_input,
+            target_clean_inp,
             **kwargs,
         )
         adv_postprocessed = handler.postprocess_attribution(
             adv_attr_result.get("attribution"),
-            adversarial_input,
+            target_adv_inp,
             **kwargs,
         )
 
@@ -412,6 +435,15 @@ class XAIExplainer:
             elif isinstance(clean_list, np.ndarray):
                 sample_clean = clean_list[i : i + 1]
                 sample_adv = adv_list[i : i + 1]
+            elif isinstance(clean_list, dict) or hasattr(clean_list, "items"):
+                sample_clean = {
+                    k: (v[i : i + 1] if hasattr(v, "__getitem__") and len(v) > i else v)
+                    for k, v in clean_list.items()
+                }
+                sample_adv = {
+                    k: (v[i : i + 1] if hasattr(v, "__getitem__") and len(v) > i else v)
+                    for k, v in adv_list.items()
+                } if (isinstance(adv_list, dict) or hasattr(adv_list, "items")) else adv_list
             else:
                 sample_clean = clean_list
                 sample_adv = adv_list

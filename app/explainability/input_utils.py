@@ -2,7 +2,7 @@
 Input validation, model prediction, and conversion utilities for AdverScan explainability module.
 """
 
-from typing import Any, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 import numpy as np
 import torch
 import torch.nn as nn
@@ -112,7 +112,7 @@ def ensure_batch(inputs: Any, modality: str = "tabular") -> Tuple[Any, bool]:
     Returns:
         Tuple of (batched_inputs, was_single: bool).
     """
-    modality_lower = str(modality).lower()
+    modality_lower = modality.lower()
 
     if isinstance(inputs, str):
         return [inputs], True
@@ -148,11 +148,23 @@ def ensure_batch(inputs: Any, modality: str = "tabular") -> Tuple[Any, bool]:
 
 
 def get_shape(x: Any) -> Tuple[int, ...]:
-    """Get shape of tensor, array, or dataframe."""
+    """Get shape of tensor, array, dataframe, list, or dict."""
     if hasattr(x, "shape"):
         return tuple(x.shape)
     if isinstance(x, (list, tuple)):
         return (len(x),)
+    if isinstance(x, dict) or hasattr(x, "items"):
+        for k in ("input_ids", "pixel_values", "features", "inputs", "x"):
+            if hasattr(x, "get"):
+                val = x.get(k)
+                if val is not None and hasattr(val, "shape"):
+                    return tuple(val.shape)
+        if hasattr(x, "values"):
+            for v in x.values():
+                if v is not None and hasattr(v, "shape"):
+                    return tuple(v.shape)
+                if isinstance(v, (list, tuple)):
+                    return (len(v),)
     return ()
 
 
@@ -167,7 +179,7 @@ def validate_single_sample(inputs: Any, modality: str = "tabular") -> None:
     Raises:
         ValueError: If input contains more than one sample.
     """
-    modality_lower = str(modality).lower()
+    modality_lower = modality.lower()
     if isinstance(inputs, (list, tuple)) and all(isinstance(s, str) for s in inputs):
         if len(inputs) > 1:
             raise ValueError(
@@ -244,23 +256,107 @@ def predict_proba_np(
     """
     unwrapped = unwrap_model(model)
 
-    # 1. Text input handling
-    if isinstance(x, (list, tuple, str)) and (isinstance(x, str) or (len(x) > 0 and isinstance(x[0], str))):
-        text_inputs = [x] if isinstance(x, str) else list(x)
-        if hasattr(unwrapped, "predict_proba"):
-            probs = unwrapped.predict_proba(text_inputs)
+    # 1. Text input handling (str, list/tuple of str, or numpy string arrays)
+    is_text = False
+    text_inputs: List[str] = []
+    if isinstance(x, str):
+        is_text = True
+        text_inputs = [x]
+    elif isinstance(x, (list, tuple)) and (len(x) == 0 or isinstance(x[0], str)):
+        is_text = True
+        text_inputs = list(x)
+    elif isinstance(x, np.ndarray) and (x.dtype.kind in ("U", "S", "O") or (x.size > 0 and isinstance(x.flat[0], str))):
+        is_text = True
+        text_inputs = [str(s) for s in x.flat]
+
+    if is_text:
+        target = model if (hasattr(model, "predict_proba") or hasattr(model, "predict")) else unwrapped
+        if hasattr(target, "predict_proba"):
+            probs = target.predict_proba(text_inputs)
             return to_numpy(probs, dtype=np.float64)
-        elif hasattr(unwrapped, "predict"):
-            res = unwrapped.predict(text_inputs)
+        elif hasattr(target, "predict"):
+            res = target.predict(text_inputs)
+            res_arr = to_numpy(res, dtype=np.float64)
+            if res_arr.ndim == 1:
+                return np.stack([1.0 - res_arr, res_arr], axis=-1)
+            is_prob = bool(
+                np.all(res_arr >= 0.0)
+                and np.allclose(np.sum(res_arr, axis=-1), 1.0, atol=1e-3)
+            )
+            if not is_prob:
+                shifted = res_arr - np.max(res_arr, axis=-1, keepdims=True)
+                exp_vals = np.exp(shifted)
+                res_arr = exp_vals / np.sum(exp_vals, axis=-1, keepdims=True)
+            return res_arr
+        elif callable(target) and not isinstance(target, nn.Module):
+            res = target(text_inputs)
             res_arr = to_numpy(res, dtype=np.float64)
             if res_arr.ndim == 1:
                 return np.stack([1.0 - res_arr, res_arr], axis=-1)
             return res_arr
-        elif callable(unwrapped):
-            res = unwrapped(text_inputs)
-            return to_numpy(res, dtype=np.float64)
+        elif isinstance(target, nn.Module):
+            tok = getattr(model, "tokenizer", None) or getattr(model, "processor", None) or getattr(target, "tokenizer", None)
+            if hasattr(tok, "get_processor"):
+                tok = tok.get_processor()
+            if tok is not None and callable(tok):
+                encoded = tok(text_inputs, return_tensors="pt", padding=True, truncation=True)
+                device = next(target.parameters()).device if list(target.parameters()) else torch.device("cpu")
+                encoded = {k: v.to(device) for k, v in encoded.items()}
+                target.eval()
+                with torch.no_grad():
+                    out = target(**encoded)
+                if hasattr(out, "logits"):
+                    out = out.logits
+                out_np = to_numpy(out, dtype=np.float64)
+                if out_np.ndim == 1:
+                    return np.stack([1.0 - out_np, out_np], axis=-1)
+                shifted = out_np - np.max(out_np, axis=-1, keepdims=True)
+                exp_vals = np.exp(shifted)
+                return exp_vals / np.sum(exp_vals, axis=-1, keepdims=True)
+            else:
+                raise TypeError(
+                    f"PyTorch model {type(target).__name__} received raw text strings but no tokenizer/processor was attached."
+                )
         else:
             raise TypeError("Model must be callable or possess predict/predict_proba method.")
+
+    # 1b. Dictionary / Mapping input handling (e.g. NLP token dicts, multimodal batches)
+    if isinstance(x, dict) or hasattr(x, "items"):
+        target = model if (hasattr(model, "predict_proba") or hasattr(model, "predict")) else unwrapped
+        if hasattr(target, "predict_proba"):
+            probs = target.predict_proba(x)
+            return to_numpy(probs, dtype=np.float64)
+        elif hasattr(target, "predict"):
+            res = target.predict(x)
+            res_arr = to_numpy(res, dtype=np.float64)
+            if res_arr.ndim == 1:
+                return np.stack([1.0 - res_arr, res_arr], axis=-1)
+            is_prob = bool(
+                np.all(res_arr >= 0.0)
+                and np.allclose(np.sum(res_arr, axis=-1), 1.0, atol=1e-3)
+            )
+            if not is_prob:
+                shifted = res_arr - np.max(res_arr, axis=-1, keepdims=True)
+                exp_vals = np.exp(shifted)
+                res_arr = exp_vals / np.sum(exp_vals, axis=-1, keepdims=True)
+            return res_arr
+        elif isinstance(unwrapped, nn.Module):
+            unwrapped.eval()
+            device = next(unwrapped.parameters()).device if list(unwrapped.parameters()) else torch.device("cpu")
+            t_dict = {
+                k: (v.to(device) if isinstance(v, torch.Tensor) else torch.as_tensor(v, device=device))
+                for k, v in x.items()
+            }
+            with torch.no_grad():
+                out = unwrapped(**t_dict)
+            if hasattr(out, "logits"):
+                out = out.logits
+            out_np = to_numpy(out, dtype=np.float64)
+            if out_np.ndim == 1:
+                return np.stack([1.0 - out_np, out_np], axis=-1)
+            shifted = out_np - np.max(out_np, axis=-1, keepdims=True)
+            exp_vals = np.exp(shifted)
+            return exp_vals / np.sum(exp_vals, axis=-1, keepdims=True)
 
     x_np = to_numpy(x, dtype=np.float32)
 
@@ -352,9 +448,12 @@ def predict_proba_np(
             exp_s = np.exp(np.clip(shift, -50.0, 50.0))
             return exp_s / np.sum(exp_s, axis=-1, keepdims=True)
 
+        return out_np
+
     # c) Fallback predict for other models
-    if hasattr(unwrapped, "predict") and callable(getattr(unwrapped, "predict")):
-        res = unwrapped.predict(x_np)
+    predict_fn: Any = getattr(unwrapped, "predict", None)
+    if callable(predict_fn):
+        res = predict_fn(x_np)
         res_np = to_numpy(res, dtype=np.float64)
         if res_np.ndim == 1:
             # Hard binary labels or probabilities
