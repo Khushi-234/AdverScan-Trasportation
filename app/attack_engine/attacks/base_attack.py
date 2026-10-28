@@ -46,6 +46,30 @@ class BaseAttack(ABC):
         """
         return self.get_metadata()
 
+    @staticmethod
+    def _extract_logits(outputs: Any) -> Any:
+        """
+        Extract classification logits tensor from model outputs.
+        Supports standard Tensors, HuggingFace ModelOutputs (.logits, .prediction_logits, .prediction_outputs),
+        and dictionary/tuple wrappers.
+        """
+        if hasattr(outputs, "logits") and outputs.logits is not None:
+            return outputs.logits
+        if hasattr(outputs, "prediction_logits") and outputs.prediction_logits is not None:
+            return outputs.prediction_logits
+        if hasattr(outputs, "prediction_outputs") and outputs.prediction_outputs is not None:
+            return outputs.prediction_outputs
+        if hasattr(outputs, "last_hidden_state") and outputs.last_hidden_state is not None:
+            return outputs.last_hidden_state
+        if isinstance(outputs, (tuple, list)) and len(outputs) > 0:
+            return outputs[0]
+        if hasattr(outputs, "get") and callable(getattr(outputs, "get")):
+            for k in ("logits", "prediction_logits", "prediction_outputs"):
+                val = outputs.get(k)
+                if val is not None:
+                    return val
+        return outputs
+
     def validate_config(self, config: Optional[Any] = None) -> None:
         """
         Validate attack configuration parameters against this attack's requirements.

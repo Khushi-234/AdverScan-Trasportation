@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """
 AdverScan Transportation - Full Pipeline Demo (main.py)
 ========================================================
@@ -12,12 +13,7 @@ Runs the complete end-to-end adversarial robustness assessment pipeline:
 
 Usage:
     python main.py [--samples N] [--attack ATTACK] [--epsilon E] [--device DEVICE]
-
-Examples:
-    python main.py
-    python main.py --samples 100 --attack pgd
-    python main.py --samples 25 --attack deepfool --device cuda
-    python main.py --attack fgsm --epsilon 0.05 --samples 50
+    python main.py --interactive   # or simply `python main.py` in terminal for interactive mode
 """
 
 import argparse
@@ -26,7 +22,7 @@ import sys
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Tuple
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
@@ -40,6 +36,7 @@ from app.evaluation.dataset_loader import HFVisionDatasetLoader
 from app.evaluation.metrics import MetricsCalculator
 from app.evaluation.results import EvaluationResult
 from app.attack_engine import AttackConfig, execute_attack, get_attack
+from app.attack_engine.models import AttackResult
 from app.vulnerability_analysis import VulnerabilityEngine
 from app.vulnerability_analysis.assessment_result import AssessmentResult
 from app.vulnerability_analysis.scoring_result import ScoringResult
@@ -60,29 +57,137 @@ def banner():
     print(SEPARATOR)
 
 
+def detect_system_device() -> Tuple[str, str]:
+    """Auto-detect whether CUDA acceleration is available on the system."""
+    if torch.cuda.is_available():
+        gpu_name = torch.cuda.get_device_name(0)
+        return "cuda", f"CUDA (GPU: {gpu_name})"
+    return "cpu", "CPU"
+
+
+def resolve_device(requested: Optional[str] = None) -> str:
+    """Resolve hardware device with automatic fallback."""
+    detected_device, _ = detect_system_device()
+    if not requested or requested.strip().lower() in ("auto", "none", ""):
+        return detected_device
+    req = requested.strip().lower()
+    if req.startswith("cuda"):
+        if torch.cuda.is_available():
+            return "cuda"
+        print("  WARNING: CUDA requested but unavailable - falling back to CPU.")
+        return "cpu"
+    if req == "cpu":
+        return "cpu"
+    return detected_device
+
+
+def prompt_interactive_config(
+    default_samples: int = 10,
+    default_attack: str = "fgsm",
+    default_epsilon: float = 8 / 255,
+    default_device: Optional[str] = None,
+) -> Tuple[str, str, int, float]:
+    """Interactively prompt user for pipeline options."""
+    detected_dev, dev_desc = detect_system_device()
+    initial_device = default_device or detected_dev
+
+    print("\n" + SEPARATOR)
+    print("  INTERACTIVE PIPELINE CONFIGURATION")
+    print(SEPARATOR)
+
+    # 1. Device Auto-Detection
+    print(f"\n[1/4] Device Auto-Detection:")
+    print(f"      Detected Hardware: {dev_desc}")
+    dev_in = input(f"      Use '{initial_device}'? [Y/n/cuda/cpu] (default: {initial_device}): ").strip().lower()
+    if dev_in in ("n", "no"):
+        selected_device = "cpu" if initial_device == "cuda" else "cuda"
+    elif dev_in in ("cuda", "cpu"):
+        selected_device = dev_in
+    else:
+        selected_device = initial_device
+    selected_device = resolve_device(selected_device)
+
+    # 2. Attack Selection
+    print(f"\n[2/4] Adversarial Attack Selection:")
+    attack_descriptions = [
+        ("fgsm", "FGSM", "Fast Gradient Sign Method (Fast, 1-step gradient attack)"),
+        ("pgd", "PGD", "Projected Gradient Descent (Iterative multi-step gradient attack)"),
+        ("deepfool", "DeepFool", "DeepFool (Minimal perturbation boundary attack)"),
+        ("cw", "CW", "Carlini & Wagner (Optimization-based L2/Linf attack)"),
+        ("fab", "FAB", "Fast Adaptive Boundary (Adaptive step boundary attack)"),
+    ]
+    for idx, (_, name, desc) in enumerate(attack_descriptions, 1):
+        print(f"      [{idx}] {name:<10} - {desc}")
+
+    while True:
+        atk_in = input(f"      Select attack [1-5 or name] (default: 1 [{default_attack.upper()}]): ").strip().lower()
+        if not atk_in:
+            selected_attack = default_attack
+            break
+        atk_map = {"1": "fgsm", "2": "pgd", "3": "deepfool", "4": "cw", "5": "fab"}
+        if atk_in in atk_map:
+            selected_attack = atk_map[atk_in]
+            break
+        elif atk_in in SUPPORTED_ATTACKS:
+            selected_attack = atk_in
+            break
+        print("      Invalid attack choice. Enter 1-5 or an attack name.")
+
+    # 3. Number of Samples
+    print(f"\n[3/4] Evaluation Samples:")
+    while True:
+        samples_in = input(f"      Enter number of test samples [1-12630] (default: {default_samples}): ").strip()
+        if not samples_in:
+            selected_samples = default_samples
+            break
+        try:
+            val = int(samples_in)
+            if val <= 0:
+                print("      Please enter a positive integer.")
+                continue
+            selected_samples = val
+            break
+        except ValueError:
+            print("      Invalid input. Please enter a valid integer.")
+
+    # 4. Epsilon Budget
+    print(f"\n[4/4] Perturbation Budget (Epsilon):")
+    while True:
+        eps_in = input(f"      Enter perturbation epsilon (default: {default_epsilon:.5f} [~8/255]): ").strip()
+        if not eps_in:
+            selected_epsilon = default_epsilon
+            break
+        try:
+            val = float(eps_in)
+            if val < 0:
+                print("      Epsilon must be non-negative.")
+                continue
+            selected_epsilon = val
+            break
+        except ValueError:
+            print("      Invalid input. Please enter a float number.")
+
+    print(f"\n  Pipeline Configuration Confirmed:")
+    print(f"  Device: {selected_device}  |  Attack: {selected_attack.upper()}  |  Samples: {selected_samples}  |  Epsilon: {selected_epsilon:.5f}")
+    print(SEPARATOR + "\n")
+
+    return selected_device, selected_attack, selected_samples, selected_epsilon
+
+
 def parse_args():
     parser = argparse.ArgumentParser(
         description="AdverScan full pipeline demo for GTSRB model",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
-    parser.add_argument("--samples",    type=int,   default=50,       help="Number of GTSRB test samples")
-    parser.add_argument("--attack",     type=str,   default="fgsm",   choices=SUPPORTED_ATTACKS, help="Adversarial attack")
-    parser.add_argument("--epsilon",    type=float, default=8/255,    help="Perturbation budget epsilon")
-    parser.add_argument("--batch-size", type=int,   default=32,       help="Batch size")
-    parser.add_argument("--device",     type=str,   default=None,     help="'cpu' or 'cuda'")
-    parser.add_argument("--output-dir", type=str,   default="results",help="Root results directory")
+    parser.add_argument("--samples",         type=int,   default=10,       help="Number of GTSRB test samples")
+    parser.add_argument("--attack",          type=str,   default="fgsm",   choices=SUPPORTED_ATTACKS, help="Adversarial attack")
+    parser.add_argument("--epsilon",         type=float, default=8/255,    help="Perturbation budget epsilon")
+    parser.add_argument("--batch-size",      type=int,   default=32,       help="Batch size")
+    parser.add_argument("--device",          type=str,   default=None,     help="'cpu', 'cuda', or 'auto'")
+    parser.add_argument("--output-dir",      type=str,   default="results",help="Root results directory")
+    parser.add_argument("--interactive", "-i", action="store_true",        help="Force interactive prompt mode")
+    parser.add_argument("--non-interactive", action="store_true",          help="Disable interactive prompt mode")
     return parser.parse_args()
-
-
-def resolve_device(requested):
-    if requested and requested.startswith("cuda"):
-        if torch.cuda.is_available():
-            return "cuda"
-        print("  WARNING: CUDA requested but unavailable - falling back to CPU.")
-        return "cpu"
-    if requested == "cpu":
-        return "cpu"
-    return "cuda" if torch.cuda.is_available() else "cpu"
 
 
 def section(title):
@@ -111,8 +216,9 @@ def step1_ingest_model(device):
     )
     print(f"  Ingestion complete in {time.time() - t0:.1f}s")
     print(f"  Framework:   {metadata.framework}")
-    if metadata.total_parameters:
-        print(f"  Parameters:  {metadata.total_parameters:,} (~{metadata.total_parameters / 1e6:.1f}M)")
+    params = getattr(metadata, "total_parameters", None)
+    if params:
+        print(f"  Parameters:  {params:,} (~{params / 1e6:.1f}M)")
     print(f"  Device:      {adapter.device}")
     return adapter, metadata
 
@@ -232,7 +338,26 @@ def step3_and_4_attack_and_evaluate(adapter, attack_name, epsilon, samples, batc
         }, f, indent=2)
     print(f"\n  Results saved -> {out_file}")
 
-    return all_adv_results[-1], clean_m, adv_m, y_true, y_clean_pred, y_adv_pred, total_samples
+    if all_adv_results:
+        adv_tensors = [r.adversarial_examples for r in all_adv_results if isinstance(r.adversarial_examples, torch.Tensor)]
+        combined_adv = torch.cat(adv_tensors, dim=0) if adv_tensors else all_adv_results[-1].adversarial_examples
+
+        orig_tensors = [r.original_inputs for r in all_adv_results if isinstance(r.original_inputs, torch.Tensor)]
+        combined_orig = torch.cat(orig_tensors, dim=0) if orig_tensors else None
+
+        label_tensors = [r.labels for r in all_adv_results if isinstance(r.labels, torch.Tensor)]
+        combined_lbl = torch.cat(label_tensors, dim=0) if label_tensors else None
+
+        final_attack_result = AttackResult(
+            adversarial_examples=combined_adv,
+            metadata=all_adv_results[-1].metadata,
+            original_inputs=combined_orig,
+            labels=combined_lbl,
+        )
+    else:
+        final_attack_result = None
+
+    return final_attack_result, clean_m, adv_m, y_true, y_clean_pred, y_adv_pred, total_samples
 
 
 # -- STEP 5: Vulnerability Analysis --------------------------------------------
@@ -325,24 +450,46 @@ def step6_final_summary(baseline, assessment, scoring, attack_name, epsilon, sam
 # -- MAIN ----------------------------------------------------------------------
 def main():
     banner()
-    args       = parse_args()
-    device     = resolve_device(args.device)
+    args = parse_args()
+
+    # Determine whether interactive mode should be triggered
+    is_tty = hasattr(sys.stdin, "isatty") and sys.stdin.isatty()
+    explicit_cli = any(
+        arg.startswith(("--samples", "--attack", "--epsilon", "--device"))
+        for arg in sys.argv[1:]
+    )
+    should_prompt = args.interactive or (not args.non_interactive and not explicit_cli and is_tty)
+
+    if should_prompt:
+        device, attack, samples, epsilon = prompt_interactive_config(
+            default_samples=args.samples,
+            default_attack=args.attack,
+            default_epsilon=args.epsilon,
+            default_device=args.device,
+        )
+    else:
+        device  = resolve_device(args.device)
+        attack  = args.attack
+        samples = args.samples
+        epsilon = args.epsilon
+
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    print(f"\n  Device: {device}  |  Samples: {args.samples}  |  Attack: {args.attack.upper()}  |  Epsilon: {args.epsilon:.5f}")
+    print(f"\n  Active Execution Settings:")
+    print(f"  Device: {device}  |  Samples: {samples}  |  Attack: {attack.upper()}  |  Epsilon: {epsilon:.5f}\n")
 
     adapter, metadata = step1_ingest_model(device)
 
     baseline_result = step2_baseline_evaluation(
-        adapter=adapter, samples=args.samples,
+        adapter=adapter, samples=samples,
         batch_size=args.batch_size, output_dir=output_dir,
     )
 
     attack_result, clean_m, adv_m, y_true, y_clean_pred, y_adv_pred, total_samples = \
         step3_and_4_attack_and_evaluate(
-            adapter=adapter, attack_name=args.attack, epsilon=args.epsilon,
-            samples=args.samples, batch_size=args.batch_size,
+            adapter=adapter, attack_name=attack, epsilon=epsilon,
+            samples=samples, batch_size=args.batch_size,
             device=device, output_dir=output_dir,
         )
 
@@ -350,14 +497,14 @@ def main():
         baseline_result=baseline_result, attack_result=attack_result,
         clean_m=clean_m, adv_m=adv_m,
         y_true=y_true, y_clean_pred=y_clean_pred, y_adv_pred=y_adv_pred,
-        num_samples=total_samples, attack_name=args.attack, output_dir=output_dir,
+        num_samples=total_samples, attack_name=attack, output_dir=output_dir,
     )
 
     step6_final_summary(
         baseline=baseline_result, assessment=assessment, scoring=scoring,
-        attack_name=args.attack, epsilon=args.epsilon, samples=total_samples,
+        attack_name=attack, epsilon=epsilon, samples=total_samples,
     )
 
 
 if __name__ == "__main__":
-    main()
+    main()

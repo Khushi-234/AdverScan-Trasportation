@@ -67,14 +67,28 @@ def ingest_model(
             if len(output_shape) > 1:
                 num_classes = output_shape[-1]
 
+    total_parameters = None
+    trainable_parameters = None
+    model_architecture = raw_model.__class__.__name__ if hasattr(raw_model, "__class__") else None
+
+    if hasattr(raw_model, "parameters"):
+        try:
+            total_parameters = sum(p.numel() for p in raw_model.parameters())
+            trainable_parameters = sum(p.numel() for p in raw_model.parameters() if p.requires_grad)
+        except Exception:
+            pass
+
     metadata = ModelMetadata(
         framework="pytorch",
-        model_name=model_name or (raw_model.__class__.__name__ if hasattr(raw_model, "__class__") else "PyTorchModel"),
+        model_name=model_name or (model_architecture or "PyTorchModel"),
         input_shape=input_shape,
         output_shape=output_shape,
         num_classes=num_classes,
         task_type=task_type,
         device=str(target_device),
+        total_parameters=total_parameters,
+        trainable_parameters=trainable_parameters,
+        model_architecture=model_architecture,
     )
 
     return adapter, metadata
