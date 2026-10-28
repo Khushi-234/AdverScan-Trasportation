@@ -91,39 +91,87 @@ class TextModalityHandler(BaseModalityHandler):
     ) -> Dict[str, Any]:
         """
         Map raw attribution weights to words/tokens and generate token-level rankings.
+        Preserves full-precision values, detects non-finite and near-zero attributions,
+        validates token-to-attribution alignment, and avoids misleading top-feature rankings.
         """
         if attribution is None:
-            return {"attribution": None, "top_features": [], "summary": {}}
+            return {
+                "attribution": None,
+                "top_features": [],
+                "summary": {},
+                "attribution_validation": {
+                    "status": "unavailable",
+                    "is_finite": False,
+                    "is_near_zero": False,
+                    "token_alignment_status": "unavailable",
+                    "saliency_detected": False,
+                },
+            }
 
-        arr = to_numpy(attribution, dtype=np.float32)
+        arr = to_numpy(attribution, dtype=np.float64)
         arr = arr.ravel()
 
         tokens = self._tokenize(inputs)
         n_tokens = len(tokens)
+        raw_len = len(arr)
 
-        # Align length of attribution with tokens
-        if len(arr) != n_tokens:
-            if len(arr) > n_tokens:
-                arr = arr[:n_tokens]
-            else:
-                arr = np.pad(arr, (0, n_tokens - len(arr)), mode="constant")
+        is_empty = bool(arr.size == 0)
+        is_finite = bool(np.all(np.isfinite(arr)))
+        if not is_finite:
+            arr = np.nan_to_num(arr, nan=0.0, posinf=0.0, neginf=0.0)
 
-        top_features = self.get_top_features(arr, tokens, top_k=kwargs.get("top_k", 5))
+        is_near_zero = bool(is_empty or np.all(np.abs(arr) < 1e-12) or np.max(np.abs(arr)) < 1e-12)
+
+        # Validate token alignment status
+        if raw_len == n_tokens:
+            token_alignment_status = "exact"
+        elif raw_len > n_tokens:
+            token_alignment_status = "truncated"
+            arr = arr[:n_tokens]
+        else:
+            token_alignment_status = "padded"
+            arr = np.pad(arr, (0, n_tokens - raw_len), mode="constant")
+
+        val_status = "valid"
+        if is_empty:
+            val_status = "empty"
+        elif not is_finite:
+            val_status = "non_finite"
+        elif is_near_zero:
+            val_status = "near_zero"
+
+        # Avoid misleading top feature rankings when attributions are near-zero or non-finite
+        if is_near_zero or not is_finite or is_empty:
+            top_features: List[Dict[str, Any]] = []
+        else:
+            top_features = self.get_top_features(arr, tokens, top_k=kwargs.get("top_k", 5))
 
         token_importance = [
             {"token": tok, "importance": float(score), "index": i}
             for i, (tok, score) in enumerate(zip(tokens, arr))
         ]
 
+        validation_info = {
+            "status": val_status,
+            "is_finite": is_finite,
+            "is_near_zero": is_near_zero,
+            "is_empty": is_empty,
+            "token_alignment_status": token_alignment_status,
+            "raw_attribution_norm": float(np.linalg.norm(arr)) if is_finite else 0.0,
+            "saliency_detected": bool(not is_near_zero and is_finite and not is_empty),
+        }
+
         return {
             "attribution": arr.tolist(),
             "tokens": tokens,
             "token_importance": token_importance,
             "top_features": top_features,
+            "attribution_validation": validation_info,
             "summary": {
                 "total_tokens": n_tokens,
                 "most_influential_token": top_features[0]["feature"] if top_features else None,
                 "mean_token_importance": float(np.mean(np.abs(arr))) if len(arr) > 0 else 0.0,
+                "saliency_detected": validation_info["saliency_detected"],
             },
         }
 
@@ -135,8 +183,14 @@ class TextModalityHandler(BaseModalityHandler):
     ) -> List[Dict[str, Any]]:
         """
         Rank tokens by absolute attribution score.
+        Avoids misleading rankings when attributions are near-zero or non-finite.
         """
-        arr = to_numpy(attribution, dtype=np.float32).ravel()
+        arr = to_numpy(attribution, dtype=np.float64).ravel()
+        if not np.all(np.isfinite(arr)):
+            return []
+        if arr.size == 0 or np.all(np.abs(arr) < 1e-12) or np.max(np.abs(arr)) < 1e-12:
+            return []
+
         tokens = self._tokenize(inputs) if not isinstance(inputs, list) or (inputs and not isinstance(inputs[0], str)) else inputs
 
         min_len = min(len(arr), len(tokens))
@@ -147,6 +201,9 @@ class TextModalityHandler(BaseModalityHandler):
         top_features = []
 
         for rank, idx in enumerate(sorted_indices):
+            # Do not include features with exactly zero attribution if others exist
+            if abs(float(arr[idx])) < 1e-12:
+                continue
             top_features.append({
                 "feature": tokens[idx],
                 "importance": float(arr[idx]),

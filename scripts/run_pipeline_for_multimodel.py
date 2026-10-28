@@ -796,6 +796,12 @@ def build_dataset_and_sample_input(
     split_str = f"test[:{samples}]" if samples > 0 else "test"
     domain_clean = domain.lower().replace("_", "-")
 
+    # Guard: Detect text dataset inadvertently routed to image domain
+    known_text_datasets = {"sst2", "stanfordnlp/sst2", "glue/sst2", "tweet_eval", "cardiffnlp/tweet_eval", "ag_news", "imdb"}
+    if dataset_name.lower().strip() in known_text_datasets and domain_clean not in ("text", "nlp"):
+        print(f"  [INFO] Auto-adjusting execution domain from '{domain}' to 'text' for NLP dataset '{dataset_name}'.")
+        domain_clean = "text"
+
     if domain_clean == "tabular":
         # Resolve CSV dataset file
         resolved_csv = resolve_dataset_file(dataset_name, [".csv", ".tsv"], model_identifier=model_id)
@@ -982,7 +988,16 @@ def main():
             "output_dir": args.output_dir,
         }
     else:
-        domain = (args.domain or "image").lower().replace("_", "-")
+        known_text = {"sst2", "stanfordnlp/sst2", "glue/sst2", "tweet_eval", "cardiffnlp/tweet_eval", "ag_news", "imdb"}
+        raw_model_input = (args.model or "").strip()
+        raw_dataset_input = (args.dataset or "").strip()
+
+        inferred_domain = args.domain
+        if not inferred_domain:
+            if raw_dataset_input.lower() in known_text or raw_model_input.lower() in known_text:
+                inferred_domain = "text"
+
+        domain = (inferred_domain or "image").lower().replace("_", "-")
         default_models = {
             "image": "bazyl/gtsrb-model",
             "text": "distilbert/distilbert-base-uncased-finetuned-sst-2-english",
@@ -993,6 +1008,10 @@ def main():
         preset = None
         if model_input in MODEL_PRESETS:
             preset = {"preset_key": model_input, **MODEL_PRESETS[model_input]}
+        elif model_input.lower() in DATASET_TO_RECOMMENDED_MODEL:
+            rec_model = DATASET_TO_RECOMMENDED_MODEL[model_input.lower()]
+            if rec_model in MODEL_PRESETS:
+                preset = {"preset_key": rec_model, **MODEL_PRESETS[rec_model]}
         else:
             for k, v in MODEL_PRESETS.items():
                 if model_input in (v.get("model_id"), v.get("name"), k):
@@ -1000,12 +1019,15 @@ def main():
                     break
 
         if preset and not args.domain:
-            domain = str(preset.get("data_domain", "image")).lower().replace("_", "-")
+            domain = str(preset.get("data_domain", domain)).lower().replace("_", "-")
         model_id = preset.get("model_id", model_input) if preset else model_input
         model_name = preset.get("name", Path(model_id).stem) if preset else Path(model_id).stem
 
         # Default dataset from preset or resolved local file
-        dataset = args.dataset or (preset.get("dataset_name") if preset else None) or "bazyl/GTSRB"
+        default_ds = "stanfordnlp/sst2" if domain == "text" else "bazyl/GTSRB"
+        dataset = args.dataset or (preset.get("dataset_name") if preset else None) or default_ds
+        if dataset.lower() in ("sst2", "glue/sst2"):
+            dataset = "stanfordnlp/sst2"
         if domain == "tabular" and not args.dataset:
             resolved_csv = resolve_dataset_file(dataset, [".csv", ".tsv"], model_identifier=model_id)
             if resolved_csv:

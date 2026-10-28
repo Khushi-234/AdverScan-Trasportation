@@ -59,6 +59,7 @@ def compare_attributions(
     clean_top_features: Optional[List[Dict[str, Any]]] = None,
     adv_top_features: Optional[List[Dict[str, Any]]] = None,
     top_k: int = 5,
+    target_class: Optional[Any] = None,
 ) -> Dict[str, Any]:
     """
     Compare clean vs adversarial feature attribution maps using deterministic and scale-invariant metrics.
@@ -71,7 +72,8 @@ def compare_attributions(
     - attribution_cosine_similarity: Cosine similarity between flattened attribution vectors:
         (A_clean . A_adv) / (norm(A_clean) * norm(A_adv))
     - attribution_spearman_correlation: Spearman rank correlation of feature importance ranks.
-    - attribution_mean_difference: Mean signed difference: mean(A_clean - A_adv)
+    - attribution_mean_difference: Mean difference: mean(A_clean - A_adv)
+    - signed_attribution_mean_shift: Mean signed shift: mean(A_adv - A_clean)
     - top_feature_overlap: Jaccard similarity index of top features between clean and adversarial.
 
     Returns:
@@ -86,7 +88,11 @@ def compare_attributions(
             "attribution_cosine_similarity": None,
             "attribution_spearman_correlation": None,
             "attribution_mean_difference": None,
+            "signed_attribution_mean_shift": None,
+            "clean_importance_norm": None,
+            "adversarial_importance_norm": None,
             "top_feature_overlap": None,
+            "attribution_validity": {"status": "unavailable"},
         }
 
     try:
@@ -102,32 +108,95 @@ def compare_attributions(
                 "attribution_cosine_similarity": None,
                 "attribution_spearman_correlation": None,
                 "attribution_mean_difference": None,
+                "signed_attribution_mean_shift": None,
+                "clean_importance_norm": None,
+                "adversarial_importance_norm": None,
                 "top_feature_overlap": None,
+                "attribution_validity": {"status": "unavailable"},
             }
 
-        if clean_arr.size == 0 or adv_arr.size == 0 or clean_arr.shape != adv_arr.shape:
+        # Check for empty attributions
+        if clean_arr.size == 0 or adv_arr.size == 0:
             return {
-                "attribution_comparison_status": "shape_mismatch_or_empty",
+                "attribution_comparison_status": "empty_attribution",
                 "attribution_l1": None,
                 "attribution_l2": None,
                 "normalized_attribution_l1": None,
                 "attribution_cosine_similarity": None,
                 "attribution_spearman_correlation": None,
                 "attribution_mean_difference": None,
+                "signed_attribution_mean_shift": None,
+                "clean_importance_norm": 0.0,
+                "adversarial_importance_norm": 0.0,
                 "top_feature_overlap": None,
+                "attribution_validity": {"status": "empty"},
             }
+
+        # Validate finite values
+        clean_finite = bool(np.all(np.isfinite(clean_arr)))
+        adv_finite = bool(np.all(np.isfinite(adv_arr)))
+        if not clean_finite or not adv_finite:
+            return {
+                "attribution_comparison_status": "non_finite_attributions",
+                "attribution_l1": None,
+                "attribution_l2": None,
+                "normalized_attribution_l1": None,
+                "attribution_cosine_similarity": None,
+                "attribution_spearman_correlation": None,
+                "attribution_mean_difference": None,
+                "signed_attribution_mean_shift": None,
+                "clean_importance_norm": None,
+                "adversarial_importance_norm": None,
+                "top_feature_overlap": None,
+                "attribution_validity": {
+                    "status": "non_finite",
+                    "clean_finite": clean_finite,
+                    "adversarial_finite": adv_finite,
+                },
+            }
+
+        # Safe alignment for 1D shape mismatches (e.g. differing text token lengths)
+        comparison_status = "success"
+        if clean_arr.shape != adv_arr.shape:
+            if clean_arr.ndim == 1 and adv_arr.ndim == 1:
+                max_len = max(len(clean_arr), len(adv_arr))
+                clean_arr = np.pad(clean_arr, (0, max_len - len(clean_arr)), mode="constant")
+                adv_arr = np.pad(adv_arr, (0, max_len - len(adv_arr)), mode="constant")
+                comparison_status = "aligned_with_padding"
+            else:
+                return {
+                    "attribution_comparison_status": "shape_mismatch",
+                    "attribution_l1": None,
+                    "attribution_l2": None,
+                    "normalized_attribution_l1": None,
+                    "attribution_cosine_similarity": None,
+                    "attribution_spearman_correlation": None,
+                    "attribution_mean_difference": None,
+                    "signed_attribution_mean_shift": None,
+                    "clean_importance_norm": float(np.linalg.norm(clean_arr.ravel())),
+                    "adversarial_importance_norm": float(np.linalg.norm(adv_arr.ravel())),
+                    "top_feature_overlap": None,
+                    "attribution_validity": {"status": "shape_mismatch"},
+                }
+
+        clean_flat = clean_arr.flatten()
+        adv_flat = adv_arr.flatten()
+
+        clean_norm = float(np.linalg.norm(clean_flat))
+        adv_norm = float(np.linalg.norm(adv_flat))
+
+        clean_is_near_zero = bool(clean_norm < 1e-12)
+        adv_is_near_zero = bool(adv_norm < 1e-12)
 
         diff = clean_arr - adv_arr
         l1_diff = float(np.mean(np.abs(diff)))
         l2_diff = float(np.linalg.norm(diff))
         mean_diff = float(np.mean(diff))
-
-        clean_flat = clean_arr.flatten()
-        adv_flat = adv_arr.flatten()
+        signed_shift = float(np.mean(adv_flat - clean_flat))
 
         # Scale-invariant L1 normalization
-        clean_sum = np.sum(np.abs(clean_flat))
-        adv_sum = np.sum(np.abs(adv_flat))
+        clean_sum = float(np.sum(np.abs(clean_flat)))
+        adv_sum = float(np.sum(np.abs(adv_flat)))
 
         if clean_sum > 1e-12 and adv_sum > 1e-12:
             clean_normed = clean_flat / clean_sum
@@ -136,16 +205,17 @@ def compare_attributions(
         else:
             norm_l1 = 0.0
 
-        norm_clean = np.linalg.norm(clean_flat)
-        norm_adv = np.linalg.norm(adv_flat)
-
-        if norm_clean > 1e-12 and norm_adv > 1e-12:
-            cosine_sim = float(np.dot(clean_flat, adv_flat) / (norm_clean * norm_adv))
+        if clean_norm > 1e-12 and adv_norm > 1e-12:
+            cosine_sim = float(np.dot(clean_flat, adv_flat) / (clean_norm * adv_norm))
         else:
-            cosine_sim = 1.0 if (norm_clean <= 1e-12 and norm_adv <= 1e-12) else 0.0
+            cosine_sim = 1.0 if (clean_norm <= 1e-12 and adv_norm <= 1e-12) else 0.0
 
         # Spearman rank correlation
-        if _SCIPY_AVAILABLE and spearmanr is not None:
+        if clean_is_near_zero and adv_is_near_zero:
+            spearman_corr = 1.0
+        elif clean_is_near_zero or adv_is_near_zero:
+            spearman_corr = 0.0
+        elif _SCIPY_AVAILABLE and spearmanr is not None:
             sp_res = spearmanr(clean_flat, adv_flat)
             spearman_corr = float(sp_res.statistic) if not np.isnan(sp_res.statistic) else 0.0
         else:
@@ -157,30 +227,54 @@ def compare_attributions(
             else:
                 spearman_corr = 0.0
 
-        # Compute top feature overlap directly from full vectors or top_features
-        k = min(top_k, len(clean_flat))
-        if k > 0:
-            top_c = set(np.argsort(np.abs(clean_flat))[::-1][:k])
-            top_a = set(np.argsort(np.abs(adv_flat))[::-1][:k])
-            union = top_c | top_a
-            top_overlap = float(len(top_c & top_a) / len(union)) if union else 1.0
-        elif clean_top_features and adv_top_features:
-            clean_feats = {f.get("feature", str(f)) for f in clean_top_features}
-            adv_feats = {f.get("feature", str(f)) for f in adv_top_features}
-            union = clean_feats | adv_feats
-            top_overlap = float(len(clean_feats & adv_feats) / len(union)) if union else 1.0
-        else:
+        # Top feature overlap directly from vectors or top_features
+        if clean_is_near_zero and adv_is_near_zero:
             top_overlap = None
+        else:
+            k = min(top_k, len(clean_flat))
+            if k > 0:
+                top_c = set(np.argsort(np.abs(clean_flat))[::-1][:k])
+                top_a = set(np.argsort(np.abs(adv_flat))[::-1][:k])
+                union = top_c | top_a
+                top_overlap = float(len(top_c & top_a) / len(union)) if union else 1.0
+            elif clean_top_features and adv_top_features:
+                clean_feats = {f.get("feature", str(f)) for f in clean_top_features}
+                adv_feats = {f.get("feature", str(f)) for f in adv_top_features}
+                union = clean_feats | adv_feats
+                top_overlap = float(len(clean_feats & adv_feats) / len(union)) if union else 1.0
+            else:
+                top_overlap = None
+
+        shifts_vector = adv_flat - clean_flat
+        signed_shifts_summary = {
+            "mean": signed_shift,
+            "max_positive_shift": float(np.max(shifts_vector)) if shifts_vector.size > 0 else 0.0,
+            "max_negative_shift": float(np.min(shifts_vector)) if shifts_vector.size > 0 else 0.0,
+        }
+
+        val_status = "valid"
+        if clean_is_near_zero and adv_is_near_zero:
+            val_status = "near_zero"
 
         return {
-            "attribution_comparison_status": "success",
+            "attribution_comparison_status": comparison_status,
             "attribution_l1": l1_diff,
             "attribution_l2": l2_diff,
             "normalized_attribution_l1": norm_l1,
             "attribution_cosine_similarity": cosine_sim,
             "attribution_spearman_correlation": spearman_corr,
             "attribution_mean_difference": mean_diff,
+            "signed_attribution_mean_shift": signed_shift,
+            "signed_attribution_shifts_summary": signed_shifts_summary,
+            "clean_importance_norm": clean_norm,
+            "adversarial_importance_norm": adv_norm,
             "top_feature_overlap": top_overlap,
+            "target_class_compared": target_class,
+            "attribution_validity": {
+                "status": val_status,
+                "clean_is_near_zero": clean_is_near_zero,
+                "adversarial_is_near_zero": adv_is_near_zero,
+            },
         }
     except Exception as e:
         return {
@@ -191,7 +285,11 @@ def compare_attributions(
             "attribution_cosine_similarity": None,
             "attribution_spearman_correlation": None,
             "attribution_mean_difference": None,
+            "signed_attribution_mean_shift": None,
+            "clean_importance_norm": None,
+            "adversarial_importance_norm": None,
             "top_feature_overlap": None,
+            "attribution_validity": {"status": f"error: {str(e)}"},
         }
 
 
@@ -230,7 +328,6 @@ def compare_explanations(
     prediction_changed = bool(clean_prediction != adversarial_prediction)
     confidence_difference = float(clean_confidence - adversarial_confidence)
 
-    # Compute clean_class_confidence_drop: p(clean_class|clean) - p(clean_class|adv)
     clean_class_confidence_drop = None
     logit_margin = None
 
@@ -244,7 +341,6 @@ def compare_explanations(
                 p_clean_at_adv = float(ap[c_idx])
                 clean_class_confidence_drop = float(p_clean_at_clean - p_clean_at_adv)
 
-            # Logit / prob margin on clean input
             if len(cp) >= 2:
                 sorted_cp = np.sort(cp)[::-1]
                 logit_margin = float(sorted_cp[0] - sorted_cp[1])
@@ -259,7 +355,27 @@ def compare_explanations(
         adv_attribution,
         clean_top_features=clean_top_features,
         adv_top_features=adv_top_features,
+        target_class=target_class,
     )
+
+    attack_obj = "targeted" if target_class is not None else "untargeted"
+    attack_success = bool(adversarial_prediction == target_class) if target_class is not None else prediction_changed
+
+    prediction_analysis = {
+        "clean_prediction": _to_clean_value(clean_prediction),
+        "adversarial_prediction": _to_clean_value(adversarial_prediction),
+        "clean_confidence": float(clean_confidence),
+        "adversarial_confidence": float(adversarial_confidence),
+        "prediction_changed": prediction_changed,
+        "confidence_difference": confidence_difference,
+        "clean_class_confidence_drop": clean_class_confidence_drop,
+        "logit_margin": logit_margin,
+        "clean_probabilities": _to_clean_value(clean_probs),
+        "adversarial_probabilities": _to_clean_value(adv_probs),
+        "target_class": _to_clean_value(target_class),
+        "attack_objective": attack_obj,
+        "attack_success": attack_success,
+    }
 
     result = {
         "clean_prediction": _to_clean_value(clean_prediction),
@@ -270,6 +386,7 @@ def compare_explanations(
         "confidence_difference": confidence_difference,
         "clean_class_confidence_drop": clean_class_confidence_drop,
         "logit_margin": logit_margin,
+        "prediction_analysis": prediction_analysis,
     }
 
     if target_class is not None:

@@ -27,6 +27,8 @@ class HFVisionDatasetLoader(BaseDatasetLoader):
     DATASET_ALIASES = {
         "puneet6060/intel-image-classification": "miladfa7/Intel-Image-Classification",
         "intel-image-classification": "miladfa7/Intel-Image-Classification",
+        "sst2": "stanfordnlp/sst2",
+        "glue/sst2": "stanfordnlp/sst2",
     }
     LABEL_CANDIDATES = ["label", "labels", "ClassId", "target", "class_id", "category", "fine_label"]
     IMAGE_CANDIDATES = ["image", "img", "Path", "bytes", "file"]

@@ -227,6 +227,7 @@ DATASET_TO_RECOMMENDED_MODEL: Dict[str, str] = {
     "imagenet": "google/vit-base-patch16-224",
     "imagenet-1k": "google/vit-base-patch16-224",
     "sst2": "distilbert/distilbert-base-uncased-finetuned-sst-2-english",
+    "stanfordnlp/sst2": "distilbert/distilbert-base-uncased-finetuned-sst-2-english",
     "glue/sst2": "distilbert/distilbert-base-uncased-finetuned-sst-2-english",
     "imdb": "textattack/bert-base-uncased-imdb",
     "ag_news": "textattack/bert-base-uncased-ag-news",

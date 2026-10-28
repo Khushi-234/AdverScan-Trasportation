@@ -150,26 +150,41 @@ def analyze_failure(
     adv_pred_val = _to_clean_value(adversarial_prediction)
     true_label_val = _to_clean_value(true_label)
 
-    if true_label is None:
-        attack_caused_failure = None
-        if prediction_changed:
-            failure_mode = "prediction_changed_unknown_correctness"
-        else:
-            failure_mode = "prediction_unchanged_unknown_correctness"
-    else:
-        attack_caused_failure = clean_correct is True and adversarial_correct is False
+    # Determine attack objective and failure causation
+    attack_objective = "targeted" if target_class is not None else "untargeted"
+    targeted_success = bool(_is_equal(adversarial_prediction, target_class)) if target_class is not None else None
 
-        if clean_correct is True and adversarial_correct is False:
-            failure_mode = "clean_correct_to_adversarial_incorrect"
-        elif clean_correct is False and adversarial_correct is False:
-            failure_mode = "clean_incorrect_to_adversarial_incorrect"
-        elif clean_correct is True and adversarial_correct is True:
+    if true_label is None:
+        if attack_objective == "targeted":
+            attack_caused_failure = targeted_success
+            failure_mode = "targeted_attack_success" if targeted_success else "targeted_attack_failed"
+        else:
+            attack_caused_failure = None
             if prediction_changed:
-                failure_mode = "prediction_changed_remains_correct"
+                failure_mode = "prediction_changed_unknown_correctness"
             else:
-                failure_mode = "clean_correct_to_adversarial_correct"
-        else:  # clean_correct is False, adversarial_correct is True
-            failure_mode = "clean_incorrect_to_adversarial_correct"
+                failure_mode = "prediction_unchanged_unknown_correctness"
+    else:
+        if attack_objective == "targeted":
+            attack_caused_failure = bool(clean_correct is True and targeted_success)
+            if clean_correct is True:
+                failure_mode = "clean_correct_to_targeted_success" if targeted_success else "clean_correct_targeted_failed"
+            else:
+                failure_mode = "clean_incorrect_targeted_success" if targeted_success else "clean_incorrect_targeted_failed"
+        else:
+            attack_caused_failure = clean_correct is True and adversarial_correct is False
+
+            if clean_correct is True and adversarial_correct is False:
+                failure_mode = "clean_correct_to_adversarial_incorrect"
+            elif clean_correct is False and adversarial_correct is False:
+                failure_mode = "clean_incorrect_to_adversarial_incorrect"
+            elif clean_correct is True and adversarial_correct is True:
+                if prediction_changed:
+                    failure_mode = "prediction_changed_remains_correct"
+                else:
+                    failure_mode = "clean_correct_to_adversarial_correct"
+            else:  # clean_correct is False, adversarial_correct is True
+                failure_mode = "clean_incorrect_to_adversarial_correct"
 
     # Analyze contributing features from FULL attribution vectors when available
     contributing_features: List[Dict[str, Any]] = []
@@ -178,7 +193,11 @@ def analyze_failure(
     clean_arr = to_numpy(clean_attribution, dtype=np.float64) if clean_attribution is not None else None
     adv_arr = to_numpy(adv_attribution, dtype=np.float64) if adv_attribution is not None else None
 
-    if clean_arr is not None and adv_arr is not None and clean_arr.shape == adv_arr.shape:
+    # Check finite and near-zero conditions
+    clean_valid = clean_arr is not None and np.all(np.isfinite(clean_arr)) and not np.all(np.abs(clean_arr) < 1e-12)
+    adv_valid = adv_arr is not None and np.all(np.isfinite(adv_arr)) and not np.all(np.abs(adv_arr) < 1e-12)
+
+    if clean_arr is not None and adv_arr is not None and clean_arr.shape == adv_arr.shape and (clean_valid or adv_valid):
         # 1. Time-series: evaluate (timestep, sensor) cells and per-sensor importance
         if modality.lower() in ("timeseries", "time_series") and adv_arr.ndim in (2, 3):
             ts_adv = adv_arr[0] if adv_arr.ndim == 3 else adv_arr
@@ -212,6 +231,8 @@ def analyze_failure(
             flat_clean = ts_clean.ravel()
             ranked_cells = np.argsort(np.abs(flat_adv))[::-1][:top_k]
             for rank, cell_idx in enumerate(ranked_cells):
+                if abs(float(flat_adv[cell_idx])) < 1e-12 and abs(float(flat_clean[cell_idx])) < 1e-12:
+                    continue
                 t = cell_idx // n_sensors
                 s = cell_idx % n_sensors
                 s_name = s_names[s] if s < len(s_names) else f"sensor_{s}"
@@ -249,6 +270,8 @@ def analyze_failure(
                     c_slice = slice(c * gw, min((c + 1) * gw, w))
                     a_imp = float(np.mean(img_adv[r_slice, c_slice]))
                     c_imp = float(np.mean(img_clean[r_slice, c_slice]))
+                    if abs(a_imp) < 1e-12 and abs(c_imp) < 1e-12:
+                        continue
                     patches.append({
                         "feature": f"patch_r{r}_c{c}",
                         "adversarial_importance": a_imp,
@@ -268,6 +291,8 @@ def analyze_failure(
 
             ranked_idx = np.argsort(np.abs(flat_adv))[::-1][:top_k]
             for rank, idx in enumerate(ranked_idx):
+                if abs(float(flat_adv[idx])) < 1e-12 and abs(float(flat_clean[idx])) < 1e-12:
+                    continue
                 name = f_names[idx] if idx < len(f_names) else f"f{idx}"
                 c_imp = float(flat_clean[idx])
                 a_imp = float(flat_adv[idx])
@@ -296,7 +321,6 @@ def analyze_failure(
     # Targeted attack analysis
     targeted_info = None
     if target_class is not None:
-        targeted_success = bool(adversarial_prediction == target_class)
         targeted_info = {
             "target_class": target_class,
             "targeted_success": targeted_success,
@@ -312,8 +336,14 @@ def analyze_failure(
         "clean_correct": clean_correct,
         "adversarial_correct": adversarial_correct,
         "attack_caused_failure": attack_caused_failure,
+        "attack_objective": attack_objective,
         "failure_mode": failure_mode,
         "contributing_features": contributing_features,
+        "causation_claimed": False,
+        "attribution_interpretation": (
+            "Attribution scores reflect local surrogate model feature saliency/correlation under perturbation; "
+            "they do not establish causal necessity or counterfactual sufficiency on their own."
+        ),
     }
     if sensor_importance:
         out["sensor_importance"] = sensor_importance

@@ -90,6 +90,18 @@ def get_dataset_loader(
     """
     domain_clean = data_domain.strip().lower().replace("-", "_")
 
+    # Guard: Auto-route known text datasets if inadvertently passed with data_domain="image"
+    known_text_datasets = {
+        "sst2", "stanfordnlp/sst2", "glue/sst2", "tweet_eval",
+        "cardiffnlp/tweet_eval", "ag_news", "imdb", "rotten_tomatoes"
+    }
+    clean_ds_key = dataset_name.strip().lower() if isinstance(dataset_name, str) else ""
+    if clean_ds_key in ("sst2", "glue/sst2"):
+        dataset_name = "stanfordnlp/sst2"
+
+    if clean_ds_key in known_text_datasets and domain_clean in ("image", "vision"):
+        domain_clean = "text"
+
     if domain_clean in ("image", "vision"):
         return HFVisionDatasetLoader(
             dataset_name=dataset_name,
