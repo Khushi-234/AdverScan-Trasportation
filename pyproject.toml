@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "adverscan"
 version = "0.1.0"
-description = "Adversarial Hardening and Security Testing Platform Across Generalized Domains"
+description = "Adversarial Hardening and Robustness Assessment Platform for Transportation Image AI"
 readme = "README.md"
 license = { text = "MIT" }
 classifiers = [

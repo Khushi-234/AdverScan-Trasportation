@@ -1,30 +1,9 @@
 """
-Adversarial attacks package for the AdverScan framework.
+Adversarial attacks package for the AdverScan framework (Image Domain).
 """
 
 from app.attack_engine.attacks.base_attack import BaseAttack
 from app.attack_engine.attacks.image import FGSM, PGD, DeepFool, CW, FAB
-from app.attack_engine.attacks.time_series import (
-    TimeSeriesPGD,
-    SmoothPGD,
-    WaveletAttack,
-    SoftDTWAttack,
-    JSMA,
-)
-from app.attack_engine.attacks.text import (
-    HotFlip,
-    EmbeddingPGD,
-    TextBuggerWB,
-    UniversalTrigger,
-    GradientSubstitution,
-)
-from app.attack_engine.attacks.tabular import (
-    CapPGD,
-    LowProFool,
-    TabularCW,
-    TabularJSMA,
-    VAEAttack,
-)
 
 __all__ = [
     "BaseAttack",
@@ -33,19 +12,4 @@ __all__ = [
     "DeepFool",
     "CW",
     "FAB",
-    "TimeSeriesPGD",
-    "SmoothPGD",
-    "WaveletAttack",
-    "SoftDTWAttack",
-    "JSMA",
-    "HotFlip",
-    "EmbeddingPGD",
-    "TextBuggerWB",
-    "UniversalTrigger",
-    "GradientSubstitution",
-    "CapPGD",
-    "LowProFool",
-    "TabularCW",
-    "TabularJSMA",
-    "VAEAttack",
 ]

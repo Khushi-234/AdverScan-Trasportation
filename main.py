@@ -37,7 +37,7 @@ from app.evaluation.metrics import MetricsCalculator
 from app.evaluation.results import EvaluationResult
 from app.attack_engine import AttackConfig, execute_attack, get_attack
 from app.attack_engine.models import AttackResult
-from app.vulnerability_analysis import VulnerabilityEngine
+from app.vulnerability_analysis import VulnerabilityEngine, VulnerabilityScorer
 from app.vulnerability_analysis.assessment_result import AssessmentResult
 from app.vulnerability_analysis.scoring_result import ScoringResult
 
@@ -46,8 +46,9 @@ load_dotenv()
 MODEL_ID      = "bazyl/gtsrb-model"
 DATASET_NAME  = "bazyl/GTSRB"
 NUM_CLASSES   = 43
-SEPARATOR     = "=" * 68
+SEPARATOR     = "=" * 70
 SUPPORTED_ATTACKS = ["fgsm", "pgd", "deepfool", "cw", "fab"]
+ATTACK_CHOICES = SUPPORTED_ATTACKS + ["all"]
 
 
 def banner():
@@ -115,23 +116,24 @@ def prompt_interactive_config(
         ("deepfool", "DeepFool", "DeepFool (Minimal perturbation boundary attack)"),
         ("cw", "CW", "Carlini & Wagner (Optimization-based L2/Linf attack)"),
         ("fab", "FAB", "Fast Adaptive Boundary (Adaptive step boundary attack)"),
+        ("all", "ALL", "Run all supported adversarial attacks in sequence"),
     ]
     for idx, (_, name, desc) in enumerate(attack_descriptions, 1):
         print(f"      [{idx}] {name:<10} - {desc}")
 
     while True:
-        atk_in = input(f"      Select attack [1-5 or name] (default: 1 [{default_attack.upper()}]): ").strip().lower()
+        atk_in = input(f"      Select attack [1-6 or name] (default: 1 [{default_attack.upper()}]): ").strip().lower()
         if not atk_in:
             selected_attack = default_attack
             break
-        atk_map = {"1": "fgsm", "2": "pgd", "3": "deepfool", "4": "cw", "5": "fab"}
+        atk_map = {"1": "fgsm", "2": "pgd", "3": "deepfool", "4": "cw", "5": "fab", "6": "all"}
         if atk_in in atk_map:
             selected_attack = atk_map[atk_in]
             break
-        elif atk_in in SUPPORTED_ATTACKS:
+        elif atk_in in ATTACK_CHOICES:
             selected_attack = atk_in
             break
-        print("      Invalid attack choice. Enter 1-5 or an attack name.")
+        print("      Invalid attack choice. Enter 1-6 or an attack name (or 'all').")
 
     # 3. Number of Samples
     print(f"\n[3/4] Evaluation Samples:")
@@ -180,7 +182,7 @@ def parse_args():
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     parser.add_argument("--samples",         type=int,   default=10,       help="Number of GTSRB test samples")
-    parser.add_argument("--attack",          type=str,   default="fgsm",   choices=SUPPORTED_ATTACKS, help="Adversarial attack")
+    parser.add_argument("--attack",          type=str,   default="fgsm",   choices=ATTACK_CHOICES, help="Adversarial attack (or 'all' to evaluate all attacks)")
     parser.add_argument("--epsilon",         type=float, default=8/255,    help="Perturbation budget epsilon")
     parser.add_argument("--batch-size",      type=int,   default=32,       help="Batch size")
     parser.add_argument("--device",          type=str,   default=None,     help="'cpu', 'cuda', or 'auto'")
@@ -211,9 +213,18 @@ def step1_ingest_model(device):
     adapter, metadata = ingest_model(
         model_path=raw_model,
         sample_input=sample_input,
-        model_name="GTSRB_ViT",
+        model_name="GTSRB ViT",
         device=device,
     )
+    metadata.model_architecture = raw_model.__class__.__name__
+    metadata.framework = "huggingface"
+    if not metadata.total_parameters and hasattr(raw_model, "parameters"):
+        try:
+            metadata.total_parameters = sum(p.numel() for p in raw_model.parameters())
+            metadata.trainable_parameters = sum(p.numel() for p in raw_model.parameters() if p.requires_grad)
+        except Exception:
+            pass
+
     print(f"  Ingestion complete in {time.time() - t0:.1f}s")
     print(f"  Framework:   {metadata.framework}")
     params = getattr(metadata, "total_parameters", None)
@@ -250,15 +261,16 @@ def step2_baseline_evaluation(adapter, samples, batch_size, output_dir):
 
 
 # -- STEP 3+4: Adversarial Attack + Evaluation ---------------------------------
-def step3_and_4_attack_and_evaluate(adapter, attack_name, epsilon, samples, batch_size, device, output_dir):
+def step3_and_4_attack_and_evaluate(adapter, attack_name, epsilon, samples, batch_size, device, output_dir, loader=None):
     section(f"STEP 3 - Adversarial Attack ({attack_name.upper()}, epsilon={epsilon:.5f})")
     split_str = f"test[:{samples}]" if samples > 0 else "test"
-    loader = HFVisionDatasetLoader(
-        dataset_name=DATASET_NAME,
-        processor_name=MODEL_ID,
-        split=split_str,
-        batch_size=batch_size,
-    )
+    if loader is None:
+        loader = HFVisionDatasetLoader(
+            dataset_name=DATASET_NAME,
+            processor_name=MODEL_ID,
+            split=split_str,
+            batch_size=batch_size,
+        )
     total_samples = len(loader)
     print(f"  Loaded {total_samples} samples. Running {attack_name.upper()} attack...\n")
 
@@ -308,7 +320,7 @@ def step3_and_4_attack_and_evaluate(adapter, attack_name, epsilon, samples, batc
     print()
     print(f"  Attack complete in {time.time() - t0:.1f}s")
 
-    section("STEP 4 - Adversarial Evaluation Metrics")
+    section(f"STEP 4 - Adversarial Evaluation Metrics ({attack_name.upper()})")
     y_true        = np.array(all_targets,  dtype=np.int64)
     y_clean_pred  = np.array(clean_preds,  dtype=np.int64)
     y_adv_pred    = np.array(adv_preds,    dtype=np.int64)
@@ -363,7 +375,7 @@ def step3_and_4_attack_and_evaluate(adapter, attack_name, epsilon, samples, batc
 # -- STEP 5: Vulnerability Analysis --------------------------------------------
 def step5_vulnerability_analysis(baseline_result, attack_result, clean_m, adv_m,
                                   y_true, y_clean_pred, y_adv_pred, num_samples, attack_name, output_dir):
-    section("STEP 5 - Vulnerability Analysis (M4)")
+    section(f"STEP 5 - Vulnerability Analysis ({attack_name.upper()})")
     adv_eval = EvaluationResult(
         dataset_name=DATASET_NAME, model_name="GTSRB_ViT",
         num_samples=num_samples, num_classes=NUM_CLASSES,
@@ -419,36 +431,241 @@ def step5_vulnerability_analysis(baseline_result, attack_result, clean_m, adv_m,
 
 
 # -- STEP 6: Final Summary -----------------------------------------------------
-def step6_final_summary(baseline, assessment, scoring, attack_name, epsilon, samples):
-    print(f"\n{SEPARATOR}")
-    print("  AdverScan - FINAL PIPELINE SUMMARY")
-    print(SEPARATOR)
-    print(f"  Model:            {MODEL_ID}")
-    print(f"  Dataset:          {DATASET_NAME}  ({samples} samples)")
-    print(f"  Attack:           {attack_name.upper()}")
-    print(f"  Epsilon (eps):    {epsilon:.5f}  (~{epsilon * 255:.1f}/255)")
-    print(SEPARATOR)
-    print(f"  {'Metric':<28} {'Clean':>12} {'Adversarial':>13}")
-    print(f"  {'-'*55}")
-    print(f"  {'Accuracy':<28} {assessment.clean_accuracy * 100:>11.2f}% {assessment.adversarial_accuracy * 100:>12.2f}%")
-    print(f"  {'Macro F1':<28} {assessment.clean_f1 * 100:>11.2f}% {assessment.adversarial_f1 * 100:>12.2f}%")
-    print(f"  {'Avg Confidence':<28} {assessment.clean_confidence * 100:>11.2f}% {assessment.adversarial_confidence * 100:>12.2f}%")
-    print(f"  {'-'*55}")
-    print(f"  {'Accuracy Drop':<28} {'':>12} {assessment.accuracy_drop * 100:>12.2f}%")
-    print(f"  {'Model Degradation':<28} {'':>12} {assessment.model_degradation * 100:>12.2f}%")
-    asr_str = f"{assessment.attack_success_rate * 100:.2f}%" if assessment.attack_success_rate is not None else "N/A"
-    print(f"  {'Attack Success Rate':<28} {'':>12} {asr_str:>12}")
-    print(f"  {'-'*55}")
-    risk_icon = {"LOW": "[LOW]", "MEDIUM": "[MED]", "HIGH": "[HIGH]", "CRITICAL": "[CRIT]"}.get(scoring.risk_level, "")
-    print(f"  {'Vulnerability Score':<28} {'':>12} {scoring.vulnerability_score:>9.2f}/100")
-    print(f"  {'Risk Level':<28} {'':>12} {risk_icon} {scoring.risk_level:>8}")
-    print(SEPARATOR)
-    print("  Pipeline complete. JSON results saved to ./results/")
-    print(SEPARATOR)
+def step6_final_summary(
+    baseline,
+    attack_eval_results,
+    attacks_to_run,
+    metadata,
+    device,
+    samples,
+    batch_size,
+    pipeline_errors,
+    total_pipeline_runtime,
+    output_dir,
+):
+    LINE_LEN = 70
+    SEP_EQUAL = "=" * LINE_LEN
+    SEP_DASH = "-" * LINE_LEN
+
+    # 1. Overall Status
+    if len(pipeline_errors) == 0 and len(attack_eval_results) == len(attacks_to_run):
+        overall_status = "SUCCESS"
+    elif len(attack_eval_results) > 0:
+        overall_status = "PARTIAL_SUCCESS"
+    else:
+        overall_status = "FAILED"
+
+    # Ingestion metadata details
+    total_params = getattr(metadata, "total_parameters", None)
+    trainable_params = getattr(metadata, "trainable_parameters", None)
+
+    total_params_str = f"{total_params:,} (~{total_params / 1e6:.2f}M)" if total_params else "N/A"
+    if trainable_params is not None and total_params:
+        trainable_pct = (trainable_params / total_params) * 100.0
+        trainable_str = f"{trainable_params:,} ({trainable_pct:.1f}%)"
+    elif trainable_params is not None:
+        trainable_str = f"{trainable_params:,}"
+    else:
+        trainable_str = "N/A"
+
+    if total_params:
+        size_mb = (total_params * 4) / (1024 * 1024)
+        size_str = f"~{size_mb:.1f} MB (FP32)"
+    else:
+        size_str = "N/A"
+
+    model_arch = getattr(metadata, "model_architecture", None) or "ViTForImageClassification"
+    input_shape_str = str(getattr(metadata, "input_shape", (1, 3, 224, 224)))
+    num_classes = getattr(metadata, "num_classes", None) or NUM_CLASSES
+    task_type = getattr(metadata, "task_type", None) or "classification"
+    framework = getattr(metadata, "framework", None) or "huggingface"
+    if framework == "pytorch":
+        framework = "huggingface"
+
+    model_id_display = f"GTSRB ViT ({MODEL_ID})"
+
+    print(f"\n{SEP_EQUAL}")
+    print("             ADVERSCAN SECURITY ASSESSMENT RESULTS SUMMARY          ")
+    print(SEP_EQUAL)
+    print(f"Overall Status:            {overall_status}")
+    print(f"Execution Mode:            FULL")
+    print(f"Total Pipeline Runtime:    {total_pipeline_runtime:.2f}s")
+    print(f"Target Modality / Domain:  IMAGE")
+    print(f"Evaluated Model:           {model_id_display}")
+    print(f"Evaluated Dataset:         {DATASET_NAME}")
+
+    # PIPELINE ERRORS & DIAGNOSTICS
+    if pipeline_errors:
+        print(f"\n{SEP_DASH}")
+        print("PIPELINE ERRORS & DIAGNOSTICS")
+        print(SEP_DASH)
+        for err in pipeline_errors:
+            print(f"  ❌ [{err['module']}]: {err['error']}")
+
+    # M1 — MODEL SPECIFICATIONS & PARAMETERS
+    print(f"\n{SEP_DASH}")
+    print("M1 — MODEL SPECIFICATIONS & PARAMETERS")
+    print(SEP_DASH)
+    print(f"  • Model Identifier:        {model_id_display}")
+    print(f"  • Architecture:            {model_arch}")
+    print(f"  • Total Parameters:        {total_params_str}")
+    print(f"  • Trainable Parameters:    {trainable_str}")
+    print(f"  • Estimated Model Size:    {size_str}")
+    print(f"  • Input Shape:             {input_shape_str}")
+    print(f"  • Total Classes:           {num_classes}")
+    print(f"  • Task Type:               {task_type}")
+    print(f"  • Ingestion Framework:     {framework}")
+    print(f"  • Execution Device:        {device}")
+
+    # DATASET & EVALUATION DETAILS
+    print(f"\n{SEP_DASH}")
+    print("DATASET & EVALUATION DETAILS")
+    print(SEP_DASH)
+    print(f"  • Dataset Identifier:      {DATASET_NAME}")
+    print(f"  • Target Domain:           IMAGE")
+    print(f"  • Evaluated Samples:       {samples}")
+    print(f"  • Evaluation Batch Size:   {batch_size}")
+
+    # M2 — CLEAN BASELINE EVALUATION METRICS
+    print(f"\n{SEP_DASH}")
+    print("M2 — CLEAN BASELINE EVALUATION METRICS")
+    print(SEP_DASH)
+    print(f"  • Clean Accuracy:           {baseline.accuracy * 100:.2f}%")
+    print(f"  • Clean Average Confidence: {baseline.average_confidence * 100:.2f}%")
+    print(f"  • Macro F1-Score:           {baseline.f1_macro * 100:.2f}%")
+
+    # M3 — ADVERSARIAL ATTACK ENGINE RESULTS
+    total_atk_time = sum(res["execution_time"] for res in attack_eval_results)
+    print(f"\n{SEP_DASH}")
+    print("M3 — ADVERSARIAL ATTACK ENGINE RESULTS")
+    print(SEP_DASH)
+    print(f"Total Attack Execution Time: {total_atk_time:.2f}s across {len(attack_eval_results)} attack(s)")
+    for res in attack_eval_results:
+        print(f"\n  ▶ Attack: [{res['attack_name'].upper()}]")
+        print(f"    • Attack Class:          {res['attack_class']}")
+        print(f"    • Execution Time:        {res['execution_time']:.2f}s")
+
+    # M5 — VULNERABILITY ANALYSIS & SECURITY RISK SCORING
+    print(f"\n{SEP_DASH}")
+    print("M5 — VULNERABILITY ANALYSIS & SECURITY RISK SCORING")
+    print(SEP_DASH)
+
+    if attack_eval_results:
+        # Determine driving threat (highest vulnerability score)
+        driving_result = max(attack_eval_results, key=lambda r: r["scoring"].vulnerability_score)
+        unified_vuln_score = driving_result["scoring"].vulnerability_score
+        unified_robust_score = max(0.0, min(100.0, 100.0 - unified_vuln_score))
+        unified_risk = getattr(driving_result["scoring"], "risk_level", None) or VulnerabilityScorer.determine_risk_level(unified_vuln_score)
+        primary_threat = driving_result["attack_name"].upper()
+
+        print("  ★ MODEL-LEVEL UNIFIED SECURITY ASSESSMENT:")
+        print(f"    • Model Vulnerability Score: {unified_vuln_score:.2f} / 100")
+        print(f"    • Model Robustness Score:    {unified_robust_score:.2f} / 100")
+        print(f"    • Unified Security Risk:     {unified_risk}")
+        print(f"    • Primary Driving Threat:    {primary_threat}")
+        print(f"    • Conclusive Evaluations:    {len(attack_eval_results)} / {len(attacks_to_run)}")
+        print(SEP_DASH)
+
+        for res in attack_eval_results:
+            assessment = res["assessment"]
+            scoring = res["scoring"]
+            pert = assessment.perturbation or {}
+
+            asr_val = assessment.attack_success_rate
+            asr_str = f"{asr_val * 100:.2f}%" if asr_val is not None else "N/A"
+
+            # Efficacy
+            linf_val = pert.get("linf_mean", 0.0)
+            if (asr_val and asr_val > 0) or assessment.accuracy_drop > 0 or linf_val > 0:
+                efficacy_str = "Effective (Perturbations Applied)"
+            else:
+                efficacy_str = "Ineffective (No Significant Impact)"
+
+            # Perturbation norms
+            linf_s = f"{pert.get('linf_mean', 0.0):.4f}"
+            l2_s = f"{pert.get('l2_mean', 0.0):.4f}"
+            l0_v = pert.get('l0_mean', 0.0)
+            l0_s = f"{l0_v * 100:.2f}%" if l0_v <= 1.0 else f"{l0_v:.2f}%"
+            pert_str = f"L_inf: {linf_s}, L_2: {l2_s}, L_0: {l0_s}"
+
+            # Score components
+            sub = scoring.sub_scores
+            sub_asr = f"{sub.get('asr_score', 0.0):.1f}" if sub.get('asr_score') is not None else "N/A"
+            sub_deg = f"{sub.get('degradation_score', 0.0):.1f}"
+            sub_stl = f"{sub.get('stealth_score', 0.0):.1f}"
+            score_comp_str = f"ASR={sub_asr}, Degradation={sub_deg}, Stealth={sub_stl}"
+
+            clean_acc_str = f"{assessment.clean_accuracy * 100:.2f}%"
+            adv_acc_str = f"{assessment.adversarial_accuracy * 100:.2f}%"
+            acc_drop_str = f"-{assessment.accuracy_drop * 100:.2f}%"
+
+            clean_conf_str = f"{assessment.clean_confidence * 100:.2f}%"
+            adv_conf_str = f"{assessment.adversarial_confidence * 100:.2f}%"
+            conf_drop_str = f"-{assessment.confidence_drop * 100:.2f}%"
+
+            clean_f1_str = f"{assessment.clean_f1 * 100:.2f}%"
+            adv_f1_str = f"{assessment.adversarial_f1 * 100:.2f}%"
+            f1_drop_str = f"-{assessment.f1_drop * 100:.2f}%"
+
+            print(f"\n  ▶ Attack: [{res['attack_name'].upper()}]")
+            print(f"    • Risk Severity Level:   {scoring.risk_level}")
+            print(f"    • Vulnerability Score:   {scoring.vulnerability_score:.2f} / 100")
+            print(f"    • Attack Success Rate:   {asr_str}")
+            print(f"    • Attack Efficacy:       {efficacy_str}")
+            print(f"    • Attack Execution Time: {res['execution_time']:.2f}s")
+            print(f"    • Accuracy Impact:       {clean_acc_str} → {adv_acc_str} (Drop: {acc_drop_str})")
+            print(f"    • Confidence Impact:     {clean_conf_str} → {adv_conf_str} (Drop: {conf_drop_str})")
+            print(f"    • Macro F1 Impact:       {clean_f1_str} → {adv_f1_str} (Drop: {f1_drop_str})")
+            print(f"    • Model Degradation:     {assessment.model_degradation * 100:.2f}%")
+            print(f"    • Perturbation Norms:    {pert_str}")
+            print(f"    • Score Components:      {score_comp_str}")
+
+    print(SEP_EQUAL)
+
+    # Save unified summary JSON
+    summary_path = output_dir / f"unified_assessment_{samples}samples.json"
+    summary_payload = {
+        "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "overall_status": overall_status,
+        "runtime_seconds": total_pipeline_runtime,
+        "model_id": MODEL_ID,
+        "dataset_name": DATASET_NAME,
+        "num_samples": samples,
+        "clean_baseline": {
+            "accuracy": baseline.accuracy,
+            "f1_macro": baseline.f1_macro,
+            "average_confidence": baseline.average_confidence,
+        },
+        "attacks": [
+            {
+                "attack_name": r["attack_name"],
+                "attack_class": r["attack_class"],
+                "execution_time": r["execution_time"],
+                "vulnerability_score": r["scoring"].vulnerability_score,
+                "risk_level": r["scoring"].risk_level,
+                "sub_scores": r["scoring"].sub_scores,
+                "accuracy_drop": r["assessment"].accuracy_drop,
+                "attack_success_rate": r["assessment"].attack_success_rate,
+            }
+            for r in attack_eval_results
+        ],
+        "unified_assessment": {
+            "vulnerability_score": unified_vuln_score if attack_eval_results else 0.0,
+            "robustness_score": unified_robust_score if attack_eval_results else 100.0,
+            "risk_level": unified_risk if attack_eval_results else "LOW",
+            "primary_driving_threat": primary_threat if attack_eval_results else "NONE",
+            "conclusive_evaluations": f"{len(attack_eval_results)} / {len(attacks_to_run)}",
+        },
+        "errors": pipeline_errors,
+    }
+    with open(summary_path, "w", encoding="utf-8") as f:
+        json.dump(summary_payload, f, indent=2)
+    print(f"  Summary assessment report saved -> {summary_path}")
 
 
 # -- MAIN ----------------------------------------------------------------------
 def main():
+    pipeline_start_time = time.time()
     banner()
     args = parse_args()
 
@@ -479,32 +696,88 @@ def main():
     print(f"\n  Active Execution Settings:")
     print(f"  Device: {device}  |  Samples: {samples}  |  Attack: {attack.upper()}  |  Epsilon: {epsilon:.5f}\n")
 
+    pipeline_errors = []
+
+    # Step 1: Model Ingestion
     adapter, metadata = step1_ingest_model(device)
 
+    # Step 2: Baseline Evaluation
     baseline_result = step2_baseline_evaluation(
         adapter=adapter, samples=samples,
         batch_size=args.batch_size, output_dir=output_dir,
     )
 
-    attack_result, clean_m, adv_m, y_true, y_clean_pred, y_adv_pred, total_samples = \
-        step3_and_4_attack_and_evaluate(
-            adapter=adapter, attack_name=attack, epsilon=epsilon,
-            samples=samples, batch_size=args.batch_size,
-            device=device, output_dir=output_dir,
-        )
+    # Determine attacks to evaluate
+    if attack.lower() == "all":
+        attacks_to_run = list(SUPPORTED_ATTACKS)
+    else:
+        attacks_to_run = [attack.lower()]
 
-    assessment, scoring = step5_vulnerability_analysis(
-        baseline_result=baseline_result, attack_result=attack_result,
-        clean_m=clean_m, adv_m=adv_m,
-        y_true=y_true, y_clean_pred=y_clean_pred, y_adv_pred=y_adv_pred,
-        num_samples=total_samples, attack_name=attack, output_dir=output_dir,
+    split_str = f"test[:{samples}]" if samples > 0 else "test"
+    loader = HFVisionDatasetLoader(
+        dataset_name=DATASET_NAME,
+        processor_name=MODEL_ID,
+        split=split_str,
+        batch_size=args.batch_size,
     )
 
+    attack_eval_results = []
+    total_samples = len(loader)
+
+    for atk_name in attacks_to_run:
+        atk_t0 = time.time()
+        try:
+            attack_result, clean_m, adv_m, y_true, y_clean_pred, y_adv_pred, _ = \
+                step3_and_4_attack_and_evaluate(
+                    adapter=adapter, attack_name=atk_name, epsilon=epsilon,
+                    samples=samples, batch_size=args.batch_size,
+                    device=device, output_dir=output_dir, loader=loader,
+                )
+            atk_duration = time.time() - atk_t0
+
+            assessment, scoring = step5_vulnerability_analysis(
+                baseline_result=baseline_result, attack_result=attack_result,
+                clean_m=clean_m, adv_m=adv_m,
+                y_true=y_true, y_clean_pred=y_clean_pred, y_adv_pred=y_adv_pred,
+                num_samples=total_samples, attack_name=atk_name, output_dir=output_dir,
+            )
+
+            attack_cls = get_attack(atk_name.lower())
+            attack_class_name = attack_cls.__name__ if attack_cls else atk_name.upper()
+
+            attack_eval_results.append({
+                "attack_name": atk_name,
+                "attack_class": attack_class_name,
+                "execution_time": atk_duration,
+                "assessment": assessment,
+                "scoring": scoring,
+                "clean_m": clean_m,
+                "adv_m": adv_m,
+            })
+        except Exception as e:
+            atk_duration = time.time() - atk_t0
+            pipeline_errors.append({
+                "module": f"M3_{atk_name}",
+                "error": f"{type(e).__name__} — {str(e)}",
+            })
+            print(f"  ❌ Error executing attack {atk_name.upper()}: {e}")
+
+    total_pipeline_runtime = time.time() - pipeline_start_time
+
     step6_final_summary(
-        baseline=baseline_result, assessment=assessment, scoring=scoring,
-        attack_name=attack, epsilon=epsilon, samples=total_samples,
+        baseline=baseline_result,
+        attack_eval_results=attack_eval_results,
+        attacks_to_run=attacks_to_run,
+        metadata=metadata,
+        device=device,
+        samples=total_samples,
+        batch_size=args.batch_size,
+        pipeline_errors=pipeline_errors,
+        total_pipeline_runtime=total_pipeline_runtime,
+        output_dir=output_dir,
     )
 
 
 if __name__ == "__main__":
     main()
+

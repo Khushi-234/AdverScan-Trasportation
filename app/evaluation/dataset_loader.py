@@ -13,8 +13,8 @@ from transformers import AutoImageProcessor
 
 class BaseDatasetLoader(ABC):
     """
-    Abstract base dataset loader for AdverScan evaluation modules.
-    Allows generic domain support (ITS, Financial, Medical, etc.).
+    Abstract base dataset loader for AdverScan evaluation modules (Image Domain).
+    Allows vision and image dataset loading for transportation AI applications.
     """
 
     @property

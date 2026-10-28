@@ -24,7 +24,7 @@ def discover_attacks(force_reload: bool = False) -> List[str]:
     """
     Automatically discover and import all attack modules under `app.attack_engine.attacks` recursively.
 
-    Using pkgutil.walk_packages, this traverses all domain packages (e.g. image, text, tabular)
+    Using pkgutil.walk_packages, this traverses all image attack packages
     and submodules, importing each module and triggering its self-registration via `register_attack()`.
 
     Args:

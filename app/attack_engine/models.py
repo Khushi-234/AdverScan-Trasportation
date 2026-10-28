@@ -13,7 +13,7 @@ class AttackMetadata:
 
     Attributes:
         name: Registered identifier of the attack (e.g. 'fgsm', 'pgd', 'deepfool', 'cw', 'fab').
-        domain: Target input domain / modality (e.g. 'image', 'text', 'tabular', 'audio').
+        domain: Target input domain / modality ('image').
         category: Methodology category (e.g. 'gradient', 'boundary', 'optimization').
         attack_type: Threat model access type ('white_box' or 'black_box').
         requires_gradient: Whether the attack requires gradient calculation w.r.t inputs.
