@@ -13,7 +13,7 @@ except ImportError:
     spearmanr = None
     _SCIPY_AVAILABLE = False
 
-from app.explainability.input_utils import to_numpy
+from app.explainability.utils import to_numpy
 
 
 def compute_perturbation_alignment(

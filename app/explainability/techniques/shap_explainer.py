@@ -13,7 +13,7 @@ except ImportError:
     shap = None
     _SHAP_AVAILABLE = False
 
-from app.explainability.input_utils import predict_proba_np, to_numpy, to_tensor, unwrap_model
+from app.explainability.utils import predict_proba_np, to_numpy, to_tensor, unwrap_model
 from app.explainability.modality import Modality
 from app.explainability.techniques.base import BaseExplainer
 
@@ -175,15 +175,30 @@ class SHAPExplainer(BaseExplainer):
             }
 
         try:
+            batch_size = int(kwargs.get("batch_size", 64))
+            max_evals = int(kwargs.get("shap_max_evals", kwargs.get("max_evals", 100)))
+            max_text_length = kwargs.get("max_text_length", 128)
+            tokenizer = kwargs.get("tokenizer", getattr(model, "tokenizer", None))
+
             # 1. Text input handling
             if (modality == Modality.TEXT) or (isinstance(inputs, (list, tuple, str)) and (isinstance(inputs, str) or (inputs and isinstance(inputs[0], str)))):
                 text_list = [inputs] if isinstance(inputs, str) else list(inputs)
 
                 def text_predict_fn(texts: List[str]) -> np.ndarray:
-                    return predict_proba_np(model, texts, output_mode=output_mode)
+                    return predict_proba_np(
+                        model,
+                        texts,
+                        output_mode=output_mode,
+                        batch_size=batch_size,
+                        max_text_length=max_text_length,
+                        tokenizer=tokenizer,
+                    )
 
                 explainer = shap.Explainer(text_predict_fn)
-                shap_values = explainer(text_list)
+                try:
+                    shap_values = explainer(text_list, max_evals=max_evals)
+                except Exception:
+                    shap_values = explainer(text_list)
                 values = shap_values.values if hasattr(shap_values, "values") else np.asarray(shap_values)
 
                 return {
@@ -201,7 +216,7 @@ class SHAPExplainer(BaseExplainer):
 
             # Universal prediction function wrapper utilizing predict_proba_np
             def predict_fn(x: np.ndarray) -> np.ndarray:
-                return predict_proba_np(model, x, output_mode=output_mode)
+                return predict_proba_np(model, x, output_mode=output_mode, batch_size=batch_size)
 
             # Prepare background dataset respecting baseline_strategy
             baseline_strategy = kwargs.get("baseline_strategy", "mean")
@@ -263,7 +278,10 @@ class SHAPExplainer(BaseExplainer):
                         return predict_fn(x_reshaped)
 
                     explainer = shap.Explainer(flat_predict_fn, flat_bg)
-                    shap_values = explainer(flat_inputs)
+                    try:
+                        shap_values = explainer(flat_inputs, max_evals=max_evals)
+                    except Exception:
+                        shap_values = explainer(flat_inputs)
                     raw_vals = shap_values.values if hasattr(shap_values, "values") else np.asarray(shap_values)
 
                     # Reshape back to input dimensions
@@ -286,7 +304,10 @@ class SHAPExplainer(BaseExplainer):
                 else:
                     # Tabular 2D data
                     explainer = shap.Explainer(predict_fn, bg_np)
-                    shap_values = explainer(inputs_np)
+                    try:
+                        shap_values = explainer(inputs_np, max_evals=max_evals)
+                    except Exception:
+                        shap_values = explainer(inputs_np)
                     values = shap_values.values if hasattr(shap_values, "values") else np.asarray(shap_values)
 
                     if isinstance(values, list):

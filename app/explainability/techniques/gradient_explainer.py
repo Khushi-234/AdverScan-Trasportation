@@ -10,7 +10,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from app.explainability.input_utils import to_numpy, to_tensor, unwrap_model
+from app.explainability.utils import to_numpy, to_tensor, unwrap_model
 from app.explainability.modality import Modality
 from app.explainability.techniques.base import BaseExplainer
 
@@ -170,7 +170,7 @@ class GradientExplainer(BaseExplainer):
         model: Any,
         inputs: Any,
         target_class: Optional[int] = None,
-        steps: int = 50,
+        steps: Optional[int] = None,
         baseline: Optional[Any] = None,
         **kwargs: Any,
     ) -> Dict[str, Any]:
@@ -184,6 +184,13 @@ class GradientExplainer(BaseExplainer):
                     "message": "Integrated Gradients requires a differentiable PyTorch nn.Module.",
                     "attribution": None,
                 }
+
+            eff_steps = (
+                steps
+                if steps is not None
+                else int(kwargs.get("ig_steps", kwargs.get("steps", 25)))
+            )
+            batch_size = int(kwargs.get("batch_size", 64))
 
             device = next(model.parameters()).device if list(model.parameters()) else torch.device("cpu")
             x = to_tensor(inputs).to(device)
@@ -211,11 +218,16 @@ class GradientExplainer(BaseExplainer):
             c = self._get_target_class(init_out, target_class)
 
             # Batched path interpolation
-            alphas = torch.linspace(0.0, 1.0, steps, device=device).view(-1, *([1] * (x.ndim)))
+            alphas = torch.linspace(0.0, 1.0, eff_steps, device=device).view(-1, *([1] * (x.ndim)))
             x_steps = (b.unsqueeze(0) + alphas * (x - b).unsqueeze(0)).view(-1, *x.shape[1:] if x.ndim > 1 else x.shape)
             x_steps = x_steps.clone().detach().requires_grad_(True)
 
-            out_batch = model_eval(x_steps)
+            out_chunks = []
+            for i in range(0, len(x_steps), batch_size):
+                chunk = x_steps[i:i + batch_size]
+                out_chunks.append(model_eval(chunk))
+            out_batch = torch.cat(out_chunks, dim=0) if len(out_chunks) > 1 else out_chunks[0]
+
             if out_batch.ndim == 1 or (out_batch.ndim == 2 and out_batch.shape[1] == 1):
                 raw = out_batch.ravel()
                 scores = raw if c == 1 else -raw
@@ -238,7 +250,7 @@ class GradientExplainer(BaseExplainer):
                     "attribution": None,
                 }
 
-            grads = x_steps.grad.view(steps, *x.shape)
+            grads = x_steps.grad.view(eff_steps, *x.shape)
             avg_grads = torch.mean(grads, dim=0)
             ig = (x - b) * avg_grads
             ig_np = ig.detach().cpu().numpy()

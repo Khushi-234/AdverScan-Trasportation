@@ -5,7 +5,7 @@ Text modality handler for natural language processing models in AdverScan XAI.
 from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
 
-from app.explainability.input_utils import to_numpy
+from app.explainability.utils import to_numpy
 from app.explainability.modalities.base import BaseModalityHandler
 from app.explainability.modality import Modality
 

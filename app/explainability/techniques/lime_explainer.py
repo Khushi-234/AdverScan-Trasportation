@@ -17,7 +17,7 @@ except ImportError:
     lime_text = None
     _LIME_AVAILABLE = False
 
-from app.explainability.input_utils import predict_proba_np, to_numpy, to_tensor
+from app.explainability.utils import predict_proba_np, to_numpy, to_tensor
 from app.explainability.modality import Modality
 from app.explainability.techniques.base import BaseExplainer
 
@@ -46,7 +46,7 @@ class LIMEExplainer(BaseExplainer):
         model: Any,
         inputs: Any,
         target_class: Optional[int] = None,
-        num_samples: int = 100,
+        num_samples: Optional[int] = None,
         modality: Optional[Union[str, Modality]] = None,
         output_mode: str = "auto",
         **kwargs: Any,
@@ -58,7 +58,7 @@ class LIMEExplainer(BaseExplainer):
             model: PyTorch model or prediction function.
             inputs: Input tensor, numpy array, or strings (image, tabular, or text).
             target_class: Target class index to explain (optional).
-            num_samples: Number of samples for LIME perturbation.
+            num_samples: Number of samples for LIME perturbation (defaults to XAIConfig.lime_num_samples).
             modality: Explicit modality hint.
             output_mode: 'classification', 'regression', or 'auto'.
 
@@ -75,24 +75,29 @@ class LIMEExplainer(BaseExplainer):
             }
 
         try:
+            eff_num_samples = (
+                num_samples
+                if num_samples is not None
+                else int(kwargs.get("lime_num_samples", kwargs.get("num_samples", 200)))
+            )
             norm_mod = Modality.from_str(modality) if modality else None
 
             # 1. Text input handling
             if norm_mod == Modality.TEXT or (isinstance(inputs, (list, tuple, str)) and (isinstance(inputs, str) or (inputs and isinstance(inputs[0], str)))):
-                return self._explain_text(model, inputs, target_class=target_class, num_samples=num_samples, output_mode=output_mode, **kwargs)
+                return self._explain_text(model, inputs, target_class=target_class, num_samples=eff_num_samples, output_mode=output_mode, **kwargs)
 
             inputs_np = to_numpy(inputs)
 
             # 2. Time-series inputs
             if norm_mod == Modality.TIMESERIES:
-                return self._explain_timeseries(model, inputs_np, target_class=target_class, num_samples=num_samples, output_mode=output_mode, **kwargs)
+                return self._explain_timeseries(model, inputs_np, target_class=target_class, num_samples=eff_num_samples, output_mode=output_mode, **kwargs)
 
             # 3. Tabular inputs
             if norm_mod == Modality.TABULAR or inputs_np.ndim <= 2:
-                return self._explain_tabular(model, inputs_np, target_class=target_class, num_samples=num_samples, output_mode=output_mode, **kwargs)
+                return self._explain_tabular(model, inputs_np, target_class=target_class, num_samples=eff_num_samples, output_mode=output_mode, **kwargs)
 
             # 4. Image inputs
-            return self._explain_image(model, inputs_np, target_class=target_class, num_samples=num_samples, output_mode=output_mode, **kwargs)
+            return self._explain_image(model, inputs_np, target_class=target_class, num_samples=eff_num_samples, output_mode=output_mode, **kwargs)
 
         except Exception as e:
             return {
@@ -108,11 +113,18 @@ class LIMEExplainer(BaseExplainer):
         model: Any,
         inputs_np: np.ndarray,
         target_class: Optional[int] = None,
-        num_samples: int = 100,
+        num_samples: Optional[int] = None,
         output_mode: str = "auto",
         **kwargs: Any,
     ) -> Dict[str, Any]:
         """Explain image input via LimeImageExplainer."""
+        eff_num_samples = (
+            num_samples
+            if num_samples is not None
+            else int(kwargs.get("lime_num_samples", kwargs.get("num_samples", 200)))
+        )
+        batch_size = int(kwargs.get("batch_size", 64))
+
         single_img = inputs_np[0] if inputs_np.ndim == 4 else inputs_np
         if single_img.ndim == 3 and single_img.shape[0] in (1, 3, 4):  # (C, H, W) -> (H, W, C)
             single_img = np.transpose(single_img, (1, 2, 0))
@@ -122,7 +134,7 @@ class LIMEExplainer(BaseExplainer):
                 images_t = np.ascontiguousarray(np.transpose(images, (0, 3, 1, 2)))
             else:
                 images_t = np.ascontiguousarray(images)
-            return predict_proba_np(model, images_t, output_mode=output_mode)
+            return predict_proba_np(model, images_t, output_mode=output_mode, batch_size=batch_size)
 
         explainer = lime_image.LimeImageExplainer()
         labels_to_explain = (target_class,) if target_class is not None else None
@@ -132,7 +144,8 @@ class LIMEExplainer(BaseExplainer):
             labels=labels_to_explain,
             top_labels=5 if target_class is None else None,
             hide_color=0,
-            num_samples=num_samples,
+            num_samples=eff_num_samples,
+            batch_size=batch_size,
         )
 
         top_label = target_class if target_class is not None else (
@@ -161,11 +174,18 @@ class LIMEExplainer(BaseExplainer):
         model: Any,
         inputs_np: np.ndarray,
         target_class: Optional[int] = None,
-        num_samples: int = 100,
+        num_samples: Optional[int] = None,
         output_mode: str = "auto",
         **kwargs: Any,
     ) -> Dict[str, Any]:
         """Explain tabular input via LimeTabularExplainer."""
+        eff_num_samples = (
+            num_samples
+            if num_samples is not None
+            else int(kwargs.get("lime_num_samples", kwargs.get("num_samples", 200)))
+        )
+        batch_size = int(kwargs.get("batch_size", 64))
+
         single_sample = inputs_np[0] if inputs_np.ndim == 2 else inputs_np
         num_features = len(single_sample)
 
@@ -181,7 +201,7 @@ class LIMEExplainer(BaseExplainer):
         feature_names = kwargs.get("feature_names") or [f"feature_{i}" for i in range(num_features)]
 
         def predict_fn(data: np.ndarray) -> np.ndarray:
-            return predict_proba_np(model, data, output_mode=output_mode)
+            return predict_proba_np(model, data, output_mode=output_mode, batch_size=batch_size)
 
         explainer = lime_tabular.LimeTabularExplainer(
             training_data=training_data,
@@ -200,7 +220,7 @@ class LIMEExplainer(BaseExplainer):
             labels=labels_to_explain,
             num_features=num_features,
             top_labels=1 if target_class is None else None,
-            num_samples=num_samples,
+            num_samples=eff_num_samples,
             **filtered_kwargs,
         )
 
@@ -227,11 +247,18 @@ class LIMEExplainer(BaseExplainer):
         model: Any,
         inputs_np: np.ndarray,
         target_class: Optional[int] = None,
-        num_samples: int = 100,
+        num_samples: Optional[int] = None,
         output_mode: str = "auto",
         **kwargs: Any,
     ) -> Dict[str, Any]:
         """Explain time-series input by unrolling (T, F) into temporal feature table."""
+        eff_num_samples = (
+            num_samples
+            if num_samples is not None
+            else int(kwargs.get("lime_num_samples", kwargs.get("num_samples", 200)))
+        )
+        batch_size = int(kwargs.get("batch_size", 64))
+
         single_ts = inputs_np[0] if inputs_np.ndim == 3 else inputs_np
         if single_ts.ndim == 1:
             single_ts = single_ts[:, np.newaxis]
@@ -243,7 +270,7 @@ class LIMEExplainer(BaseExplainer):
 
         def predict_fn(flat_data: np.ndarray) -> np.ndarray:
             orig_shape = flat_data.reshape(-1, t_steps, n_vars)
-            return predict_proba_np(model, orig_shape, output_mode=output_mode)
+            return predict_proba_np(model, orig_shape, output_mode=output_mode, batch_size=batch_size)
 
         bg_data = kwargs.get("background_inputs")
         if bg_data is not None:
@@ -271,7 +298,7 @@ class LIMEExplainer(BaseExplainer):
             labels=labels_to_explain,
             num_features=t_steps * n_vars,
             top_labels=1 if target_class is None else None,
-            num_samples=num_samples,
+            num_samples=eff_num_samples,
             **filtered_kwargs,
         )
 
@@ -298,15 +325,31 @@ class LIMEExplainer(BaseExplainer):
         model: Any,
         inputs: Any,
         target_class: Optional[int] = None,
-        num_samples: int = 100,
+        num_samples: Optional[int] = None,
         output_mode: str = "auto",
         **kwargs: Any,
     ) -> Dict[str, Any]:
         """Explain text input via LimeTextExplainer."""
+        eff_num_samples = (
+            num_samples
+            if num_samples is not None
+            else int(kwargs.get("lime_num_samples", kwargs.get("num_samples", 200)))
+        )
+        batch_size = int(kwargs.get("batch_size", 64))
+        max_text_length = kwargs.get("max_text_length", 128)
+        tokenizer = kwargs.get("tokenizer", getattr(model, "tokenizer", None))
+
         text_str = inputs[0] if isinstance(inputs, (list, tuple)) else str(inputs)
 
         def predict_fn(texts: List[str]) -> np.ndarray:
-            return predict_proba_np(model, texts, output_mode=output_mode)
+            return predict_proba_np(
+                model,
+                texts,
+                output_mode=output_mode,
+                batch_size=batch_size,
+                max_text_length=max_text_length,
+                tokenizer=tokenizer,
+            )
 
         explainer = lime_text.LimeTextExplainer(mode="classification")
         labels_to_explain = (target_class,) if target_class is not None else None
@@ -314,7 +357,7 @@ class LIMEExplainer(BaseExplainer):
             text_str,
             predict_fn,
             labels=labels_to_explain,
-            num_samples=num_samples,
+            num_samples=eff_num_samples,
             top_labels=1 if target_class is None else None,
         )
 

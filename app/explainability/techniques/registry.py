@@ -6,7 +6,7 @@ from typing import Any, Callable, Dict, List, Optional, Type, Union
 import torch.nn as nn
 
 from app.explainability.domain_profiles import get_domain_profile
-from app.explainability.input_utils import unwrap_model
+from app.explainability.utils import unwrap_model
 from app.explainability.modality import Modality
 from app.explainability.techniques.base import BaseExplainer
 from app.explainability.techniques.gradient_explainer import GradientExplainer

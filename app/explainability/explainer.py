@@ -11,7 +11,7 @@ from app.attack_engine.models import AttackResult
 from app.explainability.comparison import compare_explanations
 from app.explainability.explanation_result import ExplanationResult
 from app.explainability.failure_analysis import analyze_failure
-from app.explainability.input_utils import (
+from app.explainability.utils import (
     extract_prediction_and_confidence,
     get_shape,
     predict_proba_np,
@@ -26,6 +26,8 @@ from app.explainability.modality import Modality, detect_modality
 from app.explainability.techniques.lime_explainer import LIMEExplainer
 from app.explainability.techniques.registry import TechniqueRegistry, technique_registry
 from app.explainability.techniques.shap_explainer import SHAPExplainer, TreeSHAPExplainer
+from app.explainability.profiling import profile_explainer_call
+from app.explainability.config import XAIConfig
 
 
 class XAIExplainer:
@@ -41,6 +43,8 @@ class XAIExplainer:
         self,
         default_technique: str = "shap",
         registry: Optional[TechniqueRegistry] = None,
+        config: Optional[XAIConfig] = None,
+        **kwargs: Any,
     ):
         """
         Initialize XAIExplainer.
@@ -48,9 +52,11 @@ class XAIExplainer:
         Args:
             default_technique: Default XAI technique identifier ("shap", "treeshap", "lime", "saliency", etc.).
             registry: Optional custom TechniqueRegistry instance.
+            config: Optional XAIConfig defining evaluation mode, budgets, and parameters.
         """
         self.default_technique = default_technique.lower()
         self.registry = registry or technique_registry
+        self.config = config or XAIConfig()
 
         # Backward compatibility dictionary mapping
         self.techniques = {
@@ -94,6 +100,7 @@ class XAIExplainer:
         comparison_target: str = "clean_pred",
         compute_metrics: bool = False,
         domain: Optional[str] = None,
+        config: Optional[XAIConfig] = None,
         **kwargs: Any,
     ) -> ExplanationResult:
         """
@@ -114,10 +121,30 @@ class XAIExplainer:
             comparison_target: Class used for clean/adv comparison ('clean_pred', 'adv_pred', 'ground_truth', 'both').
             compute_metrics: Whether to evaluate extra faithfulness/alignment metrics.
             domain: Domain name preset ('fraud', 'ids', 'medical', 'maintenance') or custom.
+            config: Optional XAIConfig overriding default explainer configuration.
 
         Returns:
             Structured ExplanationResult DTO.
         """
+        # Resolve active configuration
+        cfg = config or self.config
+
+        # Merge config parameters into explainer kwargs
+        explainer_kwargs = dict(kwargs)
+        if "steps" not in explainer_kwargs and "ig_steps" not in explainer_kwargs:
+            explainer_kwargs["steps"] = cfg.ig_steps
+            explainer_kwargs["ig_steps"] = cfg.ig_steps
+        if "num_samples" not in explainer_kwargs and "lime_num_samples" not in explainer_kwargs:
+            explainer_kwargs["num_samples"] = cfg.lime_num_samples
+            explainer_kwargs["lime_num_samples"] = cfg.lime_num_samples
+        if "max_evals" not in explainer_kwargs and "shap_max_evals" not in explainer_kwargs:
+            explainer_kwargs["max_evals"] = cfg.shap_max_evals
+            explainer_kwargs["shap_max_evals"] = cfg.shap_max_evals
+        if "batch_size" not in explainer_kwargs:
+            explainer_kwargs["batch_size"] = cfg.batch_size
+        if "max_text_length" not in explainer_kwargs:
+            explainer_kwargs["max_text_length"] = cfg.max_text_length
+
         # 1. Modality detection & Handler selection
         mod = detect_modality(clean_input, hint=modality)
         handler = get_modality_handler(mod)
@@ -143,11 +170,25 @@ class XAIExplainer:
 
         # 4. Select and validate technique
         tech_name = (technique or (domain_prof.default_technique if domain_prof else self.default_technique)).lower()
-        explainer = self.registry.select_technique(mod, model=model, preferred=tech_name, **kwargs)
+        explainer = self.registry.select_technique(mod, model=model, preferred=tech_name, **explainer_kwargs)
 
-        # 5. Get predictions, confidences, and probabilities
-        clean_probs = predict_proba_np(model, prep_clean, output_mode=output_mode)
-        adv_probs = predict_proba_np(model, prep_adv, output_mode=output_mode)
+        # 5. Get predictions, confidences, and probabilities using batched prediction
+        clean_probs = predict_proba_np(
+            model,
+            prep_clean,
+            output_mode=output_mode,
+            batch_size=cfg.batch_size,
+            max_text_length=cfg.max_text_length,
+            tokenizer=kwargs.get("tokenizer"),
+        )
+        adv_probs = predict_proba_np(
+            model,
+            prep_adv,
+            output_mode=output_mode,
+            batch_size=cfg.batch_size,
+            max_text_length=cfg.max_text_length,
+            tokenizer=kwargs.get("tokenizer"),
+        )
         clean_pred, clean_conf = extract_prediction_and_confidence(clean_probs, output_mode=output_mode)
         adv_pred, adv_conf = extract_prediction_and_confidence(adv_probs, output_mode=output_mode)
 
@@ -169,22 +210,27 @@ class XAIExplainer:
             eval_target = None
 
         # 7. Run XAI technique with common target class
-        clean_attr_result = explainer.explain(
+        clean_attr_result, clean_stats = profile_explainer_call(
+            explainer,
             model,
             prep_clean,
             target_class=eval_target,
             modality=mod,
             output_mode=output_mode,
-            **kwargs,
+            **explainer_kwargs,
         )
-        adv_attr_result = explainer.explain(
+        adv_attr_result, adv_stats = profile_explainer_call(
+            explainer,
             model,
             prep_adv,
             target_class=eval_target,
             modality=mod,
             output_mode=output_mode,
-            **kwargs,
+            **explainer_kwargs,
         )
+
+        total_explain_seconds = clean_stats.explain_seconds + adv_stats.explain_seconds
+        total_model_queries = clean_stats.num_model_queries + adv_stats.num_model_queries
 
         # Attribution status propagation
         attribution_status = clean_attr_result.get("status", "success")
@@ -196,14 +242,17 @@ class XAIExplainer:
         # If comparison_target is 'both', also compute adversarial attribution w.r.t adv_pred
         adv_attr_adv_class_result = None
         if is_classification and comparison_target == "both" and clean_pred != adv_pred:
-            adv_attr_adv_class_result = explainer.explain(
+            adv_attr_adv_class_result, adv_class_stats = profile_explainer_call(
+                explainer,
                 model,
                 prep_adv,
                 target_class=adv_pred,
                 modality=mod,
                 output_mode=output_mode,
-                **kwargs,
+                **explainer_kwargs,
             )
+            total_explain_seconds += adv_class_stats.explain_seconds
+            total_model_queries += adv_class_stats.num_model_queries
 
         # 8. Postprocess attributions using modality handler
         clean_postprocessed = handler.postprocess_attribution(
@@ -322,6 +371,13 @@ class XAIExplainer:
             "output_mode": output_mode,
             "comparison_target": comparison_target,
             "domain": domain_prof.name if domain_prof else str(domain_name),
+            "config": cfg.to_dict(),
+            "explain_seconds": round(total_explain_seconds, 6),
+            "num_model_queries": int(total_model_queries),
+            "clean_explain_seconds": round(clean_stats.explain_seconds, 6),
+            "clean_num_model_queries": int(clean_stats.num_model_queries),
+            "adversarial_explain_seconds": round(adv_stats.explain_seconds, 6),
+            "adversarial_num_model_queries": int(adv_stats.num_model_queries),
         }
         if assessment_result is not None:
             if hasattr(assessment_result, "to_dict"):
@@ -369,6 +425,7 @@ class XAIExplainer:
         technique: Optional[str] = None,
         attack_name: str = "adversarial_attack",
         modality: Optional[Union[str, Modality]] = None,
+        config: Optional[XAIConfig] = None,
         **kwargs: Any,
     ) -> List[ExplanationResult]:
         """
@@ -382,6 +439,7 @@ class XAIExplainer:
             technique: XAI technique name.
             attack_name: Identifier of the attack executed.
             modality: Explicit modality hint.
+            config: Optional XAIConfig for batch execution.
             **kwargs: Extra arguments passed to explain().
 
         Returns:
@@ -439,6 +497,7 @@ class XAIExplainer:
                 technique=technique,
                 attack_name=attack_name,
                 modality=mod,
+                config=config,
                 **kwargs,
             )
             results.append(res)
