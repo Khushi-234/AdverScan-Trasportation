@@ -35,16 +35,32 @@ from app.explainability.techniques import (
     TechniqueRegistry,
     technique_registry,
 )
+from app.explainability.config import XAIConfig
+from app.explainability.utils import predict_batched, predict_proba_np
+from app.explainability.profiling import (
+    ProfileContext,
+    ProfileStats,
+    QueryCounter,
+    profile_explainer_call,
+)
 
 __all__ = [
     # Core contracts & coordinator
     "ExplanationResult",
     "XAIExplainer",
+    "XAIConfig",
+    "predict_batched",
+    "predict_proba_np",
     "compare_explanations",
     "compare_attributions",
     "analyze_failure",
     "is_prediction_correct",
     "aggregate_explanations",
+    # Profiling & measurement
+    "ProfileStats",
+    "ProfileContext",
+    "QueryCounter",
+    "profile_explainer_call",
     # Modalities
     "Modality",
     "detect_modality",
