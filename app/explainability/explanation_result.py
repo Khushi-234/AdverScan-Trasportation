@@ -71,6 +71,7 @@ class ExplanationResult:
     stability: Dict[str, Any] = field(default_factory=dict)
     validity_flags: Dict[str, Any] = field(default_factory=dict)
     attribution_status: str = "success"
+    xai_decision: Dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert ExplanationResult object to dictionary."""

@@ -63,6 +63,7 @@ class DummyTokenizer:
 def test_xai_config_defaults():
     cfg = XAIConfig()
     assert cfg.mode == "standard"
+    assert cfg.technique is None
     assert cfg.budget == 100
     assert cfg.failed_attack_samples == 10
     assert cfg.per_sample_timeout_s == 30.0
@@ -139,6 +140,21 @@ def test_xai_explainer_wires_config():
     assert res.metadata["config"]["ig_steps"] == 11
     assert res.metadata["config"]["batch_size"] == 16
     assert res.metadata["config"]["mode"] == "fast"
+
+
+def test_xai_explainer_config_technique_override():
+    model = nn.Sequential(nn.Linear(4, 2))
+    cfg = XAIConfig(technique="saliency")
+    explainer = XAIExplainer(config=cfg)
+    clean = torch.randn(1, 4)
+    adv = torch.randn(1, 4)
+    res = explainer.explain(
+        model=model,
+        clean_input=clean,
+        adversarial_input=adv,
+        modality=Modality.TABULAR,
+    )
+    assert res.technique == "saliency"
 
 
 # -------------------------------------------------------------------------

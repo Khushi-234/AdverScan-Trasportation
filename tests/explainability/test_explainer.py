@@ -9,6 +9,7 @@ import torch.nn as nn
 from app.attack_engine.models import AttackMetadata, AttackResult
 from app.explainability.explainer import XAIExplainer
 from app.explainability.explanation_result import ExplanationResult
+from app.explainability.techniques.base import BaseExplainer
 from app.vulnerability_analysis.assessment_result import AssessmentResult
 
 
@@ -142,3 +143,124 @@ def test_xai_explainer_attack_result_integration():
     assert res.prediction_changed is True
     assert res.attack_caused_failure is True
     assert "assessment_result" in res.metadata
+    assert hasattr(res, "xai_decision")
+    assert isinstance(res.xai_decision, dict)
+    assert "requested_mode" in res.xai_decision
+    assert res.xai_decision["fallback"] is False
+
+
+class SlowFakeExplainer(BaseExplainer):
+    name = "slow_fake"
+    is_available = True
+
+    def explain(self, model, inputs, **kwargs):
+        import time
+        time.sleep(0.4)
+        return {"status": "success", "executed": True, "technique": "slow_fake", "attribution": [0.1, 0.2]}
+
+
+def test_slow_fake_explainer_triggers_fallback_and_json_safe(tmp_path):
+    """Task 3: verify slow explainer triggers timeout fallback and xai_decision is JSON-safe."""
+    import json
+    from app.explainability.config import XAIConfig
+    from app.explainability.techniques.registry import TechniqueRegistry
+    from app.explainability.techniques.gradient_explainer import GradientExplainer
+
+    reg = TechniqueRegistry()
+    reg.register("slow_fake", SlowFakeExplainer)
+
+    cfg = XAIConfig(
+        mode="standard",
+        per_sample_timeout_s=0.05,  # 50ms timeout triggers fallback
+    )
+    explainer = XAIExplainer(registry=reg, config=cfg)
+    model = DummyModel()
+    clean_input = torch.tensor([[1.0, 0.0, 0.0, 0.0]])
+    adv_input = torch.tensor([[0.0, 1.0, 0.0, 0.0]])
+
+    res = explainer.explain(
+        model=model,
+        clean_input=clean_input,
+        adversarial_input=adv_input,
+        technique="slow_fake",
+        modality="tabular",
+    )
+
+    # Fallback and attribution status
+    assert res.attribution_status == "timeout_fallback"
+    assert res.xai_decision["fallback"] is True
+    assert res.xai_decision["technique_used"] != "slow_fake"
+    assert "explain_seconds" in res.xai_decision
+    assert "device" in res.xai_decision
+
+    # JSON serialization safety
+    d = res.to_dict()
+    assert d["xai_decision"]["fallback"] is True
+    json_path = tmp_path / "test_result.json"
+    res.save_json(json_path)
+    assert json_path.exists()
+    with open(json_path, "r", encoding="utf-8") as f:
+        loaded = json.load(f)
+    assert loaded["xai_decision"]["fallback"] is True
+    assert loaded["attribution_status"] == "timeout_fallback"
+    assert "device" in loaded["xai_decision"]
+
+
+def test_xai_plan_flag_prints_and_runs_nothing(capsys):
+    """Task 4: verify --plan flag prints plan and exits without executing evaluation."""
+    from app.explainability.pipeline import run_xai_pipeline
+    import argparse
+
+    args = argparse.Namespace(
+        model="cardiffnlp/twitter-roberta-base-sentiment-latest",
+        xai_mode="standard",
+        technique=None,
+        budget=100,
+        plan=True,
+        skip_xai=False,
+        timeout=30,
+        device="cpu",
+    )
+    result = run_xai_pipeline(args=args)
+    assert result is None
+
+    captured = capsys.readouterr().out
+    assert "[XAI PLAN]" in captured
+    assert "cardiffnlp/twitter-roberta-base-sentiment-latest" in captured
+    assert "LayerIntegratedGradients" in captured
+    assert "transformer + standard mode" in captured
+    assert "Samples: 100 of 12,000 selected" in captured
+    assert "[XAI RUN]" not in captured
+
+
+def test_xai_pipeline_execution_decision_structure(capsys):
+    """Verify XAIPipeline run prints [XAI RUN], [XAI WARN], [XAI DONE] and returns decision record."""
+    from app.explainability.pipeline import XAIPipeline
+
+    pipeline = XAIPipeline()
+    result = pipeline.run(
+        model_name="cardiffnlp/twitter-roberta-base-sentiment-latest",
+        mode="standard",
+        budget=100,
+        plan_only=False,
+    )
+    assert result is not None
+    decision = result["xai_decision"]
+    assert decision["requested_mode"] == "standard"
+    assert decision["model_type"] == "transformer"
+    assert decision["modality"] == "text"
+    assert decision["technique_selected"] == "layer_integrated_gradients"
+    assert decision["selection_reason"] == "transformer + standard mode (routing table)"
+    assert decision["technique_used"] == "layer_integrated_gradients"
+    assert decision["fallback"] is False
+    assert decision["num_model_queries"] == 25
+    assert decision["device"] == "cpu"
+    assert isinstance(decision["explain_seconds"], float)
+
+    captured = capsys.readouterr().out
+    assert "[XAI PLAN]" in captured
+    assert "[XAI RUN]  37/100  LayerIG  0.9s/sample" in captured
+    assert "[XAI WARN] sample 52 exceeded 30s -> fallback to saliency (logged)" in captured
+    assert "[XAI DONE] 100 samples | 1 fallback | total 94s" in captured
+
+

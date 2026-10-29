@@ -16,6 +16,7 @@ transformers>=4.30.0
 # Security & Adversarial Robustness Tools
 art>=1.14.0
 foolbox>=3.3.0
+captum>=0.7.0
 
 # Development & Testing
 pytest>=7.0.0

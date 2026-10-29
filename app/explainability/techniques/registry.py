@@ -2,7 +2,7 @@
 Technique registry for selecting and managing compatible XAI explainers in AdverScan.
 """
 
-from typing import Any, Callable, Dict, List, Optional, Type, Union
+from typing import Any, Callable, Dict, List, Optional, Tuple, Type, Union
 import torch.nn as nn
 
 from app.explainability.domain_profiles import get_domain_profile
@@ -10,8 +10,10 @@ from app.explainability.utils import unwrap_model
 from app.explainability.modality import Modality
 from app.explainability.techniques.base import BaseExplainer
 from app.explainability.techniques.gradient_explainer import GradientExplainer
+from app.explainability.techniques.layer_ig_explainer import LayerIGExplainer
 from app.explainability.techniques.lime_explainer import LIMEExplainer
-from app.explainability.techniques.shap_explainer import SHAPExplainer, TreeSHAPExplainer
+from app.explainability.techniques.shap_explainer import SHAPExplainer
+from app.explainability.techniques.tree_shap_explainer import TreeSHAPExplainer
 
 
 def _is_tree_model(model: Any) -> bool:
@@ -25,6 +27,140 @@ def _is_tree_model(model: Any) -> bool:
         or "Tree" in type(unwrapped).__name__
         or "Booster" in type(unwrapped).__name__
     )
+
+
+# Rules table mapping (model_type, mode) -> technique
+RULES_TABLE: Dict[str, Dict[str, str]] = {
+    "tree (XGB/RF)": {
+        "fast": "tree_shap",
+        "standard": "tree_shap",
+        "thorough": "tree_shap",
+    },
+    "torch MLP/LSTM": {
+        "fast": "saliency",
+        "standard": "integrated_gradients",
+        "thorough": "gradient_shap",
+    },
+    "CNN": {
+        "fast": "gradcam",
+        "standard": "integrated_gradients",
+        "thorough": "shap",
+    },
+    "transformer": {
+        "fast": "saliency",
+        "standard": "layer_integrated_gradients",
+        "thorough": "shap",
+    },
+    "transformer/text": {
+        "fast": "saliency",
+        "standard": "layer_integrated_gradients",
+        "thorough": "shap",
+    },
+}
+
+
+def normalize_model_type(model_type_str: str) -> str:
+    """Normalize user or detected string to one of the canonical rules table model types."""
+    norm = str(model_type_str).lower().strip()
+    if any(k in norm for k in ("tree", "xgb", "rf", "forest", "boost")):
+        return "tree (XGB/RF)"
+    if "cnn" in norm or "conv" in norm:
+        return "CNN"
+    if any(k in norm for k in ("transformer", "bert", "roberta", "text")):
+        return "transformer"
+    if any(k in norm for k in ("mlp", "lstm", "torch", "linear", "rnn")):
+        return "torch MLP/LSTM"
+    return model_type_str
+
+
+def detect_model_type(model: Any, modality: Union[str, Modality]) -> str:
+    """Infer model architecture type (tree (XGB/RF), torch MLP/LSTM, CNN, transformer)."""
+    if isinstance(model, str):
+        return normalize_model_type(model)
+
+    norm_mod = Modality.from_str(modality) if modality else None
+    unwrapped = unwrap_model(model) if model is not None else None
+
+    if unwrapped is not None and _is_tree_model(unwrapped):
+        return "tree (XGB/RF)"
+
+    if isinstance(unwrapped, nn.Module):
+        # 1. Convolutional architectures
+        has_conv = any(
+            isinstance(m, (nn.modules.conv._ConvNd, nn.Conv1d, nn.Conv2d, nn.Conv3d))
+            for m in unwrapped.modules()
+        )
+        if has_conv:
+            return "CNN"
+
+        # 2. Transformer architectures or text modality
+        has_transformer = any(
+            isinstance(m, (nn.Transformer, nn.MultiheadAttention, nn.TransformerEncoder, nn.TransformerDecoder))
+            or "transformer" in type(m).__name__.lower()
+            or "bert" in type(m).__name__.lower()
+            or "roberta" in type(m).__name__.lower()
+            for m in unwrapped.modules()
+        )
+        if has_transformer or norm_mod == Modality.TEXT:
+            return "transformer"
+
+        return "torch MLP/LSTM"
+
+    # Modality fallback when model is callable or generic
+    if norm_mod == Modality.TEXT:
+        return "transformer"
+    if norm_mod == Modality.IMAGE:
+        return "CNN"
+    return "torch MLP/LSTM"
+
+
+def check_override_compatibility(
+    override: str,
+    model_type: str,
+    modality: Union[str, Modality],
+    model: Optional[Any] = None,
+) -> Tuple[bool, str]:
+    """Verify that a manual technique override is compatible with the model type and modality."""
+    norm_override = override.lower().replace("-", "_")
+    norm_mod = Modality.from_str(modality) if modality else None
+    canonical_model = normalize_model_type(model_type)
+
+    # 1. Tree models cannot use gradient-based techniques
+    if canonical_model == "tree (XGB/RF)":
+        if norm_override in (
+            "saliency",
+            "integrated_gradients",
+            "ig",
+            "gradcam",
+            "grad_cam",
+            "layer_ig",
+            "layer_integrated_gradients",
+            "gradient_shap",
+        ):
+            return False, f"Unsupported XAI technique '{override}': requires neural network gradients and is incompatible with {canonical_model} models."
+        if norm_override not in ("tree_shap", "treeshap", "shap", "lime"):
+            return False, f"Unsupported XAI technique '{override}': incompatible with {canonical_model} models."
+
+    # 2. GradCAM requires convolutional layers
+    if norm_override in ("gradcam", "grad_cam"):
+        if canonical_model != "CNN":
+            return False, f"Unsupported XAI technique '{override}': requires convolutional layers and is incompatible with {canonical_model} models."
+        if norm_mod is not None and norm_mod != Modality.IMAGE:
+            return False, f"Unsupported XAI technique '{override}': only compatible with image/convolutional modality, got '{norm_mod.value}'."
+
+    # 3. TreeSHAP requires tree ensemble
+    if norm_override in ("tree_shap", "treeshap"):
+        if canonical_model != "tree (XGB/RF)":
+            return False, f"Unsupported XAI technique '{override}': requires tree-based models and is incompatible with {canonical_model} models."
+        if norm_mod is not None and norm_mod != Modality.TABULAR:
+            return False, f"Unsupported XAI technique '{override}': only compatible with tabular modality, got '{norm_mod.value}'."
+
+    # 4. Neural-only gradient techniques require non-tree
+    if norm_override in ("saliency", "integrated_gradients", "ig", "layer_ig", "layer_integrated_gradients", "gradient_shap"):
+        if canonical_model == "tree (XGB/RF)":
+            return False, f"Unsupported XAI technique '{override}': requires differentiable neural network and is incompatible with {canonical_model} models."
+
+    return True, ""
 
 
 class TechniqueRegistry:
@@ -48,6 +184,8 @@ class TechniqueRegistry:
         self.register("ig", lambda **kw: GradientExplainer(method="integrated_gradients", **kw))
         self.register("gradcam", lambda **kw: GradientExplainer(method="gradcam", **kw))
         self.register("grad_cam", lambda **kw: GradientExplainer(method="gradcam", **kw))
+        self.register("layer_ig", LayerIGExplainer)
+        self.register("layer_integrated_gradients", LayerIGExplainer)
 
     def register(
         self,
@@ -83,7 +221,10 @@ class TechniqueRegistry:
                 f"Unsupported XAI technique '{name}'. Available techniques: {self.list_techniques()}"
             )
         factory = self._registry[norm_name]
-        return factory(**kwargs)
+        try:
+            return factory(**kwargs)
+        except TypeError:
+            return factory()
 
     def get_compatible_techniques(
         self,
@@ -191,6 +332,137 @@ class TechniqueRegistry:
         else:
             return self.get(default_tech, **kwargs)
 
+    def select_by_mode(
+        self,
+        mode: str,
+        model: Any,
+        modality: Union[str, Modality],
+        override: Optional[str] = None,
+        **kwargs: Any,
+    ) -> Tuple[BaseExplainer, Dict[str, Any]]:
+        """
+        Select XAI explainer and decision metadata based on operational mode and model architecture.
+
+        Args:
+            mode: Operational mode preset ('fast' | 'standard' | 'thorough').
+            model: Target ML model, architecture identifier, or adapter.
+            modality: Data modality ('tabular', 'image', 'text', 'timeseries').
+            override: Optional manual technique override.
+            **kwargs: Extra parameters passed to the explainer constructor.
+
+        Returns:
+            Tuple of (explainer_instance, decision_dict).
+        """
+        norm_mode = str(mode).lower().strip() if mode else "standard"
+        if norm_mode not in ("fast", "standard", "thorough"):
+            norm_mode = "standard"
+
+        model_type = detect_model_type(model, modality)
+        norm_mod = Modality.from_str(modality) if modality else Modality.TABULAR
+        modality_str = norm_mod.value if hasattr(norm_mod, "value") else str(modality)
+
+        # 1. Manual override handling
+        if override is not None and str(override).strip():
+            norm_override = str(override).strip().lower().replace("-", "_")
+            compatible, err_msg = check_override_compatibility(norm_override, model_type, norm_mod, model)
+            if not compatible:
+                raise ValueError(err_msg)
+
+            if norm_override not in self._registry:
+                raise ValueError(
+                    f"Unsupported XAI technique override '{override}'. Available techniques: {self.list_techniques()}"
+                )
+
+            explainer = self.get(norm_override, **kwargs)
+            decision_dict = {
+                "requested_mode": norm_mode,
+                "model_type": model_type,
+                "modality": modality_str,
+                "technique_selected": norm_override,
+                "selection_reason": f"Manual override to '{norm_override}' applied.",
+            }
+            return explainer, decision_dict
+
+        # 2. Rules table lookup
+        canonical_model_type = normalize_model_type(model_type)
+        if canonical_model_type not in RULES_TABLE:
+            canonical_model_type = "torch MLP/LSTM"
+
+        technique_target = RULES_TABLE[canonical_model_type][norm_mode]
+
+        # 3. Fallback check if technique does not exist in registry
+        technique_selected = technique_target
+        if "tree" in canonical_model_type.lower():
+            selection_reason = f"Selected '{technique_target}' for {model_type} model under '{norm_mode}' mode."
+        else:
+            selection_reason = f"{model_type} + {norm_mode} mode (routing table)"
+
+        if technique_target not in self._registry:
+            fallback_map = {
+                "gradient_shap": "integrated_gradients",
+                "shap": "integrated_gradients",
+                "integrated_gradients": "saliency",
+                "layer_integrated_gradients": "saliency",
+                "gradcam": "saliency",
+                "tree_shap": "lime",
+            }
+            fallback = fallback_map.get(technique_target, "integrated_gradients")
+            selection_reason = (
+                f"Technique '{technique_target}' does not exist yet; "
+                f"falling back to nearest available '{fallback}'."
+            )
+            technique_selected = fallback
+
+        explainer = self.get(technique_selected, **kwargs)
+
+        # 4. Fallback if explainer library is unavailable (e.g. shap not installed)
+        if not getattr(explainer, "is_available", True):
+            if "tree" in model_type.lower():
+                fallback = "lime"
+            else:
+                fallback = "saliency"
+            selection_reason = (
+                f"Technique '{technique_selected}' is unavailable in current environment; "
+                f"falling back to nearest available '{fallback}'."
+            )
+            technique_selected = fallback
+            explainer = self.get(technique_selected, **kwargs)
+
+        decision_dict = {
+            "requested_mode": norm_mode,
+            "model_type": model_type,
+            "modality": modality_str,
+            "technique_selected": technique_selected,
+            "selection_reason": selection_reason,
+        }
+        return explainer, decision_dict
+
 
 # Global default technique registry instance
 technique_registry = TechniqueRegistry()
+
+
+def select_by_mode(
+    mode: str,
+    model: Any,
+    modality: Union[str, Modality],
+    override: Optional[str] = None,
+    registry: Optional[TechniqueRegistry] = None,
+    **kwargs: Any,
+) -> Tuple[BaseExplainer, Dict[str, Any]]:
+    """
+    Select XAI explainer and decision metadata based on operational mode and model architecture.
+
+    Args:
+        mode: Operational mode preset ('fast' | 'standard' | 'thorough').
+        model: Target ML model, architecture identifier, or adapter.
+        modality: Data modality ('tabular', 'image', 'text', 'timeseries').
+        override: Optional manual technique override.
+        registry: Optional TechniqueRegistry instance.
+        **kwargs: Extra parameters passed to the explainer.
+
+    Returns:
+        Tuple of (explainer_instance, decision_dict).
+    """
+    reg = registry or technique_registry
+    return reg.select_by_mode(mode=mode, model=model, modality=modality, override=override, **kwargs)

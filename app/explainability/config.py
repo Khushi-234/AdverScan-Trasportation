@@ -15,6 +15,7 @@ class XAIConfig:
 
     Attributes:
         mode: Operational mode preset ('fast' | 'standard' | 'thorough').
+        technique: Optional manual override for XAI technique.
         budget: Maximum samples to explain during evaluation runs.
         failed_attack_samples: Maximum failed adversarial attack samples retained for contrast.
         per_sample_timeout_s: Maximum execution timeout in seconds per sample.
@@ -27,6 +28,7 @@ class XAIConfig:
     """
 
     mode: str = "standard"  # fast | standard | thorough
+    technique: Optional[str] = None
     budget: int = 100
     failed_attack_samples: int = 10
     per_sample_timeout_s: float = 30.0
@@ -68,6 +70,7 @@ class XAIConfig:
         """Instantiate XAIConfig from a dictionary, ignoring extraneous fields."""
         valid_keys = {
             "mode",
+            "technique",
             "budget",
             "failed_attack_samples",
             "per_sample_timeout_s",

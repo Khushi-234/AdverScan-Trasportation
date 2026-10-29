@@ -1,115 +1,154 @@
 """
-Execution script to perform clean Baseline Evaluation (Module 2) on GTSRB test dataset (12,630 samples)
-using Module 1 standardized PyTorch model adapter.
+Execution script to perform clean Baseline Evaluation & XAI Explanation Pipeline in AdverScan.
+Supports planning (--plan), technique overrides (--technique), mode selection (--xai-mode),
+budget control (--budget), and skipping (--skip-xai).
 """
 
+import argparse
 import json
-import time
-import torch
-from dotenv import load_dotenv
-from huggingface_hub import hf_hub_download
-from transformers import AutoModelForImageClassification, ViTConfig
 from pathlib import Path
+import sys
+import time
+from typing import Any, Dict, List, Optional
 
-from app.ingestion import ingest_model
-from app.evaluation import evaluate_baseline
+import numpy as np
+import torch
+import torch.nn as nn
 
-# Load environment variables from .env if present
-load_dotenv()
+# Ensure project root is on PYTHONPATH
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from app.explainability.config import XAIConfig
+from app.explainability.explainer import XAIExplainer
+from app.explainability.explanation_result import ExplanationResult
+from app.explainability.modality import Modality
+from app.explainability.techniques.registry import select_by_mode, technique_registry
 
 
-def main():
-    print("=" * 65)
-    print("AdverScan — Module 2 Baseline Evaluation Engine")
-    print("=" * 65)
+def parse_args(args: Optional[List[str]] = None) -> argparse.Namespace:
+    """Parse CLI arguments for baseline evaluation and XAI pipeline."""
+    parser = argparse.ArgumentParser(
+        description="AdverScan — Baseline Evaluation and Automatic XAI Pipeline"
+    )
+    parser.add_argument(
+        "--model",
+        type=str,
+        default="cardiffnlp/twitter-roberta-base-sentiment-latest",
+        help="Target model identifier or path (default: cardiffnlp/twitter-roberta-base-sentiment-latest)",
+    )
+    parser.add_argument(
+        "--dataset",
+        type=str,
+        default=None,
+        help="Optional dataset name or split",
+    )
+    parser.add_argument(
+        "--xai-mode",
+        type=str,
+        default="standard",
+        choices=["fast", "standard", "thorough"],
+        help="XAI evaluation mode preset ('fast' | 'standard' | 'thorough') (default: standard)",
+    )
+    parser.add_argument(
+        "--technique",
+        type=str,
+        default=None,
+        help="Optional manual override for XAI technique (e.g. layer_integrated_gradients, saliency, shap)",
+    )
+    parser.add_argument(
+        "--budget",
+        type=int,
+        default=100,
+        help="Maximum number of samples to explain (default: 100)",
+    )
+    parser.add_argument(
+        "--plan",
+        action="store_true",
+        help="Print [XAI PLAN] and exit immediately without executing evaluation or inference",
+    )
+    parser.add_argument(
+        "--skip-xai",
+        action="store_true",
+        help="Skip the entire XAI stage",
+    )
+    parser.add_argument(
+        "--timeout",
+        type=int,
+        default=30,
+        help="Per-sample timeout in seconds for timeout fallback (default: 30)",
+    )
+    parser.add_argument(
+        "--demo",
+        action="store_true",
+        help="Execute rapid standalone demonstration in terminal",
+    )
+    parser.add_argument(
+        "--device",
+        type=str,
+        default="cpu",
+        help="Execution device ('cpu' or 'cuda')",
+    )
+    return parser.parse_args(args)
 
-    model_name = "bazyl/gtsrb-model"
-    dataset_name = "bazyl/GTSRB"
-    batch_size = 32
-    num_classes = 43
 
-    print(f"\n[1/3] Standardizing & Ingesting Model via Module 1 (M1) ...")
-    start_time = time.time()
+class DemoTransformerTextModel(nn.Module):
+    """Lightweight demonstration text model with embedding layer and classifier."""
 
-    # Load and patch HF ViT config (fixes upstream null value in id2label['43'])
-    config_path = hf_hub_download(model_name, "config.json")
-    with open(config_path, "r", encoding="utf-8") as f:
-        cfg_dict = json.load(f)
+    def __init__(self, vocab_size: int = 1000, embed_dim: int = 32, num_classes: int = 3):
+        super().__init__()
+        self.embeddings = nn.Embedding(vocab_size, embed_dim)
+        self.encoder = nn.TransformerEncoder(
+            nn.TransformerEncoderLayer(d_model=embed_dim, nhead=2, batch_first=True, dim_feedforward=64),
+            num_layers=1,
+        )
+        self.fc = nn.Linear(embed_dim, num_classes)
 
-    if "id2label" in cfg_dict:
-        cfg_dict["id2label"] = {
-            str(k): (str(v) if v is not None else "Unused")
-            for k, v in cfg_dict["id2label"].items()
-        }
-        cfg_dict["label2id"] = {v: int(k) for k, v in cfg_dict["id2label"].items()}
-        cfg_dict["num_labels"] = len(cfg_dict["id2label"])
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        if x.dtype != torch.long:
+            x = x.long()
+        emb = self.embeddings(x)
+        h = self.encoder(emb)
+        pooled = h.mean(dim=1)
+        return self.fc(pooled)
 
-    model_config = ViTConfig.from_dict(cfg_dict)
-    raw_model = AutoModelForImageClassification.from_pretrained(model_name, config=model_config, use_safetensors=True)
 
-    # Ingest model through Module 1 standardized interface
-    sample_input = torch.randn(1, 3, 224, 224)
-    adapter, metadata = ingest_model(
-        model_path=raw_model,
-        sample_input=sample_input,
-        model_name="GTSRB_ViT_Classifier",
-        device="cpu",
+from app.explainability.pipeline import (
+    DemoTransformerTextModel,
+    XAIPipeline,
+    display_xai_plan,
+)
+
+
+def run_xai_pipeline(
+    args: argparse.Namespace,
+) -> Optional[Dict[str, Any]]:
+    """Execute the XAI pipeline with CLI configuration, terminal messages, and fallback handling."""
+    cfg = XAIConfig(
+        mode=args.xai_mode,
+        technique=args.technique,
+        budget=args.budget,
+        per_sample_timeout_s=args.timeout,
+    )
+    pipeline = XAIPipeline(config=cfg)
+
+    return pipeline.run(
+        model_name=args.model,
+        mode=args.xai_mode,
+        technique_override=args.technique,
+        budget=args.budget,
+        device=args.device,
+        timeout=args.timeout,
+        plan_only=args.plan,
+        skip_xai=args.skip_xai,
     )
 
-    print(f"M1 Ingestion Complete.")
-    print(f"  Framework: {metadata.framework}")
-    print(f"  Model Name: {metadata.model_name}")
-    print(f"  Target Device: {adapter.device}")
-    print(f"  Adapter Type: {adapter.__class__.__name__}")
 
-    # -------------------------------------------------------------
-    # [2/3] Run Baseline Evaluation over full GTSRB test set
-    # -------------------------------------------------------------
-    print(f"\n[2/3] Running Clean Baseline Evaluation on '{dataset_name}' (test split) ...")
-    print(f"  Batch size: {batch_size}")
-    print(f"  Target classes: {num_classes}")
-
-    result = evaluate_baseline(
-        adapter=adapter,
-        dataset_name=dataset_name,
-        processor_name=model_name,
-        split="test",
-        batch_size=batch_size,
-        num_classes=num_classes,
-        model_name="GTSRB_ViT_Baseline",
-        output_dir="results/baseline",
-    )
-
-    elapsed_sec = time.time() - start_time
-
-    # -------------------------------------------------------------
-    # [3/3] Report Baseline Evaluation Results
-    # -------------------------------------------------------------
-    print("\n" + "=" * 65)
-    print("ADVERSCAN — M2 BASELINE EVALUATION SUMMARY")
-    print("=" * 65)
-    print(f"Dataset Identifier:        {result.dataset_name} (test split)")
-    print(f"Model Identifier:          {result.model_name}")
-    print(f"Evaluated Samples:         {result.num_samples:,}")
-    print(f"Number of Classes:         {result.num_classes}")
-    print(f"Execution Device:          {result.device}")
-    print(f"Evaluation Runtime:        {elapsed_sec:.2f} seconds")
-    print("-" * 65)
-    print(f"Overall Accuracy:          {result.accuracy * 100:.2f}% ({result.accuracy:.6f})")
-    print(f"Macro Precision:           {result.precision_macro * 100:.2f}% ({result.precision_macro:.6f})")
-    print(f"Macro Recall:              {result.recall_macro * 100:.2f}% ({result.recall_macro:.6f})")
-    print(f"Macro F1-Score:            {result.f1_macro * 100:.2f}% ({result.f1_macro:.6f})")
-    print(f"Weighted Precision:        {result.precision_weighted * 100:.2f}% ({result.precision_weighted:.6f})")
-    print(f"Weighted Recall:           {result.recall_weighted * 100:.2f}% ({result.recall_weighted:.6f})")
-    print(f"Weighted F1-Score:         {result.f1_weighted * 100:.2f}% ({result.f1_weighted:.6f})")
-    print(f"Average Confidence:        {result.average_confidence * 100:.2f}% ({result.average_confidence:.6f})")
-    print(f"Average Entropy:           {result.average_entropy:.6f} bits")
-    print(f"Confusion Matrix Shape:    {len(result.confusion_matrix)} × {len(result.confusion_matrix[0])}")
-    print("=" * 65)
-
-    json_artifact = Path("results/baseline") / "baseline_gtsrb_vit_baseline.json"
-    print(f"\n✅ Baseline Result persisted to: {json_artifact}")
+def main() -> int:
+    """CLI entrypoint."""
+    args = parse_args()
+    run_xai_pipeline(args)
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

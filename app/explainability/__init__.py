@@ -44,11 +44,20 @@ from app.explainability.profiling import (
     profile_explainer_call,
 )
 
+
+def __getattr__(name: str):
+    if name in ("XAIPipeline", "run_xai_pipeline"):
+        from app.explainability import pipeline
+        return getattr(pipeline, name)
+    raise AttributeError(f"module '{__name__}' has no attribute '{name}'")
+
 __all__ = [
     # Core contracts & coordinator
     "ExplanationResult",
     "XAIExplainer",
     "XAIConfig",
+    "XAIPipeline",
+    "run_xai_pipeline",
     "predict_batched",
     "predict_proba_np",
     "compare_explanations",
