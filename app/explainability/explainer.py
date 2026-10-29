@@ -169,7 +169,8 @@ class XAIExplainer:
             _, validity_flags = is_valid_adversarial(prep_clean, prep_adv, domain_prof)
 
         # 4. Select and validate technique
-        tech_name = (technique or (domain_prof.default_technique if domain_prof else self.default_technique)).lower()
+        active_tech = technique or cfg.technique or (domain_prof.default_technique if domain_prof else self.default_technique)
+        tech_name = active_tech.lower()
         explainer = self.registry.select_technique(mod, model=model, preferred=tech_name, **explainer_kwargs)
 
         # 5. Get predictions, confidences, and probabilities using batched prediction
