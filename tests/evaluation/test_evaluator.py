@@ -100,6 +100,9 @@ def test_baseline_evaluator_workflow():
     assert result.average_entropy >= 0.0
     assert len(result.confusion_matrix) == 43
     assert len(result.confusion_matrix[0]) == 43
+    assert result.predictions is not None and len(result.predictions) == 8
+    assert result.targets is not None and len(result.targets) == 8
+    assert result.sample_confidences is not None and len(result.sample_confidences) == 8
 
 
 def test_logit_slicing_and_prediction_extraction():
