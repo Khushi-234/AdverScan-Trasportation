@@ -85,6 +85,10 @@ class PipelineConfig:
     # XAI Configuration (M6)
     enable_xai: bool = False
     xai_techniques: List[str] = field(default_factory=lambda: ["shap"])
+    xai_mode: str = "standard"
+    xai_budget: Optional[int] = None
+    xai_figures: bool = False
+    xai_cache: bool = True
 
     # Hardening Configuration (M7)
     enable_hardening: bool = False
@@ -121,9 +125,23 @@ class PipelineConfig:
         if not self.attacks and self.mode in {"attack_assessment", "full"}:
             raise ValueError("At least one attack must be specified when mode is 'attack_assessment' or 'full'")
 
+        valid_xai_techniques = {
+            "shap",
+            "lime",
+            "saliency",
+            "integrated_gradients",
+            "ig",
+            "gradcam",
+            "grad_cam",
+            "layer_ig",
+            "layer_integrated_gradients",
+            "treeshap",
+            "tree_shap",
+            "auto",
+        }
         for tech in self.xai_techniques:
-            if tech.lower() not in {"shap", "lime"}:
-                raise ValueError(f"Unsupported XAI technique '{tech}'. Must be 'shap' or 'lime'")
+            if tech.lower() not in valid_xai_techniques:
+                raise ValueError(f"Unsupported XAI technique '{tech}'. Must be one of {valid_xai_techniques}")
 
         if self.sample_count is not None:
             if not isinstance(self.sample_count, int) or isinstance(self.sample_count, bool) or self.sample_count <= 0:

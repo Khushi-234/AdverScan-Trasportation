@@ -644,36 +644,59 @@ class AdverScanOrchestrator:
             step_start = time.time()
             print(f"\n  ⏳ [Step 6/9] M6 XAI Explainability ({', '.join(config.xai_techniques)})...")
             try:
-                xai_explainer = XAIExplainer()
+                import json
+                from app.explainability.config import XAIConfig
+                from app.explainability.cache import ExplanationCache
+                xai_cfg = XAIConfig(
+                    mode=getattr(config, "xai_mode", "standard"),
+                    budget=getattr(config, "xai_budget", None) or 100,
+                )
+                xai_cache = ExplanationCache() if getattr(config, "xai_cache", True) else None
+                xai_explainer = XAIExplainer(config=xai_cfg, cache=xai_cache)
+
                 for atk_name, atk_res in attack_results_coll.items():
                     vuln_info = result.vulnerability_analysis.get(atk_name, {})
                     assess_res = vuln_info.get("assessment")
                     for tech in config.xai_techniques:
                         xai_start = time.time()
-                        print(f"    ▶ Computing {tech.upper()} explanation for attack '{atk_name.upper()}'...", end="", flush=True)
+                        tech_tag = "AUTO" if tech.lower() == "auto" else tech.upper()
+                        print(f"    ▶ Computing {tech_tag} explanation for attack '{atk_name.upper()}'...", end="", flush=True)
                         exp_res = xai_explainer.explain_attack_result(
                             model=adapter,
                             attack_result=atk_res,
                             assessment_result=assess_res,
-                            technique=tech,
+                            technique=None if tech.lower() == "auto" else tech,
                             modality=getattr(adapter, "data_domain", None) or getattr(config, "data_domain", None),
+                            config=xai_cfg,
                         )
+                        actual_tech = exp_res[0].technique if isinstance(exp_res, list) and exp_res else getattr(exp_res, "technique", tech)
+                        res_key = f"{atk_name}_{actual_tech}"
+
                         if isinstance(exp_res, list):
                             res_dict = exp_res[0].to_dict() if exp_res else {}
                             res_dict["batch_results"] = [r.to_dict() for r in exp_res]
-                            result.xai_results[f"{atk_name}_{tech}"] = res_dict
+                            result.xai_results[res_key] = res_dict
                         else:
-                            result.xai_results[f"{atk_name}_{tech}"] = exp_res.to_dict()
+                            result.xai_results[res_key] = exp_res.to_dict()
 
                         if config.output_dir:
                             try:
                                 xai_out_dir = Path(config.output_dir) / "xai"
                                 xai_out_dir.mkdir(parents=True, exist_ok=True)
-                                json_path = xai_out_dir / f"{atk_name}_{tech}_explanation.json"
+                                json_path = xai_out_dir / f"{res_key}_explanation.json"
                                 if isinstance(exp_res, list) and exp_res and hasattr(exp_res[0], "save_json"):
                                     exp_res[0].save_json(json_path)
                                 elif hasattr(exp_res, "save_json"):
                                     exp_res.save_json(json_path)
+
+                                # Append to xai_results.jsonl for visualization ingestion
+                                jsonl_path = xai_out_dir / "xai_results.jsonl"
+                                with open(jsonl_path, "a", encoding="utf-8") as jf:
+                                    if isinstance(exp_res, list):
+                                        for r in exp_res:
+                                            jf.write(json.dumps(r.to_dict(), default=str) + "\n")
+                                    elif hasattr(exp_res, "to_dict"):
+                                        jf.write(json.dumps(exp_res.to_dict(), default=str) + "\n")
                             except Exception as ex:
                                 print(f" [Save err: {ex}]", end="")
 
@@ -686,6 +709,15 @@ class AdverScanOrchestrator:
                         xai_out_dir.mkdir(parents=True, exist_ok=True)
                         with open(xai_out_dir / "xai_summary.json", "w", encoding="utf-8") as f:
                             json.dump(result.xai_results, f, indent=2, default=str)
+
+                        # Generate visual figures if requested
+                        if getattr(config, "xai_figures", False):
+                            try:
+                                from app.explainability.visualization.build_figures import build_all_figures
+                                n_figs = build_all_figures(str(xai_out_dir))
+                                print(f"    ✓ Generated {n_figs} XAI visualization figures in '{xai_out_dir}/figures'")
+                            except Exception as fig_err:
+                                print(f"    ⚠️ XAI Figures generation warning: {fig_err}")
                     except Exception as ex:
                         print(f" [Summary save err: {ex}]", end="")
 
