@@ -238,4 +238,27 @@ DATASET_TO_RECOMMENDED_MODEL: Dict[str, str] = {
     "credit_fraud": "tabular-mlp-credit-fraud",
 }
 
-__all__ = ["MODEL_PRESETS", "DATASET_TO_RECOMMENDED_MODEL"]
+# Approximate / Benchmark sample counts for known evaluation datasets
+KNOWN_DATASET_SAMPLE_COUNTS: Dict[str, int] = {
+    "bazyl/gtsrb": 12630,
+    "gtsrb": 12630,
+    "miladfa7/intel-image-classification": 3000,
+    "puneet6060/intel-image-classification": 3000,
+    "intel-image-classification": 3000,
+    "uoft-cs/cifar10": 10000,
+    "cifar10": 10000,
+    "imagenet-1k": 50000,
+    "imagenet": 50000,
+    "sst2": 872,
+    "glue/sst2": 872,
+    "imdb": 25000,
+    "ag_news": 7600,
+    "cardiffnlp/tweet_eval": 12284,
+    "tweet_eval": 12284,
+    "adult_census": 250,
+    "credit_fraud": 250,
+    "time_series_ecg": 200,
+    "time_series_classification": 200,
+}
+
+__all__ = ["MODEL_PRESETS", "DATASET_TO_RECOMMENDED_MODEL", "KNOWN_DATASET_SAMPLE_COUNTS"]

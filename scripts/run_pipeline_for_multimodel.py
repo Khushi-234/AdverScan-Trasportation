@@ -33,7 +33,7 @@ sys.path.insert(0, str(REPO_ROOT))
 from app.attack_engine import discover_attacks, get_attack, list_attacks
 from app.evaluation.dataset_loader.factory import get_dataset_loader, resolve_dataset_file
 from app.ingestion.model_registry import ModelPresetRegistry
-from app.ingestion.presets import DATASET_TO_RECOMMENDED_MODEL, MODEL_PRESETS
+from app.ingestion.presets import DATASET_TO_RECOMMENDED_MODEL, KNOWN_DATASET_SAMPLE_COUNTS, MODEL_PRESETS
 from app.orchestration import AdverScanOrchestrator, PipelineConfig
 from app.utils import get_execution_device_info, resolve_device
 from app.core.device_manager import DeviceManager
@@ -256,10 +256,41 @@ def parse_args():
         help="Enable M6 Explainable AI (XAI) feature attribution",
     )
     parser.add_argument(
+        "--xai-mode",
+        type=str,
+        default="standard",
+        choices=["fast", "standard", "thorough"],
+        help="Operational mode preset for XAI evaluation ('fast', 'standard', 'thorough')",
+    )
+    parser.add_argument(
         "--xai-techniques",
         nargs="+",
-        default=["shap"],
-        help="XAI techniques to apply (shap, lime)",
+        default=["auto"],
+        help="XAI techniques to apply ('auto' for model-adaptive routing, 'shap', 'lime', 'layer_ig', 'integrated_gradients', 'treeshap', 'saliency', 'gradcam')",
+    )
+    parser.add_argument(
+        "--xai-budget",
+        type=int,
+        default=5,
+        help="Maximum number of sample explanations to generate per attack (default: 5)",
+    )
+    parser.add_argument(
+        "--xai-figures",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Generate rich multi-modal visual explanation figures & plots (default: False)",
+    )
+    parser.add_argument(
+        "--xai-plan",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Preview the formatted XAI execution plan before execution",
+    )
+    parser.add_argument(
+        "--xai-cache",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Enable ExplanationCache to reuse clean input attributions across attacks (default: True)",
     )
     parser.add_argument(
         "--enable-hardening",
@@ -340,29 +371,8 @@ def prompt_domain_selection() -> str:
 
 
 # =====================================================================
-# Known Dataset Sample Counts & Total Sample Inspector
+# Total Sample Inspector (using KNOWN_DATASET_SAMPLE_COUNTS from presets.py)
 # =====================================================================
-KNOWN_DATASET_SAMPLE_COUNTS: Dict[str, int] = {
-    "bazyl/gtsrb": 12630,
-    "gtsrb": 12630,
-    "miladfa7/intel-image-classification": 3000,
-    "puneet6060/intel-image-classification": 3000,
-    "intel-image-classification": 3000,
-    "uoft-cs/cifar10": 10000,
-    "cifar10": 10000,
-    "imagenet-1k": 50000,
-    "imagenet": 50000,
-    "sst2": 872,
-    "glue/sst2": 872,
-    "imdb": 25000,
-    "ag_news": 7600,
-    "cardiffnlp/tweet_eval": 12284,
-    "tweet_eval": 12284,
-    "adult_census": 250,
-    "credit_fraud": 250,
-    "time_series_ecg": 200,
-    "time_series_classification": 200,
-}
 
 
 def get_dataset_total_samples(
@@ -691,23 +701,71 @@ def prompt_pipeline_options() -> Dict[str, Any]:
     selected_mode = mode_map.get(mode_choice, "full")
 
     enable_xai = False
-    xai_techniques = ["shap"]
+    xai_mode = "standard"
+    xai_techniques = ["auto"]
+    xai_budget = 5
+    xai_figures = False
+    xai_plan = False
+    xai_cache = True
     enable_hardening = False
     defense = "auto"
     enable_retest = True
     enable_report = True
 
     if selected_mode == "full":
-        xai_in = input("Enable M6 Explainable AI (XAI) feature attributions? [y/N]: ").strip().lower()
+        xai_in = input("Enable M6 Explainable AI (XAI) feature attributions? [Y/n]: ").strip().lower() or "y"
         enable_xai = xai_in in ("y", "yes", "true", "1")
         if enable_xai:
-            xai_tech_choice = input("Select XAI Technique: 1. SHAP, 2. LIME, 3. Both [1]: ").strip() or "1"
+            print("\n  Select XAI Evaluation Mode:")
+            print("    1. Fast       (Rapid screening, fewer sampling steps)")
+            print("    2. Standard   (Balanced speed & attribution fidelity) [Default]")
+            print("    3. Thorough   (High-precision evaluations, maximum sampling steps)")
+            xai_mode_choice = input("  Select Mode [2]: ").strip() or "2"
+            xai_mode_map = {"1": "fast", "2": "standard", "3": "thorough"}
+            xai_mode = xai_mode_map.get(xai_mode_choice, "standard")
+
+            print("\n  Select XAI Explanation Technique:")
+            print("    1. Auto (Model-Adaptive Routing via Rules Table) [Recommended]")
+            print("    2. SHAP (Kernel / Sampling SHAP)")
+            print("    3. LIME (Local Interpretable Model-agnostic Explanations)")
+            print("    4. Integrated Gradients / Layer IG (Neural Networks / Transformers)")
+            print("    5. TreeSHAP (Tree Ensembles: XGBoost, Random Forest)")
+            print("    6. Saliency Map (Fast Gradient Saliency)")
+            print("    7. Grad-CAM (Convolutional Networks)")
+            print("    8. Multiple / Custom (Enter space-separated technique names)")
+            xai_tech_choice = input("  Select Technique [1]: ").strip() or "1"
             if xai_tech_choice == "2":
-                xai_techniques = ["lime"]
-            elif xai_tech_choice == "3":
-                xai_techniques = ["shap", "lime"]
-            else:
                 xai_techniques = ["shap"]
+            elif xai_tech_choice == "3":
+                xai_techniques = ["lime"]
+            elif xai_tech_choice == "4":
+                xai_techniques = ["integrated_gradients"]
+            elif xai_tech_choice == "5":
+                xai_techniques = ["treeshap"]
+            elif xai_tech_choice == "6":
+                xai_techniques = ["saliency"]
+            elif xai_tech_choice == "7":
+                xai_techniques = ["gradcam"]
+            elif xai_tech_choice == "8":
+                custom_techs = input("  Enter technique names (e.g. 'shap lime'): ").strip()
+                xai_techniques = custom_techs.split() if custom_techs else ["auto"]
+            else:
+                xai_techniques = ["auto"]
+
+            budget_in = input("  Sample budget for XAI explanations [5]: ").strip() or "5"
+            try:
+                xai_budget = max(1, int(budget_in))
+            except ValueError:
+                xai_budget = 5
+
+            fig_in = input("  Generate multi-modal XAI visualization figures & plots? [y/N]: ").strip().lower()
+            xai_figures = fig_in in ("y", "yes", "true", "1")
+
+            plan_in = input("  Preview formatted XAI execution plan before running? [Y/n]: ").strip().lower() or "y"
+            xai_plan = plan_in in ("y", "yes", "true", "1")
+
+            cache_in = input("  Enable ExplanationCache to reuse clean attributions across attacks? [Y/n]: ").strip().lower() or "y"
+            xai_cache = cache_in in ("y", "yes", "true", "1")
 
         hard_in = input("Enable M7 Defense & Hardening Engine? [y/N]: ").strip().lower()
         enable_hardening = hard_in in ("y", "yes", "true", "1")
@@ -738,7 +796,12 @@ def prompt_pipeline_options() -> Dict[str, Any]:
     return {
         "mode": selected_mode,
         "enable_xai": enable_xai,
+        "xai_mode": xai_mode,
         "xai_techniques": xai_techniques,
+        "xai_budget": xai_budget,
+        "xai_figures": xai_figures,
+        "xai_plan": xai_plan,
+        "xai_cache": xai_cache,
         "enable_hardening": enable_hardening,
         "defense": defense,
         "enable_retest": enable_retest,
@@ -768,7 +831,15 @@ def print_configuration_summary(opts: Dict[str, Any]):
     print(f"Execution Mode:             {opts['mode'].upper()}")
     print(f"Target Device:              {opts['device'].upper()}")
     print(f"Batch Size:                 {opts['batch_size']}")
-    print(f"XAI Enabled (M6):           {opts['enable_xai']} {opts['xai_techniques'] if opts['enable_xai'] else ''}")
+    if opts.get("enable_xai"):
+        techs_str = ", ".join(opts["xai_techniques"]).upper()
+        mode_str = str(opts.get("xai_mode", "standard")).upper()
+        budget_str = f"{opts.get('xai_budget', 5)} samples/attack"
+        figs_str = "Enabled" if opts.get("xai_figures") else "Disabled"
+        cache_str = "Enabled" if opts.get("xai_cache") else "Disabled"
+        print(f"XAI Enabled (M6):           True (Mode: {mode_str}, Techniques: {techs_str}, Budget: {budget_str}, Figures: {figs_str}, Cache: {cache_str})")
+    else:
+        print(f"XAI Enabled (M6):           False")
     print(f"Hardening Enabled (M7):     {opts['enable_hardening']} (Defense: {opts['defense']})")
     print(f"Re-Test Enabled (M8):       {opts['enable_retest']}")
     print(f"Report Generator (M9):      {opts['enable_report']}")
@@ -980,7 +1051,12 @@ def main():
             "device": pipeline_opts["device"],
             "batch_size": args.batch_size,
             "enable_xai": pipeline_opts["enable_xai"],
+            "xai_mode": pipeline_opts.get("xai_mode", "standard"),
             "xai_techniques": pipeline_opts["xai_techniques"],
+            "xai_budget": pipeline_opts.get("xai_budget", 5),
+            "xai_figures": pipeline_opts.get("xai_figures", False),
+            "xai_plan": pipeline_opts.get("xai_plan", False),
+            "xai_cache": pipeline_opts.get("xai_cache", True),
             "enable_hardening": pipeline_opts["enable_hardening"],
             "defense": pipeline_opts["defense"],
             "enable_retest": pipeline_opts["enable_retest"],
@@ -1074,7 +1150,12 @@ def main():
             "device": resolve_device(args.device),
             "batch_size": args.batch_size,
             "enable_xai": args.enable_xai,
+            "xai_mode": str(args.xai_mode).lower(),
             "xai_techniques": [t.lower() for t in args.xai_techniques],
+            "xai_budget": args.xai_budget,
+            "xai_figures": args.xai_figures,
+            "xai_plan": args.xai_plan,
+            "xai_cache": args.xai_cache,
             "enable_hardening": args.enable_hardening,
             "defense": args.defense.lower(),
             "enable_retest": args.enable_retest,
@@ -1084,17 +1165,11 @@ def main():
 
     print_configuration_summary(opts)
 
-    if is_interactive:
-        confirm = input("▶ Proceed and launch security assessment? [Y/n]: ").strip().lower()
-        if confirm in ("n", "no"):
-            print("  Assessment aborted by user.")
-            sys.exit(0)
-
     # Unpack strongly-typed pipeline configuration parameters
-    domain_val: str = str(opts["domain"])
-    model_id_val: str = str(opts["model_id"])
-    model_name_val: str = str(opts["model_name"])
-    dataset_name_val: str = str(opts["dataset_name"])
+    domain_val: str = str(opts.get("domain", "image"))
+    model_id_val: str = str(opts.get("model_id", ""))
+    model_name_val: str = str(opts.get("model_name", "TargetModel"))
+    dataset_name_val: str = str(opts.get("dataset_name", ""))
     proc_name_val: Optional[str] = str(opts["processor_name"]) if opts.get("processor_name") else None
     num_classes_val: int = int(opts["num_classes"]) if "num_classes" in opts and isinstance(opts["num_classes"], (int, float, str)) else 2
     preset_info_val: Dict[str, Any] = opts["preset_info"] if isinstance(opts.get("preset_info"), dict) else {}
@@ -1105,11 +1180,50 @@ def main():
     batch_size_val: int = int(opts["batch_size"]) if "batch_size" in opts and isinstance(opts["batch_size"], (int, float, str)) else 32
     enable_xai_val: bool = bool(opts.get("enable_xai", False))
     xai_techniques_val: List[str] = [str(t) for t in opts["xai_techniques"]] if isinstance(opts.get("xai_techniques"), list) else []
+    xai_mode_val: str = str(opts.get("xai_mode", "standard"))
+    raw_xai_budget = opts.get("xai_budget", 5)
+    xai_budget_val: int = int(raw_xai_budget) if isinstance(raw_xai_budget, (int, str)) and not isinstance(raw_xai_budget, bool) else 5
+    xai_figures_val: bool = bool(opts.get("xai_figures", False))
+    xai_plan_val: bool = bool(opts.get("xai_plan", False))
+    xai_cache_val: bool = bool(opts.get("xai_cache", True))
     enable_hardening_val: bool = bool(opts.get("enable_hardening", False))
     defense_val: str = str(opts.get("defense", "auto"))
     enable_retest_val: bool = bool(opts.get("enable_retest", True))
     enable_report_val: bool = bool(opts.get("enable_report", True))
     output_dir_val: Optional[str] = str(opts["output_dir"]) if opts.get("output_dir") else None
+
+    # Display XAI Execution Plan if enabled
+    if enable_xai_val and xai_plan_val:
+        try:
+            from app.explainability.pipeline import display_xai_plan
+            from app.explainability.techniques.registry import RULES_TABLE, detect_model_type, normalize_model_type
+            m_arch = detect_model_type(model_id_val, domain_val)
+            canon_arch = normalize_model_type(m_arch)
+            chosen_tech = xai_techniques_val[0] if xai_techniques_val else "auto"
+            if chosen_tech == "auto":
+                chosen_tech = str(RULES_TABLE.get(canon_arch, {}).get(xai_mode_val, "integrated_gradients"))
+                reason = f"{m_arch} + {xai_mode_val} mode (routing table)"
+            else:
+                reason = f"Manual override: {chosen_tech}"
+            display_xai_plan(
+                model_name=model_name_val,
+                model_type=m_arch,
+                modality=domain_val,
+                device=device_val,
+                mode=xai_mode_val,
+                technique=chosen_tech,
+                selection_reason=reason,
+                budget=xai_budget_val,
+                total_samples=samples_val if samples_val > 0 else 100,
+            )
+        except Exception as plan_err:
+            print(f"  [XAI Plan Preview Error: {plan_err}]")
+
+    if is_interactive:
+        confirm = input("▶ Proceed and launch security assessment? [Y/n]: ").strip().lower()
+        if confirm in ("n", "no"):
+            print("  Assessment aborted by user.")
+            sys.exit(0)
 
     # 1. Prepare Dataset Loader and Sample Input
     print(f"\n[1/3] Preparing dataset loader for '{dataset_name_val}' ({domain_val.upper()})...")
@@ -1190,6 +1304,10 @@ def main():
         custom_dataset_loader=dataset_loader,
         enable_xai=enable_xai_val,
         xai_techniques=xai_techniques_val,
+        xai_mode=xai_mode_val,
+        xai_budget=xai_budget_val,
+        xai_figures=xai_figures_val,
+        xai_cache=xai_cache_val,
         enable_hardening=enable_hardening_val,
         defense=defense_val,
         enable_retest=enable_retest_val,
@@ -1407,6 +1525,20 @@ def main():
 
             print(f"\n  ▶ Explanation: [{atk_n} — {tech}] (Modality: {modality}, Status: {status})")
 
+            # XAI Decision & Model-Adaptive Routing
+            x_dec = xai_data.get("xai_decision") or {}
+            if x_dec:
+                sel_tech = str(x_dec.get("technique_selected", tech)).upper()
+                reason = x_dec.get("selection_reason", "Adaptive routing")
+                m_type = x_dec.get("model_type", "neural_network")
+                dev_str = str(x_dec.get("device", "cpu")).upper()
+                print(f"    • Routing Decision:      {sel_tech} ({reason})")
+                print(f"    • Inferred Architecture: {m_type} | Device: {dev_str}")
+                if x_dec.get("fallback"):
+                    print(f"    • Fallback Triggered:    YES (Execution timeout reached; gracefully fell back)")
+                if "explain_seconds" in x_dec:
+                    print(f"    • XAI Execution Time:    {float(x_dec.get('explain_seconds', 0.0)):.4f}s")
+
             clean_p = xai_data.get("clean_prediction")
             adv_p = xai_data.get("adversarial_prediction")
             clean_c = xai_data.get("clean_confidence")
@@ -1469,15 +1601,65 @@ def main():
             if shifted_top:
                 print(f"    • Most Shifted Features: {_format_feats(shifted_top)}")
 
+            # Failure Analysis, Root-Cause & Defense Suggestions
+            fail_data = xai_data.get("failure_analysis", {})
+            top_contrib = fail_data.get("contributing_features", [])
+            if top_contrib:
+                print(f"\n    [Why This Result Came — Diagnostic Feature Shifts]")
+                for feat in top_contrib[:4]:
+                    name = feat.get("feature", "feature")
+                    c_imp = feat.get("clean_importance", 0.0)
+                    a_imp = feat.get("adversarial_importance", 0.0)
+                    shift = feat.get("importance_shift", 0.0)
+                    rank = feat.get("rank", 1)
+                    print(f"      • #{rank} '{name}': Clean={c_imp:.4f} → Adv={a_imp:.4f} (Shift: {shift:+.4f})")
+
+            attack_reason = fail_data.get("attack_reason")
+            if attack_reason:
+                print(f"\n    [Why This Attack Succeeded — Root-Cause Narrative]")
+                print(f"      {attack_reason}")
+
+            hints = xai_data.get("defense_hints") or fail_data.get("defense_hints", [])
+            if hints:
+                print(f"\n    [Defense Hints — Quantitative Evidence & Targeted Mitigations]")
+                for h in hints:
+                    f_text = h.get("finding", "")
+                    fam = h.get("suggested_family", "defense")
+                    stg = h.get("stage", "training")
+                    conf = h.get("confidence", "high")
+                    print(f"      • Finding:     \"{f_text}\"")
+                    print(f"        └─ Suggested Family: {fam} (Stage: {stg}, Confidence: {conf})")
+                    if "evidence" in h and isinstance(h["evidence"], dict):
+                        ev_str = ", ".join(f"{k}={v}" for k, v in h["evidence"].items())
+                        print(f"        └─ Evidence:         {ev_str}")
+
+            pipeline = xai_data.get("defense_pipeline") or fail_data.get("defense_pipeline", {})
+            if pipeline:
+                print(f"\n    [What Defense We Can Apply — 6-Stage Defense Pipeline Architecture]")
+                print("      [1. Preprocessing] → [2. Transformation] → [3. Detection] → [4. Smoothing] → [5. Feature-level] → [6. Ensemble]")
+                for stg_key in sorted(pipeline.keys()):
+                    stg_data = pipeline[stg_key]
+                    if isinstance(stg_data, dict):
+                        stg_name = stg_data.get("stage", stg_key)
+                        stg_focus = stg_data.get("focus", "")
+                        techs = stg_data.get("techniques", [])
+                        print(f"      • {stg_name} ({stg_focus}): {', '.join(techs)}")
+
             if "batch_results" in xai_data:
                 b_res = xai_data["batch_results"]
-                print(f"    • Batch Explanations:    {len(b_res)} sample(s) evaluated")
+                print(f"\n    • Batch Explanations:    {len(b_res)} sample(s) evaluated")
 
-            # Check if artifact exists on disk
+            # Check if artifacts exist on disk
             if pipeline_config and pipeline_config.output_dir:
-                expected_json = Path(pipeline_config.output_dir) / "xai" / f"{key}_explanation.json"
+                xai_dir = Path(pipeline_config.output_dir) / "xai"
+                expected_json = xai_dir / f"{key}_explanation.json"
                 if expected_json.exists():
                     print(f"    • Exported JSON Report:  {expected_json}")
+                figs_dir = xai_dir / "figures"
+                if figs_dir.exists():
+                    fig_files = list(figs_dir.glob("*.png")) + list(figs_dir.glob("*.pdf"))
+                    if fig_files:
+                        print(f"    • Visual Figures:        {len(fig_files)} plots generated in {figs_dir}")
 
     # Hardening & Re-Test Results (if available)
     if result.hardening_results and result.hardening_results.get("selected_defense"):

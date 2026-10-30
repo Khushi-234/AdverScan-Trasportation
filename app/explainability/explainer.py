@@ -35,6 +35,7 @@ from app.explainability.techniques.shap_explainer import SHAPExplainer, TreeSHAP
 from app.explainability.profiling import profile_explainer_call
 from app.explainability.config import XAIConfig
 from app.explainability.cache import ExplanationCache, cache_key
+from app.explainability.transformation_evidence import extract_attack_transformation
 
 
 class XAIExplainer:

@@ -389,7 +389,7 @@ class TechniqueRegistry:
         modality_str = norm_mod.value if hasattr(norm_mod, "value") else str(modality)
 
         # 1. Manual override handling
-        if override is not None and str(override).strip():
+        if override is not None and str(override).strip() and str(override).strip().lower() not in ("auto", "none", "default"):
             norm_override = str(override).strip().lower().replace("-", "_")
             compatible, err_msg = check_override_compatibility(norm_override, model_type, norm_mod, model)
             if not compatible:

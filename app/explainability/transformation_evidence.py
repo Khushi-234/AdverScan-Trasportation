@@ -9,7 +9,7 @@ modifications from model importance scores.
 from typing import Any, Dict, List, Optional
 import numpy as np
 
-from app.explainability.input_utils import to_numpy
+from app.explainability.utils import to_numpy
 
 
 def extract_attack_transformation(
