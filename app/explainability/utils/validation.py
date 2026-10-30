@@ -23,6 +23,15 @@ def get_shape(x: Any) -> Tuple[int, ...]:
         return tuple(x.shape)
     if isinstance(x, (list, tuple)):
         return (len(x),)
+    if isinstance(x, dict) or hasattr(x, "items"):
+        for k in ("input_ids", "inputs", "pixel_values", "data"):
+            if k in x and hasattr(x[k], "shape"):
+                return tuple(x[k].shape)
+        first_val = next(iter(x.values()), None) if hasattr(x, "values") else None
+        if hasattr(first_val, "shape"):
+            return tuple(first_val.shape)
+        if isinstance(first_val, (list, tuple)):
+            return (len(first_val),)
     return ()
 
 
@@ -108,6 +117,9 @@ def validate_single_sample(inputs: Any, modality: str = "tabular") -> None:
             n_samples = shape[0]
     elif modality_lower == "tabular":
         if len(shape) == 2:
+            n_samples = shape[0]
+    elif modality_lower in ("text", "nlp"):
+        if len(shape) >= 2:
             n_samples = shape[0]
 
     if n_samples is not None and n_samples > 1:

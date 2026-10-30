@@ -43,6 +43,8 @@ class TextModalityHandler(BaseModalityHandler):
                         if isinstance(ids, torch.Tensor):
                             ids_cpu = ids.detach().cpu()
                             if ids_cpu.ndim == 2:
+                                if ids_cpu.shape[0] == 1:
+                                    return tokenizer.decode(ids_cpu[0], skip_special_tokens=True)
                                 return [tokenizer.decode(row, skip_special_tokens=True) for row in ids_cpu]
                             return tokenizer.decode(ids_cpu, skip_special_tokens=True)
                         elif isinstance(ids, (list, tuple)):
@@ -56,6 +58,8 @@ class TextModalityHandler(BaseModalityHandler):
             if isinstance(inputs, torch.Tensor) and tokenizer is not None and hasattr(tokenizer, "decode"):
                 ids_cpu = inputs.detach().cpu()
                 if ids_cpu.ndim == 2:
+                    if ids_cpu.shape[0] == 1:
+                        return tokenizer.decode(ids_cpu[0], skip_special_tokens=True)
                     return [tokenizer.decode(row, skip_special_tokens=True) for row in ids_cpu]
                 return tokenizer.decode(ids_cpu, skip_special_tokens=True)
         except Exception:

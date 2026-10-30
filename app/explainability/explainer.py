@@ -227,6 +227,9 @@ class XAIExplainer:
                 "selection_reason": f"Selected '{tech_name}' for {mod.value}.",
             }
 
+        if tok is not None and "tokenizer" not in explainer_kwargs:
+            explainer_kwargs["tokenizer"] = tok
+
         # 5. Get predictions, confidences, and probabilities using batched prediction
         clean_probs = predict_proba_np(
             model,
@@ -234,7 +237,7 @@ class XAIExplainer:
             output_mode=output_mode,
             batch_size=cfg.batch_size,
             max_text_length=cfg.max_text_length,
-            tokenizer=kwargs.get("tokenizer"),
+            tokenizer=tok,
         )
         adv_probs = predict_proba_np(
             model,
@@ -242,7 +245,7 @@ class XAIExplainer:
             output_mode=output_mode,
             batch_size=cfg.batch_size,
             max_text_length=cfg.max_text_length,
-            tokenizer=kwargs.get("tokenizer"),
+            tokenizer=tok,
         )
         clean_pred, clean_conf = extract_prediction_and_confidence(clean_probs, output_mode=output_mode)
         adv_pred, adv_conf = extract_prediction_and_confidence(adv_probs, output_mode=output_mode)

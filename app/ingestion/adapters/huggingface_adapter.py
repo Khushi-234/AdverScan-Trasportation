@@ -66,6 +66,20 @@ class HuggingFaceAdapter(BaseModelAdapter):
         """Get current model device."""
         return self._device
 
+    @property
+    def tokenizer(self) -> Optional[Any]:
+        """Access underlying tokenizer from processor if available."""
+        if hasattr(self, "processor") and self.processor is not None:
+            if hasattr(self.processor, "tokenizer") and self.processor.tokenizer is not None:
+                return self.processor.tokenizer
+            if hasattr(self.processor, "get_processor") and callable(self.processor.get_processor):
+                proc = self.processor.get_processor()
+                if proc is not None:
+                    return proc
+            if hasattr(self.processor, "_tokenizer") and self.processor._tokenizer is not None:
+                return self.processor._tokenizer
+        return getattr(self._model, "tokenizer", None)
+
     def get_model(self) -> nn.Module:
         """Return the underlying Hugging Face model."""
         return self._model

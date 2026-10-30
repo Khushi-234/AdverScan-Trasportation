@@ -110,12 +110,56 @@ class LayerIGExplainer(BaseExplainer):
 
         try:
             device = next(unwrapped.parameters()).device if list(unwrapped.parameters()) else torch.device("cpu")
-            x = to_tensor(inputs).to(device)
 
-            if _CAPTUM_AVAILABLE:
-                lig = LayerIntegratedGradients(unwrapped, target_layer)
-                attributions = lig.attribute(x, target=target_class, n_steps=eff_steps)
-                attr_np = attributions.detach().cpu().numpy()
+            def forward_func(*f_args, **f_kwargs):
+                out = unwrapped(*f_args, **f_kwargs)
+                if hasattr(out, "logits") and out.logits is not None:
+                    return out.logits
+                if hasattr(out, "prediction_logits") and out.prediction_logits is not None:
+                    return out.prediction_logits
+                return out
+
+            tok = (
+                kwargs.get("tokenizer")
+                or getattr(model, "tokenizer", None)
+                or (getattr(model.processor, "tokenizer", None) if hasattr(model, "processor") else None)
+                or (model.processor.get_processor() if hasattr(model, "processor") and hasattr(model.processor, "get_processor") else None)
+                or (getattr(model.processor, "_tokenizer", None) if hasattr(model, "processor") else None)
+                or getattr(unwrapped, "tokenizer", None)
+            )
+            if tok is not None and hasattr(tok, "get_processor") and callable(tok.get_processor):
+                tok = tok.get_processor() or tok
+
+            if isinstance(inputs, (str, list, tuple)) and (isinstance(inputs, str) or (inputs and isinstance(inputs[0], str))):
+                if tok is not None:
+                    encoded = tok(inputs, return_tensors="pt", padding=True, truncation=True)
+                    x = encoded["input_ids"].to(device)
+                else:
+                    x = to_tensor(inputs).to(device)
+            elif isinstance(inputs, dict) or hasattr(inputs, "items"):
+                if "input_ids" in inputs:
+                    raw_ids = inputs["input_ids"]
+                    x = raw_ids.to(device) if isinstance(raw_ids, torch.Tensor) else to_tensor(raw_ids).to(device)
+                else:
+                    x = to_tensor(inputs).to(device)
+            else:
+                x = to_tensor(inputs).to(device)
+
+            if isinstance(target_layer, nn.Embedding) and x.dtype != torch.long:
+                x = x.long()
+            if x.ndim == 1:
+                x = x.unsqueeze(0)
+
+            if _CAPTUM_AVAILABLE and LayerIntegratedGradients is not None:
+                lig = LayerIntegratedGradients(forward_func, target_layer)
+                attr_out = lig.attribute(x, target=target_class, n_steps=eff_steps)
+                attributions = attr_out[0] if isinstance(attr_out, (tuple, list)) else attr_out
+                if isinstance(attributions, torch.Tensor):
+                    if attributions.ndim == 3 and isinstance(target_layer, nn.Embedding):
+                        attributions = attributions.sum(dim=-1)
+                    attr_np = attributions.detach().cpu().numpy()
+                else:
+                    attr_np = np.zeros(x.shape, dtype=np.float32)
             else:
                 # Custom layer gradient approximation via forward hook
                 activations = []
@@ -128,16 +172,21 @@ class LayerIGExplainer(BaseExplainer):
 
                 handle = target_layer.register_forward_hook(f_hook)
                 try:
-                    out = unwrapped(x)
+                    out = forward_func(x)
                     c = target_class if target_class is not None else int(torch.argmax(out, dim=-1).item())
                     score = out[0, c] if out.ndim > 1 else out[c]
                     unwrapped.zero_grad()
                     score.backward()
                     if activations and activations[0].grad is not None:
                         act = activations[0]
-                        grad = act.grad
-                        attr_t = act * grad
-                        attr_np = attr_t.detach().cpu().numpy()
+                        act_grad = act.grad
+                        if act_grad is not None:
+                            attr_t = act * act_grad
+                            if attr_t.ndim == 3 and isinstance(target_layer, nn.Embedding):
+                                attr_t = attr_t.sum(dim=-1)
+                            attr_np = attr_t.detach().cpu().numpy()
+                        else:
+                            attr_np = np.zeros(x.shape, dtype=np.float32)
                     else:
                         attr_np = np.zeros(x.shape, dtype=np.float32)
                 finally:

@@ -16,7 +16,7 @@ warnings.filterwarnings("ignore", category=UserWarning, module="sklearn")
 warnings.filterwarnings("ignore", message=".*number of unique classes is greater than 50%.*")
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 import time
-from typing import List, Tuple
+from typing import List, Tuple , Optional
 import torch
 from huggingface_hub import hf_hub_download
 from transformers import AutoModelForImageClassification, ViTConfig
@@ -340,9 +340,23 @@ def main():
         print_summary_box(opts)
 
     # 1. Load HuggingFace PyTorch Model
-    model_name = opts["model_name"]
-    dataset_name = opts["dataset_name"]
-    device = opts["device"]
+    model_name: str = str(opts.get("model_name", "bazyl/gtsrb-model"))
+    dataset_name: str = str(opts.get("dataset_name", "bazyl/GTSRB"))
+    device: str = str(opts.get("device", "cpu"))
+    raw_samples = opts.get("samples", 2000)
+    samples_count: int = int(raw_samples) if isinstance(raw_samples, (int, str)) and str(raw_samples).isdigit() else (int(raw_samples) if isinstance(raw_samples, int) else 0)
+    mode_val: str = str(opts.get("mode", "full"))
+    raw_attacks = opts.get("attacks", ["fgsm"])
+    attacks_val: List[str] = [str(a) for a in raw_attacks] if isinstance(raw_attacks, list) else [str(raw_attacks)]
+    enable_xai_val: bool = bool(opts.get("enable_xai", False))
+    raw_xai = opts.get("xai_techniques", ["shap"])
+    xai_techniques_val: List[str] = [str(t) for t in raw_xai] if isinstance(raw_xai, list) else [str(raw_xai)]
+    enable_hardening_val: bool = bool(opts.get("enable_hardening", False))
+    defense_val: str = str(opts.get("defense", "auto"))
+    enable_retest_val: bool = bool(opts.get("enable_retest", True))
+    enable_report_val: bool = bool(opts.get("enable_report", True))
+    raw_out = opts.get("output_dir")
+    output_dir_val: Optional[str] = str(raw_out) if raw_out is not None else None
 
     print(f"\n[1/3] Ingesting PyTorch model '{model_name}' on device '{device}'...")
     try:
@@ -362,10 +376,10 @@ def main():
         sys.exit(1)
 
     # 2. Setup Dataset Loader for sample count
-    if opts["samples"] <= 0:
+    if samples_count <= 0:
         split_str = "test"  # Full dataset (12,630 samples)
     else:
-        split_str = f"test[:{opts['samples']}]"
+        split_str = f"test[:{samples_count}]"
     batch_size = 32
     print(f"[2/3] Loading dataset split '{split_str}' from '{dataset_name}' (batch size: {batch_size})...")
     try:
@@ -386,20 +400,20 @@ def main():
         device=device,
         model_name="GTSRB_ViT_Demo",
         num_classes=43,
-        mode=opts["mode"],
-        attacks=opts["attacks"],
-        enable_xai=opts["enable_xai"],
-        xai_techniques=opts["xai_techniques"],
-        enable_hardening=opts["enable_hardening"],
-        defense=opts["defense"],
-        enable_retest=opts["enable_retest"],
-        enable_report=opts["enable_report"],
-        output_dir=opts["output_dir"],
+        mode=mode_val,
+        attacks=attacks_val,
+        enable_xai=enable_xai_val,
+        xai_techniques=xai_techniques_val,
+        enable_hardening=enable_hardening_val,
+        defense=defense_val,
+        enable_retest=enable_retest_val,
+        enable_report=enable_report_val,
+        output_dir=output_dir_val,
         batch_size=batch_size,
         custom_dataset_loader=dataset_loader,
     )
 
-    print(f"[3/3] Executing AdverScanOrchestrator across pipeline (Mode: '{opts['mode']}')...\n")
+    print(f"[3/3] Executing AdverScanOrchestrator across pipeline (Mode: '{mode_val}')...\n")
     orchestrator = AdverScanOrchestrator()
     result = orchestrator.run(pipeline_config)
 

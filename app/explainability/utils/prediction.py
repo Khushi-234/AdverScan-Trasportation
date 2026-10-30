@@ -5,6 +5,7 @@ with torch.inference_mode() and CPU thread controls to prevent OOM and reduce la
 """
 
 from typing import Any, List, Optional, Tuple, Union
+from collections.abc import Mapping
 import numpy as np
 import torch
 import torch.nn as nn
@@ -72,7 +73,16 @@ def predict_batched(
     if isinstance(x, (list, tuple, str)) and (isinstance(x, str) or (len(x) > 0 and isinstance(x[0], str))):
         text_list = [x] if isinstance(x, str) else list(x)
         n_samples = len(text_list)
-        tok = tokenizer or getattr(model, "tokenizer", None) or getattr(unwrapped, "tokenizer", None)
+        tok = (
+            tokenizer
+            or getattr(model, "tokenizer", None)
+            or (getattr(model.processor, "tokenizer", None) if hasattr(model, "processor") else None)
+            or (model.processor.get_processor() if hasattr(model, "processor") and hasattr(model.processor, "get_processor") else None)
+            or (getattr(model.processor, "_tokenizer", None) if hasattr(model, "processor") else None)
+            or getattr(unwrapped, "tokenizer", None)
+        )
+        if tok is not None and hasattr(tok, "get_processor") and callable(tok.get_processor):
+            tok = tok.get_processor() or tok
 
         if isinstance(unwrapped, nn.Module):
             unwrapped.eval()
@@ -91,6 +101,10 @@ def predict_batched(
                         )
                         encoded = {k: v.to(dev) for k, v in encoded.items()}
                         out = unwrapped(**encoded)
+                    elif hasattr(model, "predict") and callable(getattr(model, "predict")):
+                        out = model.predict(chunk)
+                        if isinstance(out, np.ndarray):
+                            out = torch.from_numpy(out).to(dev)
                     else:
                         out = unwrapped(chunk)
 
@@ -123,7 +137,27 @@ def predict_batched(
                 outs_np.append(to_numpy(out, dtype=np.float64))
             return np.concatenate(outs_np, axis=0) if outs_np else np.empty((0,))
 
-    # 2. PyTorch nn.Module with Tensor input
+    # 2. Dictionary / Mapping of tensors or sequences
+    if isinstance(x, (dict, Mapping)) or hasattr(x, "items"):
+        dev = device or (next(unwrapped.parameters()).device if isinstance(unwrapped, nn.Module) and list(unwrapped.parameters()) else torch.device("cpu"))
+        first_v = next(iter(x.values()))
+        n_samples = len(first_v) if hasattr(first_v, "__len__") else 1
+        outs = []
+        with torch.inference_mode():
+            for i in range(0, n_samples, batch_size):
+                chunk = {
+                    k: (v[i : i + batch_size].to(dev) if isinstance(v, torch.Tensor) else (torch.as_tensor(v[i : i + batch_size], device=dev) if isinstance(v, (list, tuple, np.ndarray)) else v))
+                    for k, v in x.items()
+                }
+                out = unwrapped(**chunk)
+                if hasattr(out, "logits"):
+                    out = out.logits
+                elif hasattr(out, "prediction_logits"):
+                    out = out.prediction_logits
+                outs.append(out)
+        return torch.cat(outs, dim=0) if outs else torch.empty((0,), device=dev)
+
+    # 3. PyTorch nn.Module with Tensor input
     if isinstance(unwrapped, nn.Module) and isinstance(x, torch.Tensor):
         unwrapped.eval()
         dev = device or (next(unwrapped.parameters()).device if list(unwrapped.parameters()) else torch.device("cpu"))

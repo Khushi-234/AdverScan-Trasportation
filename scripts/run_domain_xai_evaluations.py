@@ -311,6 +311,19 @@ def parse_args():
         help="Output directory for generated XAI explanation reports",
     )
     parser.add_argument(
+        "--mode",
+        type=str,
+        default=None,
+        choices=["full", "xai-only", "xai_only"],
+        help="Pipeline execution mode: 'full' (Full Security Assessment) or 'xai-only' (M6 XAI Checks Only)",
+    )
+    parser.add_argument(
+        "--xai-only",
+        action="store_true",
+        default=False,
+        help="Execute only M6 XAI Explainability checks without running the full attack evaluation",
+    )
+    parser.add_argument(
         "--interactive",
         action="store_true",
         default=False,
@@ -336,7 +349,7 @@ def parse_args():
 # =====================================================================
 def prompt_domain_selection() -> str:
     """Prompt user to simply select the domain from the list."""
-    print("\n[Step 1/4] Select Data Domain / Modality:")
+    print("\n[Step 1/5] Select Data Domain / Modality:")
     print("  1. Image        (Computer Vision: Traffic Signs, Objects, Landscapes)")
     print("  2. Text         (NLP: Sentiment Analysis, Topic Classification)")
     print("  3. Time-Series  (Signal Waves: ECG Arrhythmia, Waveform Sensors)")
@@ -376,7 +389,7 @@ def prompt_model_selection(domain: str) -> Dict[str, Any]:
             domain_presets.append(entry)
 
     title_domain = "ALL DOMAINS" if domain_clean in ("all", "all domains", "5") else domain.upper()
-    print(f"\n[Step 2/4] Available Model Presets for Domain [{title_domain}]:")
+    print(f"\n[Step 2/5] Available Model Presets for Domain [{title_domain}]:")
     print("-" * 75)
     for idx, preset in enumerate(domain_presets, 1):
         m_name = preset.get("name", preset.get("model_id"))
@@ -419,6 +432,17 @@ def prompt_model_selection(domain: str) -> Dict[str, Any]:
         print(f"  ❌ Invalid input. Please select a number between 1 and {len(domain_presets)}.")
 
 
+def prompt_execution_mode() -> str:
+    """Prompt user to choose between XAI Checks Only or Full Security Assessment."""
+    print("\n[Step 3/5] Select Execution Scope:")
+    print("  1. XAI Checks Only (Fast M6 explainability diagnostics, attribution & defense hints) [Recommended]")
+    print("  2. Full Security Assessment (M1 Ingestion → M2 Baseline → M3 Attack → M5 Vulnerability → M6 XAI)")
+    raw_choice = input("Select Execution Scope [1-2] [1]: ").strip() or "1"
+    if raw_choice in ("2", "full", "full assessment"):
+        return "full"
+    return "xai-only"
+
+
 def prompt_dataset_selection(domain: str, model_info: Dict[str, Any]) -> Tuple[str, int]:
     """Prompt user to confirm dataset and number of samples."""
     preset_data = model_info.get("preset_info", {})
@@ -440,7 +464,7 @@ def prompt_dataset_selection(domain: str, model_info: Dict[str, Any]) -> Tuple[s
             resolved_file = str(cand)
 
     dataset_choice = resolved_file or raw_dataset or "default_dataset"
-    print(f"\n[Step 3/4] Dataset & Sample Count for [{domain.upper()}]:")
+    print(f"\nDataset & Sample Count for [{domain.upper()}]:")
     print(f"  • Recommended Dataset: '{dataset_choice}'")
 
     samples_str = input("Number of Samples to Evaluate [100]: ").strip() or "100"
@@ -458,20 +482,24 @@ def prompt_dataset_selection(domain: str, model_info: Dict[str, Any]) -> Tuple[s
     return dataset_choice, sample_count
 
 
-def prompt_attack_selection(domain: str) -> List[str]:
+def prompt_attack_selection(domain: str, single: bool = False) -> List[str]:
     """Prompt user to select attacks from the domain catalog."""
     catalog_list = DOMAIN_ATTACKS_CATALOG.get(domain, DOMAIN_ATTACKS_CATALOG["tabular"])
 
-    print(f"\n[Step 4/4] Available Adversarial Attacks for Domain [{domain.upper()}]:")
+    print(f"\n[Step 4/5] Available Adversarial Attacks for Domain [{domain.upper()}]:")
     print("-" * 75)
     for idx, atk in enumerate(catalog_list, 1):
         print(f"  {idx}. [{atk['name']}] — {atk['full_name']} ({atk['category']})")
-    print("  A. ALL Attacks (Execute all attacks)")
+    if not single:
+        print("  A. ALL Attacks (Execute all attacks)")
     print("-" * 75)
 
+    default_choice = "1" if single else "all"
+    prompt_msg = f"Select Attack [1-{len(catalog_list)}] [{default_choice}]: " if single else f"Select Attack(s) [1-{len(catalog_list)}, or 'all'] [{default_choice}]: "
+
     while True:
-        raw_choice = input(f"Select Attack(s) [1-{len(catalog_list)}, or 'all'] [all]: ").strip().lower() or "all"
-        if raw_choice in ("a", "all"):
+        raw_choice = input(prompt_msg).strip().lower() or default_choice
+        if not single and raw_choice in ("a", "all"):
             return [atk["id"] for atk in catalog_list]
 
         selected: List[str] = []
@@ -488,8 +516,59 @@ def prompt_attack_selection(domain: str) -> List[str]:
                         break
 
         if selected:
+            if single:
+                return [selected[0]]
             return list(dict.fromkeys(selected))
         print("  ❌ No recognized attack selected. Enter numbers, attack names, or 'all'.")
+
+
+def prompt_xai_configuration(domain: str) -> Tuple[str, Optional[str]]:
+    """Prompt user to choose XAI mode and optional technique override."""
+    print("\n[Step 5/5] XAI Explainability Configuration:")
+    print("  Execution Modes:")
+    print("    1. Standard (Balanced performance & high fidelity) [Default]")
+    print("    2. Fast     (Minimal execution time, single-pass attribution)")
+    print("    3. Thorough (Deep sampling, high precision attributions)")
+    mode_choice = input("  Select XAI Mode [1-3] [1]: ").strip() or "1"
+    mode_map = {"1": "standard", "2": "fast", "3": "thorough"}
+    xai_mode = mode_map.get(mode_choice, "standard")
+
+    print(f"\n  Attribution Techniques for [{domain.upper()}]:")
+    print("    1. Auto-selection (Recommended: optimal technique automatically resolved)")
+    print("    2. SHAP (Kernel / Gradient SHAP)")
+    print("    3. LIME (Local Interpretable Model-agnostic Explanations)")
+    if domain == "image":
+        print("    4. GradCAM")
+        print("    5. Saliency (Vanilla Gradients)")
+    elif domain == "text":
+        print("    4. Layer Integrated Gradients")
+    elif domain in ("tabular", "time-series"):
+        print("    4. Integrated Gradients")
+
+    tech_choice = input("  Select Technique [1]: ").strip() or "1"
+    if tech_choice == "2":
+        xai_tech = "shap"
+    elif tech_choice == "3":
+        xai_tech = "lime"
+    elif tech_choice == "4":
+        if domain == "image":
+            xai_tech = "gradcam"
+        elif domain == "text":
+            xai_tech = "layer_integrated_gradients"
+        else:
+            xai_tech = "integrated_gradients"
+    elif tech_choice == "5" and domain == "image":
+        xai_tech = "saliency"
+    else:
+        xai_tech = None
+
+    return xai_mode, xai_tech
+
+
+def prompt_figure_generation() -> bool:
+    """Prompt user whether to generate visualization figures."""
+    fig_str = input("\nGenerate XAI Visualization Figures (PNG/PDF)? [y/N]: ").strip().lower()
+    return fig_str in ("y", "yes", "true", "1")
 
 
 # =====================================================================
@@ -543,19 +622,18 @@ def load_target_model(model_id: str, preset_info: Dict[str, Any], domain: str) -
         class TabularSurrogate(nn.Module):
             def __init__(self):
                 super().__init__()
-                self.net = nn.Sequential(
-                    nn.Linear(n_feats, 32),
-                    nn.ReLU(),
-                    nn.Linear(32, n_classes),
-                )
+                self.fc1 = nn.Linear(n_feats, 32)
+                self.relu = nn.ReLU()
+                self.fc2 = nn.Linear(32, n_classes)
                 with torch.no_grad():
                     # Set realistic weight sensitivity
-                    self.net[0].weight.data.normal_(0, 0.1)
+                    self.fc1.weight.data.normal_(0, 0.1)
                     if n_feats > 10:
-                        self.net[0].weight.data[0, 10] = 0.8  # capital_gain sensitive
-                        self.net[0].weight.data[0, 12] = 0.5  # hours_per_week sensitive
+                        self.fc1.weight.data[0, 10] = 0.8  # capital_gain sensitive
+                        self.fc1.weight.data[0, 12] = 0.5  # hours_per_week sensitive
+
             def forward(self, x):
-                return self.net(x)
+                return self.fc2(self.relu(self.fc1(x)))
 
         return TabularSurrogate().eval(), feature_names
 
@@ -631,8 +709,8 @@ def load_evaluation_data(
         try:
             import pandas as pd
             df = pd.read_csv(data_path)
-            target_col = "target" if "target" in df.columns else df.columns[-1]
-            x_vals = df.drop(columns=[target_col]).values[:n_samples]
+            target_col = str("target" if "target" in df.columns else df.columns[-1])
+            x_vals = df.drop([target_col], axis=1).values[:n_samples]
             y_vals = df[target_col].values[:n_samples]
             return torch.tensor(x_vals, dtype=torch.float32), torch.tensor(y_vals, dtype=torch.long)
         except Exception:
@@ -754,15 +832,32 @@ def main():
     print("      ADVERSCAN — END-TO-END SECURITY ASSESSMENT & XAI PIPELINE      ")
     print("=" * 75)
 
+    build_figs = args.figures
+
     if is_interactive:
         domain = prompt_domain_selection()
         model_info = prompt_model_selection(domain)
         if domain in ("all", "all domains", "5") or not domain:
             domain = model_info.get("data_domain") or "image"
-        dataset_name, sample_count = prompt_dataset_selection(domain, model_info)
-        selected_attacks = prompt_attack_selection(domain)
-        xai_mode = "standard"
-        xai_override = None
+
+        exec_scope = prompt_execution_mode()
+        is_xai_only = (exec_scope == "xai-only")
+
+        if is_xai_only:
+            selected_attacks = prompt_attack_selection(domain, single=True)
+            samples_str = input("\nNumber of Samples for XAI Check [1]: ").strip() or "1"
+            try:
+                sample_count = max(1, int(samples_str))
+            except ValueError:
+                sample_count = 1
+            dataset_name = model_info.get("dataset_name") or "default_dataset"
+            xai_mode, xai_override = prompt_xai_configuration(domain)
+            build_figs = prompt_figure_generation()
+        else:
+            dataset_name, sample_count = prompt_dataset_selection(domain, model_info)
+            selected_attacks = prompt_attack_selection(domain, single=False)
+            xai_mode, xai_override = prompt_xai_configuration(domain)
+            build_figs = prompt_figure_generation()
     else:
         domain = (args.domain or "tabular").lower().replace("_", "-")
         default_model = "tabular-mlp-adult-census" if domain == "tabular" else (
@@ -779,10 +874,17 @@ def main():
             "preset_info": preset,
         }
         dataset_name = args.dataset or preset.get("dataset_name") or "default_dataset"
-        try:
-            sample_count = int(args.samples) if args.samples not in ("full", "0") else 100
-        except ValueError:
-            sample_count = 100
+
+        is_xai_only = args.xai_only or (args.mode in ("xai-only", "xai_only"))
+
+        if is_xai_only and args.samples == "100":
+            sample_count = 1  # Fast default for XAI check
+        else:
+            try:
+                sample_count = int(args.samples) if args.samples not in ("full", "0") else 100
+            except ValueError:
+                sample_count = 100
+
         catalog = DOMAIN_ATTACKS_CATALOG.get(domain, DOMAIN_ATTACKS_CATALOG["tabular"])
         if args.attacks:
             if "all" in args.attacks:
@@ -790,32 +892,40 @@ def main():
             else:
                 selected_attacks = [a.lower() for a in args.attacks]
         else:
-            selected_attacks = [catalog[0]["id"]]
+            selected_attacks = [catalog[0]["id"]] if is_xai_only else [catalog[0]["id"]]
         xai_mode = args.xai_mode
         xai_override = args.xai_technique
+
+    model_id_val: str = str(model_info.get("model_id", "default_model"))
+    raw_preset = model_info.get("preset_info")
+    preset_info_val: Dict[str, Any] = raw_preset if isinstance(raw_preset, dict) else {}
+    raw_classes = model_info.get("num_classes", 2)
+    num_classes_val: int = int(raw_classes) if isinstance(raw_classes, (int, str)) and str(raw_classes).isdigit() else 2
+    dataset_name_val: str = str(dataset_name)
 
     # Configuration Summary
     print("\n" + "=" * 75)
     print("               PIPELINE EXECUTION CONFIGURATION SUMMARY              ")
     print("=" * 75)
     print(f"Target Modality / Domain:   {domain.upper()}")
-    print(f"Selected Model:             {model_info['model_name']} ({model_info['model_id']})")
-    print(f"Dataset Identifier:         {dataset_name}")
+    print(f"Selected Model:             {model_info['model_name']} ({model_id_val})")
+    print(f"Dataset Identifier:         {dataset_name_val}")
     print(f"Evaluation Samples:         {sample_count:,}")
     print(f"Selected Attacks:           {', '.join(selected_attacks).upper()}")
     print(f"XAI Technique Mode:         {xai_mode.upper()} {f'({xai_override})' if xai_override else ''}")
-    print(f"Execution Scope:            M1 Ingestion → M2 Baseline → M3 Attack → M5 Vulnerability → M6 XAI")
+    print(f"Execution Scope:            {'M6 XAI Checks Only (Rapid Diagnostics)' if is_xai_only else 'M1 Ingestion → M2 Baseline → M3 Attack → M5 Vulnerability → M6 XAI'}")
     print("=" * 75)
 
     # 1. Ingest Model (M1)
     print(f"\n[1/5] Ingesting model and resolving architecture...")
-    model, feature_names = load_target_model(model_info["model_id"], model_info["preset_info"], domain)
+    model, feature_names = load_target_model(model_id_val, preset_info_val, domain)
     print(f"  ✓ Ingested Model: {model_info['model_name']}")
 
     # 2. Clean Baseline Evaluation (M2)
-    print(f"[2/5] Running clean baseline evaluation on {sample_count} sample(s)...")
-    clean_inputs, true_labels = load_evaluation_data(domain, dataset_name, model_info["preset_info"], n_samples=sample_count)
-    
+    step2_desc = f"evaluation on {sample_count} sample(s)" if not is_xai_only else f"sample verification ({sample_count} sample)"
+    print(f"[2/5] Running clean baseline {step2_desc}...")
+    clean_inputs, true_labels = load_evaluation_data(domain, dataset_name_val, preset_info_val, n_samples=sample_count)
+
     with torch.no_grad():
         try:
             clean_logits = model(clean_inputs)
@@ -843,7 +953,8 @@ def main():
     # 4. Loop across attacks: M3 -> M5 -> M6
     for idx, atk_id in enumerate(selected_attacks, 1):
         print("\n" + "=" * 75)
-        print(f"[{idx}/{len(selected_attacks)}] EXECUTING ATTACK: [{atk_id.upper()}] ON {domain.upper()}")
+        phase_name = "XAI VERIFICATION ON ATTACK PERTURBATION" if is_xai_only else "EXECUTING ATTACK & XAI EVALUATION"
+        print(f"[{idx}/{len(selected_attacks)}] {phase_name}: [{atk_id.upper()}] ON {domain.upper()}")
         print("=" * 75)
 
         # M3: Attack Engine
@@ -874,7 +985,7 @@ def main():
                 adv_conf_avg = max(0.1, clean_conf_avg - 0.35)
                 adv_preds = clean_preds.clone()
                 if len(adv_preds) > 0:
-                    adv_preds[0] = (adv_preds[0] + 1) % model_info.get("num_classes", 2)
+                    adv_preds[0] = (adv_preds[0] + 1) % num_classes_val
 
         acc_drop = clean_acc - adv_acc
         conf_drop = clean_conf_avg - adv_conf_avg
@@ -911,7 +1022,7 @@ def main():
         )
         assessment_result = RobustAssessmentResult(
             attack_name=atk_id,
-            dataset_name=dataset_name,
+            dataset_name=dataset_name_val,
             num_samples=sample_count,
             attack_success_rate=asr,
             perturbation={"linf_mean": linf_val, "l2_mean": l2_val},
@@ -935,10 +1046,13 @@ def main():
             modality=domain,
         )
 
+        # Normalize explanation for single sample vs list of samples
+        exp_item = explanation[0] if isinstance(explanation, list) else explanation
+
         # Display XAI Decision
-        x_dec = explanation.xai_decision
+        x_dec = exp_item.xai_decision
         print(f"\n  [XAI DECISION & ROUTING]")
-        print(f"    • Selected Technique:    {x_dec.get('technique_selected', explanation.technique).upper()}")
+        print(f"    • Selected Technique:    {x_dec.get('technique_selected', exp_item.technique).upper()}")
         print(f"    • Routing Reason:        {x_dec.get('selection_reason', 'Domain routing')}")
         print(f"    • Inferred Model Type:   {x_dec.get('model_type', 'neural_network')}")
         print(f"    • Execution Time:        {x_dec.get('explain_seconds', 0.0):.4f}s")
@@ -946,7 +1060,7 @@ def main():
 
         # 1. Why this result came (Diagnostic Feature Shifts)
         print(f"\n  [1. WHY THIS RESULT CAME — Diagnostic Feature Shifts]")
-        top_contrib = explanation.failure_analysis.get("contributing_features", [])
+        top_contrib = exp_item.failure_analysis.get("contributing_features", [])
         if top_contrib:
             for feat in top_contrib[:4]:
                 name = feat.get("feature", "feature")
@@ -956,15 +1070,15 @@ def main():
                 rank = feat.get("rank", 1)
                 print(f"    • #{rank} '{name}': Clean={c_imp:.4f} → Adv={a_imp:.4f} (Importance Shift: {shift:+.4f})")
         else:
-            print(f"    • Clean Prediction: {explanation.clean_prediction} → Adv Prediction: {explanation.adversarial_prediction}")
+            print(f"    • Clean Prediction: {exp_item.clean_prediction} → Adv Prediction: {exp_item.adversarial_prediction}")
 
         # 2. Why this attack performed (Root-Cause Explanation)
         print(f"\n  [2. WHY THIS ATTACK PERFORMED — Root-Cause Vulnerability Narrative]")
-        reason = explanation.failure_analysis.get("attack_reason", "Perturbation shifted feature attributions across the decision threshold.")
+        reason = exp_item.failure_analysis.get("attack_reason", "Perturbation shifted feature attributions across the decision threshold.")
         print(f"    {reason}")
 
         # 3. Defense Hints (Quantitative Empirical Evidence)
-        hints = explanation.defense_hints or explanation.failure_analysis.get("defense_hints", [])
+        hints = exp_item.defense_hints or exp_item.failure_analysis.get("defense_hints", [])
         if hints:
             print(f"\n  [3. DEFENSE HINTS — Quantitative Evidence & Targeted Mitigations]")
             for h in hints:
@@ -979,7 +1093,7 @@ def main():
                     print(f"      └─ Evidence:         {ev_str}")
 
         # 4. Multi-Stage Defense Pipeline Mapping
-        pipeline = explanation.defense_pipeline or explanation.failure_analysis.get("defense_pipeline", {})
+        pipeline = exp_item.defense_pipeline or exp_item.failure_analysis.get("defense_pipeline", {})
         if pipeline:
             print(f"\n  [4. WHAT DEFENSE WE CAN APPLY — 6-Stage Defense Pipeline Architecture]")
             print("      [1. Preprocessing] → [2. Transformation] → [3. Detection] → [4. Smoothing] → [5. Feature-level] → [6. Ensemble]")
@@ -994,7 +1108,12 @@ def main():
 
         # Save JSON artifact
         json_path = out_dir / f"{domain}_{atk_id}_xai_explanation.json"
-        explanation.save_json(json_path)
+        if isinstance(explanation, list):
+            for s_idx, exp in enumerate(explanation):
+                exp.save_json(out_dir / f"{domain}_{atk_id}_sample{s_idx}_xai_explanation.json")
+            exp_item.save_json(json_path)
+        else:
+            explanation.save_json(json_path)
         print(f"\n  ✓ Exported JSON Explanation: {json_path}")
 
     # Total Runtime
@@ -1002,12 +1121,13 @@ def main():
     mins, secs = divmod(elapsed, 60)
     time_str = f"{int(mins)}m {secs:.2f}s" if mins > 0 else f"{elapsed:.2f}s"
 
+    scope_title = "XAI CHECKS" if is_xai_only else "SECURITY ASSESSMENT & XAI"
     print("\n" + "=" * 75)
-    print(f"  ✓ SECURITY ASSESSMENT & XAI COMPLETED SUCCESSFULLY in {time_str}")
+    print(f"  ✓ {scope_title} COMPLETED SUCCESSFULLY in {time_str}")
     print("=" * 75 + "\n")
 
-    # Build figures if --figures flag is set
-    if getattr(args, "figures", False):
+    # Build figures if requested
+    if build_figs or getattr(args, "figures", False):
         try:
             from app.explainability.visualization.build_figures import build_all_figures
             n_figs = build_all_figures(str(out_dir))
