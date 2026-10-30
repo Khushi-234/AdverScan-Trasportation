@@ -148,7 +148,16 @@ class XAIExplainer:
             explainer_kwargs["max_text_length"] = cfg.max_text_length
 
         # 1. Modality detection & Handler selection
-        mod = detect_modality(clean_input, hint=modality)
+        inferred_modality_hint = modality
+        if inferred_modality_hint is None:
+            if hasattr(model, "data_domain") and model.data_domain and str(model.data_domain) != "unknown":
+                inferred_modality_hint = model.data_domain
+            elif hasattr(model, "domain") and model.domain and str(model.domain) != "unknown":
+                inferred_modality_hint = model.domain
+            elif hasattr(model, "metadata") and getattr(model.metadata, "data_domain", None):
+                inferred_modality_hint = model.metadata.data_domain
+
+        mod = detect_modality(clean_input, hint=inferred_modality_hint)
         handler = get_modality_handler(mod)
 
         # Domain profile resolution

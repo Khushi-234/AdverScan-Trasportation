@@ -59,50 +59,77 @@ RULES_TABLE: Dict[str, Dict[str, str]] = {
 }
 
 
+import re
+
+
 def normalize_model_type(model_type_str: str) -> str:
     """Normalize user or detected string to one of the canonical rules table model types."""
     norm = str(model_type_str).lower().strip()
-    if any(k in norm for k in ("tree", "xgb", "rf", "forest", "boost")):
+    if any(k in norm for k in ("tree", "xgb", "forest", "boost", "random forest")) or re.search(r"\brf\b", norm):
         return "tree (XGB/RF)"
-    if "cnn" in norm or "conv" in norm:
-        return "CNN"
-    if any(k in norm for k in ("transformer", "bert", "roberta", "text")):
+    if any(k in norm for k in ("transformer", "bert", "roberta", "vit", "patchtst", "distilbert", "text")):
         return "transformer"
-    if any(k in norm for k in ("mlp", "lstm", "torch", "linear", "rnn")):
+    if any(k in norm for k in ("cnn", "conv", "resnet", "vgg", "1d-cnn")):
+        return "CNN"
+    if any(k in norm for k in ("mlp", "lstm", "torch", "linear", "rnn", "mixer")):
         return "torch MLP/LSTM"
     return model_type_str
 
 
 def detect_model_type(model: Any, modality: Union[str, Modality]) -> str:
     """Infer model architecture type (tree (XGB/RF), torch MLP/LSTM, CNN, transformer)."""
+    # 1. Preset model identifier lookup
     if isinstance(model, str):
+        try:
+            from app.ingestion.presets import MODEL_PRESETS
+            preset = MODEL_PRESETS.get(model) or next(
+                (p for p in MODEL_PRESETS.values() if p.get("model_id") == model),
+                None,
+            )
+            if preset and preset.get("model_type"):
+                return normalize_model_type(preset["model_type"])
+        except Exception:
+            pass
         return normalize_model_type(model)
+
+    # 2. IngestionResult or Adapter with metadata
+    if hasattr(model, "metadata"):
+        meta = getattr(model, "metadata")
+        if hasattr(meta, "extra_info") and isinstance(meta.extra_info, dict):
+            meta_type = meta.extra_info.get("model_type")
+            if meta_type:
+                return normalize_model_type(meta_type)
+        if getattr(meta, "model_architecture", None):
+            return normalize_model_type(meta.model_architecture)
 
     norm_mod = Modality.from_str(modality) if modality else None
     unwrapped = unwrap_model(model) if model is not None else None
 
+    # 3. Tree models
     if unwrapped is not None and _is_tree_model(unwrapped):
         return "tree (XGB/RF)"
 
     if isinstance(unwrapped, nn.Module):
-        # 1. Convolutional architectures
+        # 4. Transformer architectures (check attention/transformer first so ViT is recognized as transformer)
+        has_transformer = any(
+            isinstance(m, (nn.Transformer, nn.MultiheadAttention, nn.TransformerEncoder, nn.TransformerDecoder))
+            or "transformer" in type(m).__name__.lower()
+            or "bert" in type(m).__name__.lower()
+            or "roberta" in type(m).__name__.lower()
+            or "vit" in type(m).__name__.lower()
+            or "attention" in type(m).__name__.lower()
+            for m in unwrapped.modules()
+        )
+        if has_transformer or norm_mod == Modality.TEXT:
+            return "transformer"
+
+        # 5. Convolutional architectures
         has_conv = any(
             isinstance(m, (nn.modules.conv._ConvNd, nn.Conv1d, nn.Conv2d, nn.Conv3d))
             for m in unwrapped.modules()
         )
         if has_conv:
             return "CNN"
-
-        # 2. Transformer architectures or text modality
-        has_transformer = any(
-            isinstance(m, (nn.Transformer, nn.MultiheadAttention, nn.TransformerEncoder, nn.TransformerDecoder))
-            or "transformer" in type(m).__name__.lower()
-            or "bert" in type(m).__name__.lower()
-            or "roberta" in type(m).__name__.lower()
-            for m in unwrapped.modules()
-        )
-        if has_transformer or norm_mod == Modality.TEXT:
-            return "transformer"
 
         return "torch MLP/LSTM"
 
