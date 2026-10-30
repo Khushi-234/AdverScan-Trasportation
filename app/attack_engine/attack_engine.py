@@ -6,7 +6,7 @@ from typing import Any, Dict, List, Optional, Union
 from app.attack_engine.config import AttackConfig
 from app.attack_engine.models import AttackResult, AttackResults
 from app.attack_engine.attack_discovery import discover_attacks
-from app.attack_engine.attack_selector import select_attacks
+from app.attack_engine.attack_selector import select_compatible_attacks
 from app.attack_engine.attack_executor import execute_attack
 from app.attack_engine.exceptions import AttackConfigurationError
 
@@ -48,7 +48,7 @@ class AttackEngine:
         Returns:
             AttackResult containing adversarial examples and execution metadata.
         """
-        selected_classes = select_attacks(attack_name)
+        selected_classes = select_compatible_attacks(self.model, attack_name)
         attack_cls = selected_classes[0]
         return execute_attack(
             model=self.model,
@@ -83,10 +83,10 @@ class AttackEngine:
         if configs is None:
             configs = {}
 
+        selected_classes = select_compatible_attacks(self.model, attack_names)
+
         pipeline_results = AttackResults()
-        for name in attack_names:
-            selected_classes = select_attacks(name)
-            attack_cls = selected_classes[0]
+        for name, attack_cls in zip(attack_names, selected_classes):
             config = configs.get(name.lower())
             attack_result = execute_attack(
                 model=self.model,
@@ -124,3 +124,6 @@ def run_attack_pipeline(
     return engine.run_pipeline(
         attack_names=attack_names, inputs=inputs, labels=labels, configs=configs
     )
+
+
+__all__ = ["AttackEngine", "run_attack_pipeline"]

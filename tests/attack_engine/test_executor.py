@@ -7,7 +7,7 @@ import torch
 import torch.nn as nn
 
 from app.attack_engine.attack_executor import execute_attack
-from app.attack_engine.attacks.fgsm import FGSM
+from app.attack_engine.attacks.image.fgsm import FGSM
 from app.attack_engine.config import AttackConfig
 from app.attack_engine.models import AttackResult, AttackMetadata
 from app.attack_engine.exceptions import AttackExecutionError
