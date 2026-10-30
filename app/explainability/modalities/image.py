@@ -6,7 +6,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
 import torch
 
-from app.explainability.input_utils import to_numpy, to_tensor
+from app.explainability.utils import to_numpy, to_tensor
 from app.explainability.modalities.base import BaseModalityHandler
 from app.explainability.modality import Modality
 

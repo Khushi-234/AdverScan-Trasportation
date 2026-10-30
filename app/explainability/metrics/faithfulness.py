@@ -7,7 +7,7 @@ from typing import Any, Dict, List, Optional, Union
 import numpy as np
 import torch
 
-from app.explainability.input_utils import predict_proba_np, safe_predict, to_numpy, to_tensor
+from app.explainability.utils import predict_proba_np, safe_predict, to_numpy, to_tensor
 
 
 def compute_faithfulness(

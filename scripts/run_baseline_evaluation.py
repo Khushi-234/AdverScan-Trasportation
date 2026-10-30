@@ -1,20 +1,23 @@
 """
-Execution script to perform clean Baseline Evaluation (Module 2) across multiple models (GTSRB, Intel Image Classification, custom HF models, and PyTorch checkpoints).
-Supports interactive model selection from terminal, single model evaluation, and evaluating all MODEL_PRESETS sequentially.
+Execution script to perform clean Baseline Evaluation & XAI Explanation Pipeline in AdverScan.
+Supports planning (--plan), technique overrides (--technique), mode selection (--xai-mode),
+budget control (--budget), and skipping (--skip-xai).
 """
 
 # Script file for running MODEL INGESTION & MODEL EVALUATION
 
 import argparse
-import sys
+import json
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 import torch
 from dotenv import load_dotenv
 import numpy as np
+import torch
+import torch.nn as nn
 
-# Ensure framework root directory is in sys.path
+# Ensure project root is on PYTHONPATH
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from app.ingestion import ingest_model
@@ -31,34 +34,52 @@ def parse_args():
     parser.add_argument(
         "--model",
         type=str,
-        default=None,
-        help="Target model preset ID, Hugging Face model ID, Kaggle dataset URL, or local checkpoint path",
+        default="cardiffnlp/twitter-roberta-base-sentiment-latest",
+        help="Target model identifier or path (default: cardiffnlp/twitter-roberta-base-sentiment-latest)",
     )
     parser.add_argument(
         "--dataset",
         type=str,
         default=None,
-        help="Dataset identifier (e.g. 'bazyl/GTSRB', 'puneet6060/intel-image-classification')",
+        help="Optional dataset name or split",
     )
     parser.add_argument(
-        "--samples",
+        "--xai-mode",
+        type=str,
+        default="standard",
+        choices=["fast", "standard", "thorough"],
+        help="XAI evaluation mode preset ('fast' | 'standard' | 'thorough') (default: standard)",
+    )
+    parser.add_argument(
+        "--technique",
+        type=str,
+        default=None,
+        help="Optional manual override for XAI technique (e.g. layer_integrated_gradients, saliency, shap)",
+    )
+    parser.add_argument(
+        "--budget",
         type=int,
         default=100,
-        help="Number of samples to evaluate (default: 100)",
+        help="Maximum number of samples to explain (default: 100)",
     )
     parser.add_argument(
-        "--device",
-        type=str,
-        default="cpu",
-        help="Target execution device ('cpu' or 'cuda')",
-    )
-    parser.add_argument(
-        "--all",
+        "--plan",
         action="store_true",
-        help="Evaluate all registered MODEL_PRESETS sequentially and output a summary comparison table",
+        help="Print [XAI PLAN] and exit immediately without executing evaluation or inference",
     )
     parser.add_argument(
-        "--non-interactive",
+        "--skip-xai",
+        action="store_true",
+        help="Skip the entire XAI stage",
+    )
+    parser.add_argument(
+        "--timeout",
+        type=int,
+        default=30,
+        help="Per-sample timeout in seconds for timeout fallback (default: 30)",
+    )
+    parser.add_argument(
+        "--demo",
         action="store_true",
         help="Disable interactive terminal prompts and use default arguments",
     )
@@ -474,4 +495,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

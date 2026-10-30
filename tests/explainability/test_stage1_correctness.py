@@ -12,7 +12,7 @@ from app.attack_engine.models import AttackMetadata, AttackResult
 from app.explainability.explainer import XAIExplainer
 from app.explainability.explanation_result import ExplanationResult
 from app.explainability.failure_analysis import is_prediction_correct
-from app.explainability.input_utils import (
+from app.explainability.utils import (
     extract_prediction_and_confidence,
     predict_proba_np,
     unwrap_model,

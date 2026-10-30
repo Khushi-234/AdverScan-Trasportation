@@ -77,9 +77,9 @@ class ExplanationResult:
     stability: Dict[str, Any] = field(default_factory=dict)
     validity_flags: Dict[str, Any] = field(default_factory=dict)
     attribution_status: str = "success"
-    attack_transformation: Dict[str, Any] = field(default_factory=dict)
-    prediction_analysis: Dict[str, Any] = field(default_factory=dict)
-    attribution_validation: Dict[str, Any] = field(default_factory=dict)
+    xai_decision: Dict[str, Any] = field(default_factory=dict)
+    defense_hints: List[Dict[str, Any]] = field(default_factory=list)
+    defense_pipeline: Dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert ExplanationResult object to dictionary."""

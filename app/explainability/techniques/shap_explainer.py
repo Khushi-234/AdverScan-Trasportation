@@ -1,6 +1,5 @@
 """
 SHAP-based XAI technique implementations for AdverScan.
-Includes generic SHAPExplainer and specialized TreeSHAPExplainer for tree ensembles.
 """
 
 from typing import Any, Dict, List, Optional, Union, cast
@@ -15,115 +14,12 @@ except (ImportError, Exception):
     shap = None
     _SHAP_AVAILABLE = False
 
-from app.explainability.input_utils import predict_proba_np, to_numpy, to_tensor, unwrap_model
+from app.explainability.utils import predict_proba_np, to_numpy, to_tensor, unwrap_model
 from app.explainability.modality import Modality
 from app.explainability.techniques.base import BaseExplainer
+from app.explainability.techniques.tree_shap_explainer import TreeSHAPExplainer
 
-
-class TreeSHAPExplainer(BaseExplainer):
-    """
-    Optimized TreeSHAP explainer for decision trees, Random Forests, and XGBoost/LGBM models.
-    """
-
-    name: str = "treeshap"
-    supported_modalities: List[Modality] = [Modality.TABULAR]
-
-    def __init__(self, **kwargs: Any):
-        """Initialize TreeSHAPExplainer."""
-        self.kwargs = kwargs
-        self.is_available = _SHAP_AVAILABLE
-
-    def is_compatible(self, modality: Modality, model: Any) -> bool:
-        """Check if model is a tree ensemble and modality is tabular."""
-        if modality != Modality.TABULAR:
-            return False
-        unwrapped = unwrap_model(model)
-        # Check for tree attributes
-        return hasattr(unwrapped, "estimators_") or hasattr(unwrapped, "get_booster") or hasattr(unwrapped, "tree_")
-
-    def explain(
-        self,
-        model: Any,
-        inputs: Any,
-        target_class: Optional[int] = None,
-        background_inputs: Optional[Any] = None,
-        **kwargs: Any,
-    ) -> Dict[str, Any]:
-        """
-        Generate TreeSHAP attributions for tree-based models.
-
-        Args:
-            model: Tree-based model (RandomForest, XGBoost, etc.) or adapter.
-            inputs: Tabular input of shape (1, F) or (F,).
-            target_class: Class index to explain.
-            background_inputs: Optional background dataset.
-
-        Returns:
-            Structured attribution dictionary.
-        """
-        if not self.is_available or shap is None:
-            return {
-                "status": "unavailable",
-                "executed": False,
-                "technique": "treeshap",
-                "message": "SHAP library is not installed in the current environment.",
-                "attribution": None,
-            }
-
-        assert shap is not None
-
-        try:
-            unwrapped = unwrap_model(model)
-            inputs_np = to_numpy(inputs)
-            if inputs_np.ndim == 1:
-                inputs_np = inputs_np.reshape(1, -1)
-
-            # Build TreeExplainer
-            bg_np = to_numpy(background_inputs) if background_inputs is not None else None
-            explainer = shap.TreeExplainer(unwrapped, data=bg_np)
-            shap_values = explainer.shap_values(inputs_np)
-
-            # Slicing for target_class:
-            orig_shape = None
-            if isinstance(shap_values, list):
-                orig_shape = [tuple(v.shape) for v in shap_values]
-                idx = target_class if (target_class is not None and 0 <= target_class < len(shap_values)) else 0
-                values = shap_values[idx]
-            elif isinstance(shap_values, np.ndarray):
-                orig_shape = tuple(shap_values.shape)
-                if shap_values.ndim == inputs_np.ndim + 1 and target_class is not None:
-                    idx = target_class if (0 <= target_class < shap_values.shape[-1]) else 0
-                    values = shap_values[..., idx]
-                else:
-                    values = shap_values
-            elif hasattr(shap_values, "values"):
-                v = shap_values.values
-                orig_shape = tuple(v.shape)
-                if v.ndim == inputs_np.ndim + 1 and target_class is not None:
-                    idx = target_class if (0 <= target_class < v.shape[-1]) else 0
-                    values = v[..., idx]
-                else:
-                    values = v
-            else:
-                values = np.asarray(shap_values)
-                orig_shape = tuple(values.shape)
-
-            return {
-                "status": "success",
-                "executed": True,
-                "technique": "treeshap",
-                "message": "TreeSHAP explanation computed successfully.",
-                "attribution": values.tolist() if isinstance(values, np.ndarray) else values,
-                "unsliced_shape": orig_shape,
-            }
-        except Exception as e:
-            return {
-                "status": "error",
-                "executed": False,
-                "technique": "treeshap",
-                "message": f"TreeSHAP computation error: {str(e)}",
-                "attribution": None,
-            }
+__all__ = ["SHAPExplainer", "TreeSHAPExplainer"]
 
 
 class SHAPExplainer(BaseExplainer):
@@ -240,43 +136,31 @@ class SHAPExplainer(BaseExplainer):
         assert shap is not None
 
         try:
+            batch_size = int(kwargs.get("batch_size", 64))
+            max_evals = int(kwargs.get("shap_max_evals", kwargs.get("max_evals", 100)))
+            max_text_length = kwargs.get("max_text_length", 128)
+            tokenizer = kwargs.get("tokenizer", getattr(model, "tokenizer", None))
+
             # 1. Text input handling
             if (modality == Modality.TEXT) or (isinstance(inputs, (list, tuple, str)) and (isinstance(inputs, str) or (inputs and isinstance(inputs[0], str)))):
                 text_list = [inputs] if isinstance(inputs, str) else list(inputs)
 
                 def text_predict_fn(texts: List[str]) -> np.ndarray:
-                    return predict_proba_np(model, texts, output_mode=output_mode)
+                    return predict_proba_np(
+                        model,
+                        texts,
+                        output_mode=output_mode,
+                        batch_size=batch_size,
+                        max_text_length=max_text_length,
+                        tokenizer=tokenizer,
+                    )
 
-                tok = kwargs.get("tokenizer")
-                if tok is None:
-                    proc = getattr(model, "processor", None)
-                    if hasattr(proc, "get_processor") and callable(proc.get_processor):
-                        tok = proc.get_processor()
-                    elif hasattr(proc, "_tokenizer"):
-                        tok = proc._tokenizer
-                    elif hasattr(proc, "tokenizer"):
-                        tok = proc.tokenizer
-                    elif hasattr(model, "tokenizer"):
-                        tok = model.tokenizer
-
-                masker = None
-                if tok is not None and hasattr(shap, "maskers") and hasattr(shap.maskers, "Text"):
-                    try:
-                        masker = shap.maskers.Text(tok)
-                    except Exception:
-                        masker = shap.maskers.Text()
-                elif hasattr(shap, "maskers") and hasattr(shap.maskers, "Text"):
-                    masker = shap.maskers.Text()
-
+                explainer = shap.Explainer(text_predict_fn)
                 try:
-                    explainer = shap.Explainer(text_predict_fn, masker=masker) if masker is not None else shap.Explainer(text_predict_fn, masker=shap.maskers.Text())
-                    shap_values = explainer(text_list)
-                    values = shap_values.values if hasattr(shap_values, "values") else np.asarray(shap_values)
+                    shap_values = explainer(text_list, max_evals=max_evals)
                 except Exception:
-                    fallback_masker = shap.maskers.Text() if hasattr(shap, "maskers") and hasattr(shap.maskers, "Text") else None
-                    explainer = shap.Explainer(text_predict_fn, masker=fallback_masker) if fallback_masker is not None else shap.Explainer(text_predict_fn)
                     shap_values = explainer(text_list)
-                    values = shap_values.values if hasattr(shap_values, "values") else np.asarray(shap_values)
+                values = shap_values.values if hasattr(shap_values, "values") else np.asarray(shap_values)
 
                 if isinstance(values, np.ndarray) and target_class is not None and values.ndim == 3:
                     c_idx = target_class if target_class < values.shape[-1] else 0
@@ -297,7 +181,7 @@ class SHAPExplainer(BaseExplainer):
 
             # Universal prediction function wrapper utilizing predict_proba_np
             def predict_fn(x: np.ndarray) -> np.ndarray:
-                return predict_proba_np(model, x, output_mode=output_mode)
+                return predict_proba_np(model, x, output_mode=output_mode, batch_size=batch_size)
 
             # Prepare background dataset respecting baseline_strategy
             baseline_strategy = kwargs.get("baseline_strategy", "mean")
@@ -398,14 +282,12 @@ class SHAPExplainer(BaseExplainer):
                         x_reshaped = x_flat.reshape((-1,) + input_shape[1:])
                         return predict_fn(x_reshaped)
 
+                    explainer = shap.Explainer(flat_predict_fn, flat_bg)
                     try:
-                        explainer = shap.Explainer(flat_predict_fn, flat_bg)
-                        shap_values = explainer(flat_inputs)
-                        raw_vals = shap_values.values if hasattr(shap_values, "values") else np.asarray(shap_values)
+                        shap_values = explainer(flat_inputs, max_evals=max_evals)
                     except Exception:
-                        nsamples = kwargs.get("nsamples", 10)
-                        k_expl = shap.KernelExplainer(flat_predict_fn, flat_bg)
-                        raw_vals = k_expl.shap_values(flat_inputs, nsamples=nsamples)
+                        shap_values = explainer(flat_inputs)
+                    raw_vals = shap_values.values if hasattr(shap_values, "values") else np.asarray(shap_values)
 
                     # Reshape back to input dimensions
                     if isinstance(raw_vals, np.ndarray):
@@ -427,7 +309,10 @@ class SHAPExplainer(BaseExplainer):
                 else:
                     # Tabular 2D data
                     explainer = shap.Explainer(predict_fn, bg_np)
-                    shap_values = explainer(inputs_np)
+                    try:
+                        shap_values = explainer(inputs_np, max_evals=max_evals)
+                    except Exception:
+                        shap_values = explainer(inputs_np)
                     values = shap_values.values if hasattr(shap_values, "values") else np.asarray(shap_values)
 
                     if isinstance(values, list):

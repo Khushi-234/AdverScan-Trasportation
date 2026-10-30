@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple, Union
 import numpy as np
 
-from app.explainability.input_utils import to_numpy
+from app.explainability.utils import to_numpy
 from app.explainability.modality import Modality
 
 

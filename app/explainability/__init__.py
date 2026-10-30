@@ -35,16 +35,45 @@ from app.explainability.techniques import (
     TechniqueRegistry,
     technique_registry,
 )
+from app.explainability.config import XAIConfig
+from app.explainability.utils import predict_batched, predict_proba_np
+from app.explainability.profiling import (
+    ProfileContext,
+    ProfileStats,
+    QueryCounter,
+    profile_explainer_call,
+)
+from app.explainability.cache import ExplanationCache, cache_key
+
+
+
+def __getattr__(name: str):
+    if name in ("XAIPipeline", "run_xai_pipeline"):
+        from app.explainability import pipeline
+        return getattr(pipeline, name)
+    raise AttributeError(f"module '{__name__}' has no attribute '{name}'")
 
 __all__ = [
     # Core contracts & coordinator
     "ExplanationResult",
     "XAIExplainer",
+    "XAIConfig",
+    "XAIPipeline",
+    "run_xai_pipeline",
+    "ExplanationCache",
+    "cache_key",
+    "predict_batched",
+    "predict_proba_np",
     "compare_explanations",
     "compare_attributions",
     "analyze_failure",
     "is_prediction_correct",
     "aggregate_explanations",
+    # Profiling & measurement
+    "ProfileStats",
+    "ProfileContext",
+    "QueryCounter",
+    "profile_explainer_call",
     # Modalities
     "Modality",
     "detect_modality",

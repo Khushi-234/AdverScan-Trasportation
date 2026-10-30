@@ -8,7 +8,7 @@ from typing import Any, Dict, Optional
 import numpy as np
 import torch
 
-from app.explainability.input_utils import predict_proba_np, to_numpy, to_tensor
+from app.explainability.utils import predict_proba_np, to_numpy, to_tensor
 
 
 def compute_stability(
