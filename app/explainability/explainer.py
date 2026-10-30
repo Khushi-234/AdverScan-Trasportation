@@ -9,7 +9,10 @@ import numpy as np
 import torch
 import torch.nn as nn
 
-from app.attack_engine.models import AttackResult
+try:
+    from app.attack_engine.models import AttackResult
+except Exception:
+    AttackResult = Any  # type: ignore
 from app.explainability.comparison import compare_explanations
 from app.explainability.explanation_result import ExplanationResult
 from app.explainability.failure_analysis import analyze_failure
@@ -426,6 +429,9 @@ class XAIExplainer:
             sensor_names=domain_prof.sensor_names if domain_prof else kwargs.get("sensor_names"),
             modality=mod.value,
             top_k=kwargs.get("top_k", 5),
+            attack_name=attack_name,
+            clean_confidence=clean_conf,
+            adversarial_confidence=adv_conf,
         )
 
         # 11. Optional metrics (Perturbation Alignment, Faithfulness, Stability)
@@ -509,6 +515,8 @@ class XAIExplainer:
             validity_flags=validity_flags,
             attribution_status=attribution_status,
             xai_decision=xai_decision,
+            defense_hints=fail_data.get("defense_hints", []),
+            defense_pipeline=fail_data.get("defense_pipeline", {}),
         )
 
     def explain_batch(

@@ -100,6 +100,7 @@ def test_xai_explainer_attack_result_integration():
     labels = torch.tensor([0])
 
     meta = AttackMetadata(
+        name="deepfool",
         attack_name="deepfool",
         attack_class="DeepFoolAttack",
         epsilon=0.1,
