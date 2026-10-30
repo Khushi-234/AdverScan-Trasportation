@@ -322,6 +322,12 @@ def parse_args():
         default=False,
         help="Disable interactive terminal menu and execute CLI arguments directly",
     )
+    parser.add_argument(
+        "--figures",
+        action="store_true",
+        default=False,
+        help="Build XAI visualization figures after evaluation completes",
+    )
     return parser.parse_args()
 
 
@@ -999,6 +1005,15 @@ def main():
     print("\n" + "=" * 75)
     print(f"  ✓ SECURITY ASSESSMENT & XAI COMPLETED SUCCESSFULLY in {time_str}")
     print("=" * 75 + "\n")
+
+    # Build figures if --figures flag is set
+    if getattr(args, "figures", False):
+        try:
+            from app.explainability.visualization.build_figures import build_all_figures
+            n_figs = build_all_figures(str(out_dir))
+            print(f"[XAI FIGURES] {n_figs} figures saved to {out_dir}")
+        except Exception as _fig_exc:
+            print(f"[XAI FIGURES] Figure generation failed: {_fig_exc}")
 
 
 if __name__ == "__main__":
