@@ -61,3 +61,32 @@ def test_evaluation_result_json_serialization():
 
         assert json_path.is_file()
         assert "accuracy" in json_path.read_text(encoding="utf-8")
+
+
+def test_evaluation_result_model_metadata():
+    """Test model metadata fields in EvaluationResult."""
+    result = EvaluationResult(
+        dataset_name="miladfa7/Intel-Image-Classification",
+        model_name="ashutoshsharma58/scenery3214154",
+        num_samples=100,
+        num_classes=6,
+        accuracy=0.99,
+        precision_macro=0.99,
+        recall_macro=0.99,
+        f1_macro=0.99,
+        precision_weighted=0.99,
+        recall_weighted=0.99,
+        f1_weighted=0.99,
+        average_confidence=0.98,
+        average_entropy=0.04,
+        total_parameters=85802501,
+        trainable_parameters=85802501,
+        model_architecture="ViTForImageClassification",
+        class_names=["buildings", "forest", "glacier", "mountain", "sea", "street"],
+    )
+
+    data = result.to_dict()
+    assert data["total_parameters"] == 85802501
+    assert data["trainable_parameters"] == 85802501
+    assert data["model_architecture"] == "ViTForImageClassification"
+    assert data["class_names"] == ["buildings", "forest", "glacier", "mountain", "sea", "street"]

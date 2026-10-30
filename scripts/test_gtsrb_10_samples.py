@@ -14,7 +14,7 @@ from huggingface_hub import hf_hub_download
 from transformers import AutoModelForImageClassification, ViTConfig
 
 from app.ingestion import ingest_model
-from app.evaluation.dataset_loader import GTSRBDatasetLoader
+from app.evaluation.dataset_loader import HFVisionDatasetLoader
 from app.evaluation.evaluator import BaselineEvaluator
 from app.evaluation.metrics import MetricsCalculator
 from app.attack_engine import (

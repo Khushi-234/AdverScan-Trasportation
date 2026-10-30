@@ -3,8 +3,22 @@ Base loader interface for model loaders in AdverScan.
 """
 
 from abc import ABC, abstractmethod
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Union
+from typing import Any, List, Optional, Union
+
+
+@dataclass
+class LoadResult:
+    """
+    Standardized result container for loaded model and inspection details.
+    """
+    model: Any
+    source: str = "local"
+    framework: str = "pytorch"
+    evidence: List[str] = field(default_factory=list)
+    domain_hint: Optional[str] = "tabular"
+    task_hint: Optional[str] = "classification"
 
 
 class BaseModelLoader(ABC):

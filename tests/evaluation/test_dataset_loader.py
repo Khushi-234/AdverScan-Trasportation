@@ -1,14 +1,14 @@
 """
-Unit tests for GTSRBDatasetLoader image decoding and sample processing.
+Unit tests for HFVisionDatasetLoader image decoding and sample processing.
 """
 
 import io
 from PIL import Image
 import pytest
-from app.evaluation.dataset_loader import GTSRBDatasetLoader
+from app.evaluation.dataset_loader import HFVisionDatasetLoader
 
 
-def test_gtsrb_dataset_loader_decode_image_bytes():
+def test_hf_vision_loader_decode_image_bytes():
     """Test decoding PIL Image from raw PNG bytes dict."""
     img = Image.new("RGB", (32, 32), color="red")
     buf = io.BytesIO()
@@ -17,7 +17,7 @@ def test_gtsrb_dataset_loader_decode_image_bytes():
 
     sample = {"Path": {"bytes": raw_bytes}, "ClassId": 14}
 
-    loader = GTSRBDatasetLoader.__new__(GTSRBDatasetLoader)
+    loader = HFVisionDatasetLoader.__new__(HFVisionDatasetLoader)
     decoded_img = loader._decode_image(sample)
 
     assert isinstance(decoded_img, Image.Image)
@@ -25,9 +25,9 @@ def test_gtsrb_dataset_loader_decode_image_bytes():
     assert decoded_img.mode == "RGB"
 
 
-def test_gtsrb_dataset_loader_rgb_conversion():
+def test_hf_vision_loader_rgb_conversion():
     """Test explicit conversion of RGBA and grayscale images to RGB."""
-    loader = GTSRBDatasetLoader.__new__(GTSRBDatasetLoader)
+    loader = HFVisionDatasetLoader.__new__(HFVisionDatasetLoader)
 
     # Test RGBA image
     rgba_img = Image.new("RGBA", (32, 32), color=(255, 0, 0, 128))
@@ -42,7 +42,7 @@ def test_gtsrb_dataset_loader_rgb_conversion():
     assert decoded_gray.mode == "RGB"
 
 
-def test_gtsrb_dataset_loader_processor_output_shape(mocker=None):
+def test_hf_vision_loader_processor_output_shape(mocker=None):
     """Test image processor transforms PIL image into expected (N, 3, 224, 224) tensor shape."""
     from transformers import AutoImageProcessor
     import torch
@@ -57,9 +57,200 @@ def test_gtsrb_dataset_loader_processor_output_shape(mocker=None):
     assert tensor.shape == (2, 3, 224, 224)
 
 
-def test_gtsrb_dataset_loader_decode_invalid_sample():
+def test_hf_vision_loader_decode_invalid_sample():
     """Test error handling when decoding sample with missing keys."""
-    loader = GTSRBDatasetLoader.__new__(GTSRBDatasetLoader)
+    loader = HFVisionDatasetLoader.__new__(HFVisionDatasetLoader)
     with pytest.raises(KeyError, match="does not contain a valid image"):
         loader._decode_image({"invalid": "dict"})
+
+
+def test_time_series_dataset_loader():
+    """Test TimeSeriesDatasetLoader with 3D numerical sequence tensor inputs."""
+    import torch
+    from app.evaluation.dataset_loader import TimeSeriesDatasetLoader
+
+    inputs = torch.randn(10, 24, 5)  # 10 samples, 24 time steps, 5 features
+    targets = torch.tensor([0, 1, 0, 1, 0, 1, 0, 1, 0, 1])
+
+    loader = TimeSeriesDatasetLoader(inputs=inputs, targets=targets, batch_size=4)
+    assert len(loader) == 10
+
+    batches = list(loader.iterate_batches())
+    assert len(batches) == 3  # 4 + 4 + 2 samples
+    b_in, b_tgt, t_list = batches[0]
+    assert b_in.shape == (4, 24, 5)
+    assert b_tgt.shape == (4,)
+    assert t_list == [0, 1, 0, 1]
+
+
+def test_tabular_dataset_loader_tuple():
+    """Test TabularDatasetLoader with feature matrix and target vector tuple."""
+    import torch
+    from app.evaluation.dataset_loader import TabularDatasetLoader
+
+    X = torch.randn(12, 8)  # 12 samples, 8 tabular features
+    y = torch.tensor([0, 1, 2, 0, 1, 2, 0, 1, 2, 0, 1, 2])
+
+    loader = TabularDatasetLoader(data=(X, y), batch_size=5)
+    assert len(loader) == 12
+
+    batches = list(loader.iterate_batches())
+    assert len(batches) == 3
+    b_in, b_tgt, t_list = batches[0]
+    assert b_in.shape == (5, 8)
+    assert b_tgt.shape == (5,)
+    assert t_list == [0, 1, 2, 0, 1]
+
+
+def test_get_dataset_loader_factory_domains():
+    """Test get_dataset_loader factory resolving correct domain classes."""
+    import torch
+    from app.evaluation.dataset_loader import (
+        HFVisionDatasetLoader,
+        TimeSeriesDatasetLoader,
+        TabularDatasetLoader,
+        get_dataset_loader,
+    )
+
+    # Time series domain
+    ts_loader = get_dataset_loader(
+        dataset_name="custom_ts",
+        data_domain="time-series",
+        inputs=torch.randn(4, 10),
+        targets=torch.tensor([0, 1, 0, 1]),
+    )
+    assert isinstance(ts_loader, TimeSeriesDatasetLoader)
+
+    # Tabular domain
+    tab_loader = get_dataset_loader(
+        dataset_name="custom_tab",
+        data_domain="tabular",
+        data=(torch.randn(4, 5), torch.tensor([0, 1, 0, 1])),
+    )
+    assert isinstance(tab_loader, TabularDatasetLoader)
+
+    # Generic domain
+    from app.evaluation.dataset_loader import GenericDatasetLoader
+    gen_loader = get_dataset_loader(
+        dataset_name="custom_gen",
+        data_domain="generic",
+        inputs=torch.randn(4, 5),
+        targets=torch.tensor([0, 1, 0, 1]),
+    )
+    assert isinstance(gen_loader, GenericDatasetLoader)
+
+
+def test_get_dataset_loader_validation_and_unsupported_domains():
+    """Test get_dataset_loader error handling for missing args and unsupported domains."""
+    import torch
+    from app.evaluation.dataset_loader import get_dataset_loader
+
+    # Unsupported domain
+    with pytest.raises(ValueError, match="Unsupported data domain"):
+        get_dataset_loader(dataset_name="unknown", data_domain="quantum_computing")
+
+    # Time series missing inputs or targets
+    with pytest.raises(ValueError, match="TimeSeriesDatasetLoader requires"):
+        get_dataset_loader(dataset_name="ts", data_domain="time-series")
+
+    # Tabular missing data
+    with pytest.raises(ValueError, match="TabularDatasetLoader requires"):
+        get_dataset_loader(dataset_name="tab", data_domain="tabular")
+
+    # Generic missing inputs or targets
+    with pytest.raises(ValueError, match="GenericDatasetLoader requires"):
+        get_dataset_loader(dataset_name="gen", data_domain="generic")
+
+
+def test_hf_vision_loader_invalid_processor_raises_runtime_error(monkeypatch):
+    """Test that specifying an invalid/unresolvable processor_name raises a RuntimeError."""
+    from app.evaluation.dataset_loader import HFVisionDatasetLoader
+
+    class DummyDataset:
+        column_names = ["image", "label"]
+        features = {}
+        def __len__(self):
+            return 1
+        def __getitem__(self, idx):
+            return {"image": Image.new("RGB", (10, 10)), "label": 0}
+
+    import app.evaluation.dataset_loader as dl_module
+    monkeypatch.setattr(dl_module, "load_dataset", lambda *args, **kwargs: DummyDataset())
+
+    with pytest.raises(RuntimeError, match="Failed to load AutoImageProcessor"):
+        HFVisionDatasetLoader(
+            dataset_name="dummy_dataset",
+            processor_name="non_existent_processor_12345XYZ",
+        )
+
+
+def test_hf_vision_loader_missing_label_raises_key_error(monkeypatch):
+    """Test that a dataset missing all recognized label columns raises KeyError."""
+    from app.evaluation.dataset_loader import HFVisionDatasetLoader
+
+    class DummyUnlabeledDataset:
+        column_names = ["image", "unrelated_meta"]
+        features = {}
+        def __len__(self):
+            return 1
+        def __getitem__(self, idx):
+            return {"image": Image.new("RGB", (10, 10)), "unrelated_meta": "test"}
+
+    import app.evaluation.dataset_loader as dl_module
+    monkeypatch.setattr(dl_module, "load_dataset", lambda *args, **kwargs: DummyUnlabeledDataset())
+
+    with pytest.raises(KeyError, match="does not contain any recognized label column"):
+        HFVisionDatasetLoader(
+            dataset_name="unlabeled_dataset",
+            processor_name=None,
+        )
+
+
+def test_resolve_dataset_file_and_dynamic_tabular_loader():
+    """Verify general dynamic dataset file resolution and automatic tabular loading."""
+    from app.evaluation.dataset_loader.factory import get_dataset_loader, resolve_dataset_file
+
+    # 1. Direct path resolution
+    resolved_csv = resolve_dataset_file("data/adult_census_test.csv", [".csv"])
+    assert resolved_csv is not None
+    assert resolved_csv.endswith(".csv")
+
+    # 2. Model-based resolution
+    model_resolved = resolve_dataset_file(None, [".csv"], model_identifier="models/tabular-mlp-adult-census.pt")
+    assert model_resolved is not None
+    assert "adult_census" in model_resolved
+
+    # 3. Dynamic loading without explicit kwargs['data']
+    tab_loader = get_dataset_loader(
+        dataset_name="adult_census",
+        data_domain="tabular",
+        batch_size=16,
+    )
+    assert len(tab_loader) > 0
+    batch_x, batch_y, labels = next(tab_loader.iterate_batches())
+    assert batch_x.shape[0] == 16
+    assert batch_y.shape[0] == 16
+
+
+def test_resolve_dataset_file_and_dynamic_timeseries_loader():
+    """Verify general dynamic dataset file resolution and automatic time-series loading."""
+    from app.evaluation.dataset_loader.factory import get_dataset_loader, resolve_dataset_file
+
+    # 1. Model-based resolution for TS
+    resolved_ts = resolve_dataset_file(None, [".pt"], model_identifier="models/time-series-ecg-classifier.pt")
+    assert resolved_ts is not None
+    assert resolved_ts.endswith(".pt")
+
+    # 2. Dynamic loading without explicit kwargs['inputs'] or kwargs['targets']
+    ts_loader = get_dataset_loader(
+        dataset_name="time_series_ecg",
+        data_domain="time-series",
+        batch_size=8,
+    )
+    assert len(ts_loader) > 0
+    batch_x, batch_y, labels = next(ts_loader.iterate_batches())
+    assert batch_x.shape[0] == 8
+    assert batch_y.shape[0] == 8
+
+
 

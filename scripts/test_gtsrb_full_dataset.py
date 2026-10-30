@@ -12,7 +12,7 @@ from huggingface_hub import hf_hub_download
 from transformers import AutoModelForImageClassification, ViTConfig
 
 from app.ingestion import ingest_model
-from app.evaluation.dataset_loader import GTSRBDatasetLoader
+from app.evaluation.dataset_loader import HFVisionDatasetLoader
 from app.evaluation.evaluator import BaselineEvaluator
 
 load_dotenv()
@@ -79,7 +79,7 @@ def main():
 
     # 3. Initialize GTSRB dataset loader for full 'test' split dynamically
     print(f"\n[2/3] Loading full dataset split 'test' from '{dataset_name}' ...")
-    loader = GTSRBDatasetLoader(
+    loader = HFVisionDatasetLoader(
         dataset_name=dataset_name,
         processor_name=model_name,
         split="test",
