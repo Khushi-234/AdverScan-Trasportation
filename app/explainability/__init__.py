@@ -43,6 +43,8 @@ from app.explainability.profiling import (
     QueryCounter,
     profile_explainer_call,
 )
+from app.explainability.cache import ExplanationCache, cache_key
+
 
 
 def __getattr__(name: str):
@@ -58,6 +60,8 @@ __all__ = [
     "XAIConfig",
     "XAIPipeline",
     "run_xai_pipeline",
+    "ExplanationCache",
+    "cache_key",
     "predict_batched",
     "predict_proba_np",
     "compare_explanations",

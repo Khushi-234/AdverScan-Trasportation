@@ -33,6 +33,7 @@ from app.explainability.techniques.registry import TechniqueRegistry, technique_
 from app.explainability.techniques.shap_explainer import SHAPExplainer, TreeSHAPExplainer
 from app.explainability.profiling import profile_explainer_call
 from app.explainability.config import XAIConfig
+from app.explainability.cache import ExplanationCache, cache_key
 
 
 class XAIExplainer:
@@ -49,6 +50,7 @@ class XAIExplainer:
         default_technique: str = "shap",
         registry: Optional[TechniqueRegistry] = None,
         config: Optional[XAIConfig] = None,
+        cache: Optional[ExplanationCache] = None,
         **kwargs: Any,
     ):
         """
@@ -58,10 +60,12 @@ class XAIExplainer:
             default_technique: Default XAI technique identifier ("shap", "treeshap", "lime", "saliency", etc.).
             registry: Optional custom TechniqueRegistry instance.
             config: Optional XAIConfig defining evaluation mode, budgets, and parameters.
+            cache: Optional ExplanationCache for caching clean input explanations across attacks.
         """
         self.default_technique = default_technique.lower()
         self.registry = registry or technique_registry
         self.config = config or XAIConfig()
+        self.cache = cache if cache is not None else ExplanationCache()
 
         # Backward compatibility dictionary mapping
         self.techniques = {
@@ -106,6 +110,7 @@ class XAIExplainer:
         compute_metrics: bool = False,
         domain: Optional[str] = None,
         config: Optional[XAIConfig] = None,
+        cache: Optional[ExplanationCache] = None,
         **kwargs: Any,
     ) -> ExplanationResult:
         """
@@ -247,7 +252,15 @@ class XAIExplainer:
         is_fallback = False
         actual_tech_used = tech_name
 
-        def _exec_profiling(active_expl):
+        active_cache = cache if cache is not None else getattr(self, "cache", None)
+        model_id = kwargs.get("model_id") or getattr(model, "model_id", None) or str(id(model))
+
+        def _exec_clean(active_expl, active_tech_name):
+            if active_cache is not None:
+                ckey = cache_key(prep_clean, active_tech_name, eval_target, model_id)
+                hit = active_cache.get(ckey)
+                if hit is not None:
+                    return hit[0], hit[1]
             c_res, c_stats = profile_explainer_call(
                 active_expl,
                 model,
@@ -257,6 +270,13 @@ class XAIExplainer:
                 output_mode=output_mode,
                 **explainer_kwargs,
             )
+            if active_cache is not None:
+                ckey = cache_key(prep_clean, active_tech_name, eval_target, model_id)
+                active_cache.put(ckey, (c_res, c_stats))
+            return c_res, c_stats
+
+        def _exec_profiling(active_expl, active_tech_name):
+            c_res, c_stats = _exec_clean(active_expl, active_tech_name)
             a_res, a_stats = profile_explainer_call(
                 active_expl,
                 model,
@@ -270,7 +290,7 @@ class XAIExplainer:
 
         try:
             with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
-                future = executor.submit(_exec_profiling, explainer)
+                future = executor.submit(_exec_profiling, explainer, tech_name)
                 clean_attr_result, clean_stats, adv_attr_result, adv_stats = future.result(timeout=timeout_s)
         except concurrent.futures.TimeoutError:
             is_fallback = True
@@ -294,7 +314,7 @@ class XAIExplainer:
                 actual_tech_used = "saliency"
                 cheaper_explainer = self.registry.get("saliency", **explainer_kwargs)
 
-            clean_attr_result, clean_stats, adv_attr_result, adv_stats = _exec_profiling(cheaper_explainer)
+            clean_attr_result, clean_stats, adv_attr_result, adv_stats = _exec_profiling(cheaper_explainer, actual_tech_used)
 
         total_explain_seconds = clean_stats.explain_seconds + adv_stats.explain_seconds
         total_model_queries = clean_stats.num_model_queries + adv_stats.num_model_queries
