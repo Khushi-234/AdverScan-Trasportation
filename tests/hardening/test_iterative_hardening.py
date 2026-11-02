@@ -286,3 +286,47 @@ def test_retest_threshold_consistency():
     assert res["status"] == "accepted"
     assert res["improvement_sufficient"] is True
     assert res["vulnerability_score_improvement"] == 10.0
+
+
+def test_iterative_hardening_fallback_to_best_when_threshold_unmet():
+    """Verify that when fallback_to_best=True and no candidate meets strict thresholds, the most effective candidate is selected."""
+    engine = HardeningEngine()
+    model = SimpleDummyModel()
+
+    attempt_counter = 0
+
+    def mock_eval_fn(tested_model):
+        nonlocal attempt_counter
+        attempt_counter += 1
+        if attempt_counter == 1:
+            # Candidate 1: 1 pt improvement
+            return {
+                "vulnerability_score": 79.0,
+                "clean_accuracy": 0.95,
+                "asr": 0.79,
+            }
+        else:
+            # Candidate 2: 3 pt improvement (still < 5.0 min threshold, but best)
+            return {
+                "vulnerability_score": 77.0,
+                "clean_accuracy": 0.94,
+                "asr": 0.75,
+            }
+
+    result = engine.harden_iterative(
+        model=model,
+        candidate_defenses=["spatial_smoothing", "bit_depth_reduction"],
+        eval_fn=mock_eval_fn,
+        baseline_metrics={"vulnerability_score": 80.0, "clean_accuracy": 0.95, "asr": 0.80},
+        thresholds=HardeningThresholds(min_vuln_score_improvement=5.0, min_asr_reduction=0.10),
+        fallback_to_best=True,
+    )
+
+    assert result.success is True
+    assert result.selected_defense == "bit_depth_reduction"
+    assert result.status == "most_effective"
+    assert result.is_improved is True
+    assert result.improvement_sufficient is False
+    assert len(result.defense_attempts) == 2
+    assert "Selected most effective candidate defense 'bit_depth_reduction'" in result.recommendations[0]
+

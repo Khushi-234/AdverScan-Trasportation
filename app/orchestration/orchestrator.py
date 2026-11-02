@@ -846,6 +846,7 @@ class AdverScanOrchestrator:
                         defense_config=config.defense_config,
                         eval_fn=eval_fn,
                         iterative=is_iterative_req,
+                        fallback_to_best=getattr(config, "fallback_to_best_defense", True),
                     )
                     result.hardening_results = hard_res.to_dict()
                     resource_monitor.record_stage("M7_hardening")
@@ -887,8 +888,10 @@ class AdverScanOrchestrator:
                         print("\n    --------------------------------------------------------")
                         print("    DEFENSE SELECTION & COMPARISON SUMMARY")
                         print("    --------------------------------------------------------")
-                        if hard_res.selected_defense:
+                        if hard_res.selected_defense and hard_res.improvement_sufficient:
                             print(f"    🏆 FINALLY SELECTED DEFENSE: '{hard_res.selected_defense}' (Satisfied acceptance thresholds in attempt {hard_res.num_attempts})")
+                        elif hard_res.selected_defense:
+                            print(f"    ⭐ SELECTED MOST EFFECTIVE DEFENSE: '{hard_res.selected_defense}' (Did not meet full ASR threshold, but selected as most effective candidate)")
                         else:
                             print("    ⚠️ NO DEFENSE ACCEPTED: None of the candidate defenses met all acceptance criteria.")
 
