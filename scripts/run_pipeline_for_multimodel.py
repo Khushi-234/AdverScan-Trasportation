@@ -305,6 +305,12 @@ def parse_args():
         help="Hardening defense technique (auto, randomized_smoothing, spatial_smoothing, iterative)",
     )
     parser.add_argument(
+        "--fallback-to-best-defense",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="When no candidate defense satisfies strict acceptance thresholds (ASR reduction ratio), select and evaluate the most effective candidate defense (default: True)",
+    )
+    parser.add_argument(
         "--enable-retest",
         action=argparse.BooleanOptionalAction,
         default=True,
@@ -709,6 +715,7 @@ def prompt_pipeline_options() -> Dict[str, Any]:
     xai_cache = True
     enable_hardening = False
     defense = "auto"
+    fallback_to_best_defense = True
     enable_retest = True
     enable_report = True
 
@@ -769,11 +776,15 @@ def prompt_pipeline_options() -> Dict[str, Any]:
 
         hard_in = input("Enable M7 Defense & Hardening Engine? [y/N]: ").strip().lower()
         enable_hardening = hard_in in ("y", "yes", "true", "1")
+        fallback_to_best_defense = True
         if enable_hardening:
             print("  Available Defenses: 1. Auto, 2. Randomized Smoothing, 3. Spatial Smoothing, 4. Iterative Loop")
             d_choice = input("Select Defense [1]: ").strip() or "1"
             d_map = {"1": "auto", "2": "randomized_smoothing", "3": "spatial_smoothing", "4": "iterative"}
             defense = d_map.get(d_choice, "auto")
+
+            fb_in = input("  Select most effective defense if none meets strict ASR ratio threshold? [Y/n]: ").strip().lower() or "y"
+            fallback_to_best_defense = fb_in in ("y", "yes", "true", "1")
 
         retest_in = input("Enable M8 Re-Test & Comparison Engine? [Y/n]: ").strip().lower() or "y"
         enable_retest = retest_in in ("y", "yes", "true", "1")
@@ -804,6 +815,7 @@ def prompt_pipeline_options() -> Dict[str, Any]:
         "xai_cache": xai_cache,
         "enable_hardening": enable_hardening,
         "defense": defense,
+        "fallback_to_best_defense": fallback_to_best_defense if enable_hardening else True,
         "enable_retest": enable_retest,
         "enable_report": enable_report,
         "device": target_device,
@@ -838,9 +850,11 @@ def print_configuration_summary(opts: Dict[str, Any]):
         figs_str = "Enabled" if opts.get("xai_figures") else "Disabled"
         cache_str = "Enabled" if opts.get("xai_cache") else "Disabled"
         print(f"XAI Enabled (M6):           True (Mode: {mode_str}, Techniques: {techs_str}, Budget: {budget_str}, Figures: {figs_str}, Cache: {cache_str})")
+    if opts.get("enable_hardening"):
+        fb_str = "Enabled" if opts.get("fallback_to_best_defense", True) else "Disabled"
+        print(f"Hardening Enabled (M7):     True (Defense: {opts['defense']}, Select Most Effective: {fb_str})")
     else:
-        print(f"XAI Enabled (M6):           False")
-    print(f"Hardening Enabled (M7):     {opts['enable_hardening']} (Defense: {opts['defense']})")
+        print(f"Hardening Enabled (M7):     False")
     print(f"Re-Test Enabled (M8):       {opts['enable_retest']}")
     print(f"Report Generator (M9):      {opts['enable_report']}")
     print(f"Output Directory:           {opts['output_dir']}")
@@ -1059,6 +1073,7 @@ def main():
             "xai_cache": pipeline_opts.get("xai_cache", True),
             "enable_hardening": pipeline_opts["enable_hardening"],
             "defense": pipeline_opts["defense"],
+            "fallback_to_best_defense": pipeline_opts.get("fallback_to_best_defense", True),
             "enable_retest": pipeline_opts["enable_retest"],
             "enable_report": pipeline_opts["enable_report"],
             "output_dir": args.output_dir,
@@ -1158,6 +1173,7 @@ def main():
             "xai_cache": args.xai_cache,
             "enable_hardening": args.enable_hardening,
             "defense": args.defense.lower(),
+            "fallback_to_best_defense": args.fallback_to_best_defense,
             "enable_retest": args.enable_retest,
             "enable_report": args.enable_report,
             "output_dir": args.output_dir,
@@ -1188,6 +1204,7 @@ def main():
     xai_cache_val: bool = bool(opts.get("xai_cache", True))
     enable_hardening_val: bool = bool(opts.get("enable_hardening", False))
     defense_val: str = str(opts.get("defense", "auto"))
+    fallback_to_best_val: bool = bool(opts.get("fallback_to_best_defense", True))
     enable_retest_val: bool = bool(opts.get("enable_retest", True))
     enable_report_val: bool = bool(opts.get("enable_report", True))
     output_dir_val: Optional[str] = str(opts["output_dir"]) if opts.get("output_dir") else None
@@ -1201,7 +1218,7 @@ def main():
             canon_arch = normalize_model_type(m_arch)
             chosen_tech = xai_techniques_val[0] if xai_techniques_val else "auto"
             if chosen_tech == "auto":
-                chosen_tech = str(RULES_TABLE.get(canon_arch, {}).get(xai_mode_val, "integrated_gradients"))
+                chosen_tech = RULES_TABLE.get(canon_arch, {}).get(xai_mode_val, "integrated_gradients")
                 reason = f"{m_arch} + {xai_mode_val} mode (routing table)"
             else:
                 reason = f"Manual override: {chosen_tech}"
@@ -1310,6 +1327,7 @@ def main():
         xai_cache=xai_cache_val,
         enable_hardening=enable_hardening_val,
         defense=defense_val,
+        fallback_to_best_defense=fallback_to_best_val,
         enable_retest=enable_retest_val,
         enable_report=enable_report_val,
         output_dir=output_dir_val,
@@ -1661,16 +1679,86 @@ def main():
                     if fig_files:
                         print(f"    • Visual Figures:        {len(fig_files)} plots generated in {figs_dir}")
 
-    # Hardening & Re-Test Results (if available)
-    if result.hardening_results and result.hardening_results.get("selected_defense"):
+    # M7 — Hardening Engine Results
+    if result.hardening_results:
         print("\n" + "-" * 70)
-        print("M7 / M8 — HARDENING DEFENSE & RE-TEST COMPARISON")
+        print("M7 — HARDENING & DEFENSE ENGINE RESULTS")
         print("-" * 70)
-        print(f"  • Selected Defense:        {result.hardening_results.get('selected_defense')}")
-        if result.retest_results:
+        sel_def = result.hardening_results.get("selected_defense")
+        status_val = str(result.hardening_results.get("status", "unknown")).upper()
+        imp_suff = result.hardening_results.get("improvement_sufficient", False)
+        attempts = result.hardening_results.get("defense_attempts", [])
+
+        if sel_def and sel_def != "none":
+            if imp_suff:
+                print(f"  🏆 Selected Defense:        '{sel_def}' [ACCEPTED — Met all acceptance thresholds]")
+            else:
+                print(f"  ⭐ Selected Defense:        '{sel_def}' [MOST EFFECTIVE CANDIDATE]")
+                print(f"     └─ Note: None of the candidate defenses met strict ASR reduction ratio thresholds;")
+                print(f"        automatically selected the most effective candidate achieving maximum vulnerability reduction.")
+        else:
+            print(f"  ⚠️ Selected Defense:        None (No candidate defense met criteria or all were harmful)")
+
+        if attempts:
+            print(f"\n  Candidate Defense Attempts Breakdown ({len(attempts)} evaluated):")
+            for idx, att in enumerate(attempts, 1):
+                att_name = att.get("defense_name", "unknown")
+                att_st = att.get("status", "unknown").upper()
+                v_imp = att.get("vuln_score_improvement")
+                v_imp_str = f"{v_imp:+.2f} pts" if v_imp is not None else "N/A"
+                asr_red = att.get("asr_reduction")
+                asr_red_str = f"{asr_red * 100:.2f}%" if asr_red is not None else "N/A"
+                c_drop = att.get("clean_accuracy_drop_pct_points")
+                c_drop_str = f"{c_drop:.2f}%" if c_drop is not None else "N/A"
+
+                is_sel = " ★ (SELECTED)" if att_name == sel_def else ""
+                print(f"    [{idx}] Defense '{att_name}'{is_sel} -> Status: {att_st}")
+                print(f"        • Vulnerability Score Improvement: {v_imp_str}")
+                print(f"        • Attack Success Rate Reduction:   {asr_red_str}")
+                print(f"        • Clean Accuracy Drop:            {c_drop_str}")
+                if att.get("reason"):
+                    print(f"        • Evaluation Detail:              {att.get('reason')}")
+
+        if result.hardening_results.get("recommendations"):
+            print(f"\n  Hardening Recommendations:")
+            for rec in result.hardening_results["recommendations"]:
+                print(f"    • {rec}")
+
+    # M8 — Re-Test & Robustness Comparison
+    if result.retest_results:
+        print("\n" + "-" * 70)
+        print("M8 — RE-TEST & COMPARISON ENGINE")
+        print("-" * 70)
+        retest_st = str(result.retest_results.get("status", "COMPLETED")).upper()
+        if retest_st == "SKIPPED":
+            print(f"  • Re-Test Status:          SKIPPED ({result.retest_results.get('reason', 'No defense applied')})")
+        else:
             rob_gain = result.retest_results.get("overall_robustness_gain")
             gain_str = f"{rob_gain * 100:+.2f}%" if rob_gain is not None else "N/A"
+            overall_imp = result.retest_results.get("overall_improved")
+            imp_disp = "YES (Robustness Improved)" if overall_imp is True else ("NO (No Robustness Gain)" if overall_imp is False else "N/A")
             print(f"  • Overall Robustness Gain: {gain_str}")
+            print(f"  • Robustness Improved:     {imp_disp}")
+
+            comparisons = result.retest_results.get("comparisons", {})
+            if comparisons:
+                print(f"\n  Attack Vector Re-Test Comparisons:")
+                for atk_k, comp in comparisons.items():
+                    d_vuln = comp.get("delta_vulnerability_score")
+                    d_vuln_str = f"{d_vuln:+.2f} pts" if d_vuln is not None else "N/A"
+                    d_asr = comp.get("delta_asr")
+                    d_asr_str = f"{d_asr * 100:+.2f}%" if d_asr is not None else "N/A"
+                    d_drop = comp.get("delta_accuracy_drop")
+                    d_drop_str = f"{d_drop * 100:+.2f}%" if d_drop is not None else "N/A"
+                    b_risk = comp.get("before_risk_level", "UNKNOWN")
+                    a_risk = comp.get("after_risk_level", "UNKNOWN")
+                    is_imp = comp.get("is_improved")
+                    is_imp_str = "Improved" if is_imp else "Not Improved"
+                    print(f"    ▶ Attack: [{atk_k.upper()}] ({is_imp_str})")
+                    print(f"      • Vulnerability Score Delta: {d_vuln_str}")
+                    print(f"      • Attack Success Rate Delta: {d_asr_str}")
+                    print(f"      • Accuracy Drop Delta:       {d_drop_str}")
+                    print(f"      • Risk Level Shift:          {b_risk} → {a_risk}")
 
     # Generated Reports
     if result.report_result:

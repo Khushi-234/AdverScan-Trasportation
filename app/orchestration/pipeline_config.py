@@ -94,6 +94,7 @@ class PipelineConfig:
     enable_hardening: bool = False
     defense: str = "auto"
     defense_config: Dict[str, Any] = field(default_factory=dict)
+    fallback_to_best_defense: bool = True
 
     # Re-Test & Comparison Configuration (M8)
     enable_retest: bool = True

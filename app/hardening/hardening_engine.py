@@ -57,6 +57,7 @@ class HardeningEngine:
         latency_sensitive: Optional[bool] = None,
         context: Optional[Any] = None,
         max_attempts: Optional[int] = None,
+        fallback_to_best: bool = False,
         **kwargs: Any,
     ) -> HardeningResult:
         """
@@ -156,6 +157,7 @@ class HardeningEngine:
 
         attempts: List[DefenseAttemptResult] = []
         any_improved: bool = False
+        after_metrics: Dict[str, Any] = {}
 
         # 3. Iterative defense evaluation loop (apply -> re-test -> compare -> evaluate)
         for candidate in candidate_defenses:
@@ -257,7 +259,57 @@ class HardeningEngine:
 
             # Rule 6, 7: Defense did not satisfy thresholds, continue to next candidate
 
-        # Rule 9: If no candidate satisfies acceptance criteria, report that no tested defense provided sufficient improvement
+        # Rule 9: If no candidate satisfies acceptance criteria, check if fallback to most effective defense is enabled
+        if fallback_to_best and attempts:
+            viable_attempts = [a for a in attempts if a.status != "harmful"]
+            if viable_attempts:
+                best_attempt = max(
+                    viable_attempts,
+                    key=lambda a: (
+                        a.vuln_score_improvement or 0.0,
+                        a.asr_reduction or 0.0,
+                        -(a.clean_accuracy_drop or 0.0),
+                    ),
+                )
+                has_positive_gain = (
+                    (best_attempt.vuln_score_improvement is not None and best_attempt.vuln_score_improvement > 0)
+                    or (best_attempt.asr_reduction is not None and best_attempt.asr_reduction > 0)
+                    or (best_attempt.clean_accuracy_drop is not None and best_attempt.clean_accuracy_drop <= 0.05)
+                )
+                if has_positive_gain:
+                    try:
+                        best_cls = get_defense_class(best_attempt.defense_name)
+                        best_params = best_attempt.parameters or all_candidate_params.get(best_attempt.defense_name, {})
+                        best_defense_obj = best_cls(**best_params)
+                        cand_res = best_defense_obj.apply(
+                            model=model,
+                            inputs=inputs,
+                            labels=labels,
+                        )
+                        cand_res.selected_defense = best_attempt.defense_name
+                        cand_res.defense_attempts = attempts
+                        cand_res.num_attempts = len(attempts)
+                        cand_res.is_improved = True
+                        cand_res.improvement_sufficient = False
+                        cand_res.status = "most_effective"
+                        cand_res.thresholds = thresh_obj.to_dict()
+                        cand_res.metrics_before = base_metrics
+                        if eval_fn is not None and callable(eval_fn):
+                            try:
+                                cand_res.metrics_after = eval_fn(cand_res.hardened_model) or {}
+                            except Exception:
+                                cand_res.metrics_after = {}
+                        best_imp_val = f"{best_attempt.vuln_score_improvement:+.2f} pts" if best_attempt.vuln_score_improvement is not None else "N/A"
+                        best_asr_val = f"{(best_attempt.asr_reduction or 0.0)*100:.2f}%" if best_attempt.asr_reduction is not None else "N/A"
+                        cand_res.recommendations = [
+                            f"Iterative Defense Selection: None of the {len(attempts)} candidate defenses met strict acceptance criteria (ASR reduction ratio). "
+                            f"Selected most effective candidate defense '{best_attempt.defense_name}' providing maximum vulnerability reduction "
+                            f"({best_imp_val} improvement, ASR reduction: {best_asr_val})."
+                        ]
+                        return cand_res
+                    except Exception:
+                        pass
+
         all_harmful = all(a.status == "harmful" for a in attempts)
         overall_status = "harmful" if (all_harmful and attempts) else "insufficient"
 
@@ -308,6 +360,7 @@ class HardeningEngine:
         thresholds: Optional[Union[RetestThresholds, Dict[str, Any]]] = None,
         latency_sensitive: Optional[bool] = None,
         candidate_defenses: Optional[List[str]] = None,
+        fallback_to_best: bool = False,
         **kwargs: Any,
     ) -> HardeningResult:
         """
@@ -333,6 +386,7 @@ class HardeningEngine:
             thresholds: Optional acceptance thresholds (RetestThresholds or dict).
             latency_sensitive: Operational latency constraint flag.
             candidate_defenses: Optional explicit candidate list for iterative mode.
+            fallback_to_best: If True and no candidate defense meets strict thresholds, select the most effective candidate.
             **kwargs: Additional context parameters.
 
         Returns:
@@ -356,6 +410,7 @@ class HardeningEngine:
                 candidate_defenses=candidate_defenses,
                 eval_fn=eval_fn,
                 latency_sensitive=latency_sensitive,
+                fallback_to_best=fallback_to_best,
                 **kwargs,
             )
 

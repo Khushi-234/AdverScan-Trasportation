@@ -38,10 +38,17 @@ class ComparisonEngine:
         Returns:
             ComparisonResult: Detailed delta and comparative summary DTO.
         """
-        b_assess_dict = before_assessment.to_dict() if hasattr(before_assessment, "to_dict") else dict(before_assessment)
-        a_assess_dict = after_assessment.to_dict() if hasattr(after_assessment, "to_dict") else dict(after_assessment)
-        b_score_dict = before_scoring.to_dict() if hasattr(before_scoring, "to_dict") else dict(before_scoring)
-        a_score_dict = after_scoring.to_dict() if hasattr(after_scoring, "to_dict") else dict(after_scoring)
+        def _to_dict(item: Any) -> Dict[str, Any]:
+            if hasattr(item, "to_dict") and callable(getattr(item, "to_dict")):
+                return item.to_dict()
+            if isinstance(item, dict):
+                return dict(item)
+            return {}
+
+        b_assess_dict = _to_dict(before_assessment)
+        a_assess_dict = _to_dict(after_assessment)
+        b_score_dict = _to_dict(before_scoring)
+        a_score_dict = _to_dict(after_scoring)
 
         attack_name = a_assess_dict.get("attack_name", b_assess_dict.get("attack_name", "unknown_attack"))
 
@@ -52,32 +59,40 @@ class ComparisonEngine:
         if a_asr is not None and b_asr is not None:
             delta_asr = round(float(a_asr) - float(b_asr), 4)
 
-        b_acc_drop = float(b_assess_dict.get("accuracy_drop", 0.0))
-        a_acc_drop = float(a_assess_dict.get("accuracy_drop", 0.0))
+        def _safe_float(val: Any, default: float = 0.0) -> float:
+            if val is None:
+                return default
+            try:
+                return float(val)
+            except (ValueError, TypeError):
+                return default
+
+        b_acc_drop = _safe_float(b_assess_dict.get("accuracy_drop"))
+        a_acc_drop = _safe_float(a_assess_dict.get("accuracy_drop"))
         delta_acc_drop = round(a_acc_drop - b_acc_drop, 4)
 
-        b_f1_drop = float(b_assess_dict.get("f1_drop", 0.0))
-        a_f1_drop = float(a_assess_dict.get("f1_drop", 0.0))
+        b_f1_drop = _safe_float(b_assess_dict.get("f1_drop"))
+        a_f1_drop = _safe_float(a_assess_dict.get("f1_drop"))
         delta_f1_drop = round(a_f1_drop - b_f1_drop, 4)
 
-        b_conf_drop = float(b_assess_dict.get("confidence_drop", 0.0))
-        a_conf_drop = float(a_assess_dict.get("confidence_drop", 0.0))
+        b_conf_drop = _safe_float(b_assess_dict.get("confidence_drop"))
+        a_conf_drop = _safe_float(a_assess_dict.get("confidence_drop"))
         delta_conf_drop = round(a_conf_drop - b_conf_drop, 4)
 
-        b_degrad = float(b_assess_dict.get("model_degradation", 0.0))
-        a_degrad = float(a_assess_dict.get("model_degradation", 0.0))
+        b_degrad = _safe_float(b_assess_dict.get("model_degradation"))
+        a_degrad = _safe_float(a_assess_dict.get("model_degradation"))
         delta_model_degrad = round(a_degrad - b_degrad, 4)
 
-        b_vuln_score = float(b_score_dict.get("vulnerability_score", 0.0))
-        a_vuln_score = float(a_score_dict.get("vulnerability_score", 0.0))
+        b_vuln_score = _safe_float(b_score_dict.get("vulnerability_score"))
+        a_vuln_score = _safe_float(a_score_dict.get("vulnerability_score"))
         delta_vuln_score = round(a_vuln_score - b_vuln_score, 4)
 
-        b_clean_acc = float(b_assess_dict.get("clean_accuracy", 0.0))
-        a_clean_acc = float(a_assess_dict.get("clean_accuracy", 0.0))
+        b_clean_acc = _safe_float(b_assess_dict.get("clean_accuracy"))
+        a_clean_acc = _safe_float(a_assess_dict.get("clean_accuracy"))
         delta_clean_acc = round(a_clean_acc - b_clean_acc, 4)
 
-        b_adv_acc = float(b_assess_dict.get("adversarial_accuracy", 0.0))
-        a_adv_acc = float(a_assess_dict.get("adversarial_accuracy", 0.0))
+        b_adv_acc = _safe_float(b_assess_dict.get("adversarial_accuracy"))
+        a_adv_acc = _safe_float(a_assess_dict.get("adversarial_accuracy"))
         delta_adv_acc = round(a_adv_acc - b_adv_acc, 4)
 
         # Perturbation deltas if present

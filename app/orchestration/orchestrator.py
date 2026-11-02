@@ -748,123 +748,160 @@ class AdverScanOrchestrator:
                 first_atk = list(attack_results_coll.keys())[0] if len(attack_results_coll) > 0 else "fgsm"
                 score_val = None
                 risk_lvl = None
+                asr_val = None
                 if first_atk in result.vulnerability_analysis:
-                    score_info = result.vulnerability_analysis[first_atk].get("scoring", {})
+                    v_data = result.vulnerability_analysis[first_atk]
+                    score_info = v_data.get("scoring", {})
                     score_val = score_info.get("vulnerability_score")
                     risk_lvl = score_info.get("risk_level")
+                    assess_info = v_data.get("assessment", {})
+                    asr_val = assess_info.get("attack_success_rate")
 
-                # Evaluation function closure for empirical candidate defense testing
-                def eval_fn(candidate_model: Any) -> Dict[str, Any]:
-                    cand_adapter = PyTorchAdapter(candidate_model, device=config.device or "cpu")
-                    # Clean accuracy baseline
-                    cand_evaluator = BaselineEvaluator(
-                        adapter=cand_adapter,
-                        dataset_loader=dataset_loader,
-                        num_classes=config.num_classes,
-                        model_name=config.model_name,
-                    )
-                    cand_baseline = cand_evaluator.evaluate(output_dir=None, show_progress=False)
+                # Helper for safe float metric formatting
+                def fmt(v: Any, spec: str = ".2f", na: str = "N/A") -> str:
+                    return format(v, spec) if isinstance(v, (int, float)) else na
 
-                    # Primary attack evaluation
-                    cand_atk_eng = AttackEngine(cand_adapter)
-                    cand_atk_res = cand_atk_eng.run_attack(
-                        attack_name=first_atk,
-                        inputs=first_batch_inputs,
-                        labels=first_batch_labels,
-                        config=config.attack_configs.get(first_atk),
-                    )
-                    adv_lbls = cand_atk_res.labels if cand_atk_res.labels is not None else first_batch_labels
-                    in_mem = InMemoryDatasetLoader(
-                        inputs=cand_atk_res.adversarial_examples,
-                        targets=adv_lbls,
-                        batch_size=config.batch_size,
-                    )
-                    cand_adv_evaluator = BaselineEvaluator(
-                        adapter=cand_adapter,
-                        dataset_loader=in_mem,
-                        num_classes=config.num_classes,
-                        model_name=config.model_name,
-                    )
-                    cand_adv_res = cand_adv_evaluator.evaluate(output_dir=None, show_progress=False)
-
-                    asr_val = round(1.0 - cand_adv_res.accuracy, 4)
-                    vuln_val = round(asr_val * 100.0, 2)
-
-                    return {
-                        "clean_accuracy": cand_baseline.accuracy,
-                        "asr": asr_val,
-                        "vulnerability_score": vuln_val,
-                        "latency_ms": 15.0,
+                # Gate: Skip hardening if attack was ineffective or no vulnerability detected
+                if score_val is None or asr_val is None or asr_val == 0.0:
+                    print(f"  ⏭️ M7 Hardening Skipped: No successful adversarial examples (ASR={asr_val or 0.0:.1%}, Score={score_val or 'INCONCLUSIVE'}); hardening not required.", flush=True)
+                    result.hardening_results = {
+                        "status": "SKIPPED",
+                        "selected_defense": "none",
+                        "reason": "No successful adversarial examples (ASR=0 / INCONCLUSIVE); hardening not required or attack ineffective",
                     }
+                    module_timings["M7_hardening"] = 0.0
+                else:
+                    # Evaluation function closure for empirical candidate defense testing
+                    def eval_fn(candidate_model: Any) -> Dict[str, Any]:
+                        cand_adapter = PyTorchAdapter(candidate_model, device=config.device or "cpu")
+                        # Clean accuracy baseline
+                        cand_evaluator = BaselineEvaluator(
+                            adapter=cand_adapter,
+                            dataset_loader=dataset_loader,
+                            num_classes=config.num_classes,
+                            model_name=config.model_name,
+                        )
+                        cand_baseline = cand_evaluator.evaluate(output_dir=None, show_progress=False)
 
-                is_iterative_req = config.defense.lower().strip() in ("auto", "iterative", "loop")
-                inputs_tensor: Optional[torch.Tensor] = None
-                if isinstance(first_batch_inputs, torch.Tensor):
-                    inputs_tensor = first_batch_inputs
-                elif isinstance(first_batch_inputs, dict):
-                    for k in ("pixel_values", "inputs", "input_ids", "x"):
-                        val = first_batch_inputs.get(k)
-                        if isinstance(val, torch.Tensor):
-                            inputs_tensor = val
-                            break
+                        # Primary attack evaluation
+                        cand_atk_eng = AttackEngine(cand_adapter)
+                        cand_atk_res = cand_atk_eng.run_attack(
+                            attack_name=first_atk,
+                            inputs=first_batch_inputs,
+                            labels=first_batch_labels,
+                            config=config.attack_configs.get(first_atk),
+                        )
+                        adv_lbls = cand_atk_res.labels if cand_atk_res.labels is not None else first_batch_labels
+                        in_mem = InMemoryDatasetLoader(
+                            inputs=cand_atk_res.adversarial_examples,
+                            targets=adv_lbls,
+                            batch_size=config.batch_size,
+                        )
+                        cand_adv_evaluator = BaselineEvaluator(
+                            adapter=cand_adapter,
+                            dataset_loader=in_mem,
+                            num_classes=config.num_classes,
+                            model_name=config.model_name,
+                        )
+                        cand_adv_res = cand_adv_evaluator.evaluate(output_dir=None, show_progress=False)
 
-                labels_tensor: Optional[torch.Tensor] = (
-                    first_batch_labels if isinstance(first_batch_labels, torch.Tensor) else None
-                )
-                hard_res = hardening_engine.harden(
-                    model=raw_model,
-                    defense=config.defense,
-                    inputs=inputs_tensor,
-                    labels=labels_tensor,
-                    attack_name=first_atk,
-                    risk_level=risk_lvl,
-                    vulnerability_score=score_val,
-                    defense_config=config.defense_config,
-                    eval_fn=eval_fn,
-                    iterative=is_iterative_req,
-                )
-                result.hardening_results = hard_res.to_dict()
-                resource_monitor.record_stage("M7_hardening")
-                module_timings["M7_hardening"] = round(time.time() - step_start, 4)
+                        asr_val_cand = round(1.0 - cand_adv_res.accuracy, 4)
+                        vuln_val = round(asr_val_cand * 100.0, 2)
 
-                # Output detailed iterative defense evaluation details
-                if hard_res.defense_attempts:
-                    print("\n    ┌────────────────────────────────────────────────────────┐")
-                    print("    │       ITERATIVE DEFENSE SELECTION & RE-TEST LOG        │")
-                    print("    └────────────────────────────────────────────────────────┘")
-                    for idx, att in enumerate(hard_res.defense_attempts, 1):
-                        status_symbol = "✅ [ACCEPTED]" if att.status == "accepted" else ("⚠️ [INSUFFICIENT]" if att.status == "insufficient" else "❌ [HARMFUL]")
-                        print(f"\n    ▶ Attempt {idx}/{len(hard_res.defense_attempts)}: Candidate '{att.defense_name}' -> {status_symbol}")
-                        if att.parameters:
-                            print(f"      - Parameters:               {att.parameters}")
-                        if att.vuln_score_before is not None and att.vuln_score_after is not None:
-                            print(f"      - Vulnerability Score:       {att.vuln_score_before:.2f} ➔ {att.vuln_score_after:.2f} (Improvement: {att.vuln_score_improvement:+.2f} pts)")
-                        if att.clean_accuracy_before is not None and att.clean_accuracy_after is not None:
-                            print(f"      - Clean Accuracy:           {att.clean_accuracy_before*100:.2f}% ➔ {att.clean_accuracy_after*100:.2f}% (Drop: {att.clean_accuracy_drop_pct_points:.2f}%)")
-                        if att.asr_before is not None and att.asr_after is not None:
+                        return {
+                            "clean_accuracy": cand_baseline.accuracy,
+                            "asr": asr_val_cand,
+                            "vulnerability_score": vuln_val,
+                            "latency_ms": 15.0,
+                        }
+
+                    is_iterative_req = config.defense.lower().strip() in ("auto", "iterative", "loop")
+                    inputs_tensor: Optional[torch.Tensor] = None
+                    if isinstance(first_batch_inputs, torch.Tensor):
+                        inputs_tensor = first_batch_inputs
+                    elif isinstance(first_batch_inputs, dict):
+                        for k in ("pixel_values", "inputs", "input_ids", "x"):
+                            val = first_batch_inputs.get(k)
+                            if isinstance(val, torch.Tensor):
+                                inputs_tensor = val
+                                break
+
+                    labels_tensor: Optional[torch.Tensor] = (
+                        first_batch_labels if isinstance(first_batch_labels, torch.Tensor) else None
+                    )
+
+                    domain_map = {"TEXT": "nlp", "NLP": "nlp", "IMAGE": "image", "TABULAR": "tabular", "AUDIO": "audio"}
+                    raw_modality = getattr(config, "modality", None) or getattr(config, "data_domain", None) or "image"
+                    mapped_domain = domain_map.get(str(raw_modality).upper(), "image")
+
+                    hard_res = hardening_engine.harden(
+                        model=raw_model,
+                        defense=config.defense,
+                        inputs=inputs_tensor,
+                        labels=labels_tensor,
+                        attack_name=first_atk,
+                        risk_level=risk_lvl,
+                        vulnerability_score=score_val,
+                        input_domain=mapped_domain,
+                        defense_config=config.defense_config,
+                        eval_fn=eval_fn,
+                        iterative=is_iterative_req,
+                        fallback_to_best=getattr(config, "fallback_to_best_defense", True),
+                    )
+                    result.hardening_results = hard_res.to_dict()
+                    resource_monitor.record_stage("M7_hardening")
+                    module_timings["M7_hardening"] = round(time.time() - step_start, 4)
+
+                    # Output detailed iterative defense evaluation details
+                    if hard_res.defense_attempts:
+                        print("\n    ┌────────────────────────────────────────────────────────┐")
+                        print("    │       ITERATIVE DEFENSE SELECTION & RE-TEST LOG        │")
+                        print("    └────────────────────────────────────────────────────────┘")
+                        for idx, att in enumerate(hard_res.defense_attempts, 1):
+                            status_symbol = "✅ [ACCEPTED]" if att.status == "accepted" else ("⚠️ [INSUFFICIENT]" if att.status == "insufficient" else "❌ [HARMFUL]")
+                            print(f"\n    ▶ Attempt {idx}/{len(hard_res.defense_attempts)}: Candidate '{att.defense_name}' -> {status_symbol}")
+                            if att.parameters:
+                                print(f"      - Parameters:               {att.parameters}")
+
+                            v_before_str = fmt(att.vuln_score_before)
+                            v_after_str = fmt(att.vuln_score_after)
+                            v_imp_str = f" (Improvement: {att.vuln_score_improvement:+.2f} pts)" if att.vuln_score_improvement is not None else ""
+                            print(f"      - Vulnerability Score:       {v_before_str} ➔ {v_after_str}{v_imp_str}")
+
+                            c_before_str = f"{att.clean_accuracy_before*100:.2f}%" if att.clean_accuracy_before is not None else "N/A"
+                            c_after_str = f"{att.clean_accuracy_after*100:.2f}%" if att.clean_accuracy_after is not None else "N/A"
+                            c_drop_str = f" (Drop: {fmt(att.clean_accuracy_drop_pct_points)}%)" if att.clean_accuracy_drop_pct_points is not None else ""
+                            print(f"      - Clean Accuracy:           {c_before_str} ➔ {c_after_str}{c_drop_str}")
+
+                            a_before_str = f"{att.asr_before*100:.2f}%" if att.asr_before is not None else "N/A"
+                            a_after_str = f"{att.asr_after*100:.2f}%" if att.asr_after is not None else "N/A"
                             reduc_str = f" (Reduction: {att.asr_reduction*100:.2f}%)" if att.asr_reduction is not None else ""
-                            print(f"      - Attack Success Rate (ASR): {att.asr_before*100:.2f}% ➔ {att.asr_after*100:.2f}%{reduc_str}")
+                            print(f"      - Attack Success Rate (ASR): {a_before_str} ➔ {a_after_str}{reduc_str}")
 
-                        print(f"      - Evaluation Detail:        {att.reason}")
+                            print(f"      - Evaluation Detail:        {att.reason}")
 
-                        if att.status != "accepted" and idx < len(hard_res.defense_attempts):
-                            next_cand = hard_res.defense_attempts[idx].defense_name
-                            print(f"      - Defense Transition:       Candidate '{att.defense_name}' failed to meet acceptance thresholds.")
-                            print(f"                                  Applying next candidate '{next_cand}' to test alternative defensive technique...")
+                            if att.status != "accepted" and idx < len(hard_res.defense_attempts):
+                                next_cand = hard_res.defense_attempts[idx].defense_name
+                                print(f"      - Defense Transition:       Candidate '{att.defense_name}' failed to meet acceptance thresholds.")
+                                print(f"                                  Applying next candidate '{next_cand}' to test alternative defensive technique...")
 
-                    print("\n    --------------------------------------------------------")
-                    print("    DEFENSE SELECTION & COMPARISON SUMMARY")
-                    print("    --------------------------------------------------------")
-                    if hard_res.selected_defense:
-                        print(f"    🏆 FINALLY SELECTED DEFENSE: '{hard_res.selected_defense}' (Satisfied acceptance thresholds in attempt {hard_res.num_attempts})")
-                    else:
-                        print("    ⚠️ NO DEFENSE ACCEPTED: None of the candidate defenses met all acceptance criteria.")
+                        print("\n    --------------------------------------------------------")
+                        print("    DEFENSE SELECTION & COMPARISON SUMMARY")
+                        print("    --------------------------------------------------------")
+                        if hard_res.selected_defense and hard_res.improvement_sufficient:
+                            print(f"    🏆 FINALLY SELECTED DEFENSE: '{hard_res.selected_defense}' (Satisfied acceptance thresholds in attempt {hard_res.num_attempts})")
+                        elif hard_res.selected_defense:
+                            print(f"    ⭐ SELECTED MOST EFFECTIVE DEFENSE: '{hard_res.selected_defense}' (Did not meet full ASR threshold, but selected as most effective candidate)")
+                        else:
+                            print("    ⚠️ NO DEFENSE ACCEPTED: None of the candidate defenses met all acceptance criteria.")
 
-                    best_att = max(hard_res.defense_attempts, key=lambda a: (a.vuln_score_improvement or 0.0, -(a.clean_accuracy_drop or 0.0)))
-                    print(f"    📈 GREATEST MODEL IMPROVEMENT: Defense '{best_att.defense_name}' provided maximum vulnerability reduction ({best_att.vuln_score_improvement:+.2f} pts improvement, ASR reduction: {(best_att.asr_reduction or 0.0)*100:.2f}%).")
-                    print("    --------------------------------------------------------\n")
+                        best_att = max(hard_res.defense_attempts, key=lambda a: (a.vuln_score_improvement or 0.0, -(a.clean_accuracy_drop or 0.0)))
+                        best_imp_str = f"{best_att.vuln_score_improvement:+.2f} pts" if best_att.vuln_score_improvement is not None else "N/A"
+                        best_asr_reduc_str = f"{(best_att.asr_reduction or 0.0)*100:.2f}%" if best_att.asr_reduction is not None else "N/A"
+                        print(f"    📈 GREATEST MODEL IMPROVEMENT: Defense '{best_att.defense_name}' provided maximum vulnerability reduction ({best_imp_str} improvement, ASR reduction: {best_asr_reduc_str}).")
+                        print("    --------------------------------------------------------\n")
 
-                print(f"  ✔ M7 Hardening Completed ({time.time() - step_start:.2f}s)")
+                    print(f"  ✔ M7 Hardening Completed ({time.time() - step_start:.2f}s)")
             except Exception as e:
                 module_timings["M7_hardening"] = round(time.time() - step_start, 4)
                 print(f"  ❌ M7 Hardening Failed ({time.time() - step_start:.2f}s)")
@@ -881,42 +918,51 @@ class AdverScanOrchestrator:
 
         # Step 8: M8 Re-Test & Comparison Engine (Optional / Post-Hardening)
         retest_res_obj = None
-        if config.enable_hardening and config.enable_retest and result.hardening_results:
-            step_start = time.time()
-            print("\n  ⏳ [Step 8/9] M8 Re-Test & Comparison Engine...")
-            try:
-                from app.retest.retest_engine import RetestEngine
-                retest_engine = RetestEngine()
-                hardened_model_obj = result.hardening_results.get("hardened_model") or adapter.get_model()
-                retest_res_obj = retest_engine.retest(
-                    hardened_model=hardened_model_obj,
-                    dataset_loader=dataset_loader,
-                    attacks=config.attacks,
-                    before_baseline_result=baseline_result,
-                    before_vulnerability_analysis=result.vulnerability_analysis,
-                    attack_configs=config.attack_configs,
-                    before_attack_results=result.attack_results,
-                    num_classes=config.num_classes,
-                    model_name=config.model_name,
-                    device=config.device or "cpu",
-                    batch_size=config.batch_size,
-                )
-                result.retest_results = retest_res_obj.to_dict()
-                module_timings["M8_retest"] = round(time.time() - step_start, 4)
-                print(f"  ✔ M8 Re-Test Completed ({time.time() - step_start:.2f}s)")
-            except Exception as e:
-                module_timings["M8_retest"] = round(time.time() - step_start, 4)
-                print(f"  ❌ M8 Re-Test Failed ({time.time() - step_start:.2f}s)")
-                result.status = "PARTIAL_SUCCESS"
-                failure_registry.register_exception(
-                    e, module="M8_retest", operation="retest", recoverable=True
-                )
-                result.errors.append({
-                    "module": "M8_retest",
-                    "error_type": type(e).__name__,
-                    "message": str(e),
-                    "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                })
+        if config.enable_hardening and config.enable_retest:
+            if not result.hardening_results or result.hardening_results.get("status") == "SKIPPED" or result.hardening_results.get("selected_defense") in (None, "none"):
+                print("\n  ⏳ [Step 8/9] M8 Re-Test & Comparison Engine...", flush=True)
+                print("  ⏭️ M8 Re-Test Skipped: No defense was applied in M7.")
+                result.retest_results = {
+                    "status": "SKIPPED",
+                    "reason": "M7 hardening skipped or no defense applied",
+                }
+                module_timings["M8_retest"] = 0.0
+            else:
+                step_start = time.time()
+                print("\n  ⏳ [Step 8/9] M8 Re-Test & Comparison Engine...")
+                try:
+                    from app.retest.retest_engine import RetestEngine
+                    retest_engine = RetestEngine()
+                    hardened_model_obj = result.hardening_results.get("hardened_model") or adapter.get_model()
+                    retest_res_obj = retest_engine.retest(
+                        hardened_model=hardened_model_obj,
+                        dataset_loader=dataset_loader,
+                        attacks=config.attacks,
+                        before_baseline_result=baseline_result,
+                        before_vulnerability_analysis=result.vulnerability_analysis,
+                        attack_configs=config.attack_configs,
+                        before_attack_results=result.attack_results,
+                        num_classes=config.num_classes,
+                        model_name=config.model_name,
+                        device=config.device or "cpu",
+                        batch_size=config.batch_size,
+                    )
+                    result.retest_results = retest_res_obj.to_dict()
+                    module_timings["M8_retest"] = round(time.time() - step_start, 4)
+                    print(f"  ✔ M8 Re-Test Completed ({time.time() - step_start:.2f}s)")
+                except Exception as e:
+                    module_timings["M8_retest"] = round(time.time() - step_start, 4)
+                    print(f"  ❌ M8 Re-Test Failed ({time.time() - step_start:.2f}s)")
+                    result.status = "PARTIAL_SUCCESS"
+                    failure_registry.register_exception(
+                        e, module="M8_retest", operation="retest", recoverable=True
+                    )
+                    result.errors.append({
+                        "module": "M8_retest",
+                        "error_type": type(e).__name__,
+                        "message": str(e),
+                        "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    })
 
         # Step 9: M9 Security Report Generator
         if config.enable_report:
