@@ -59,14 +59,23 @@ def render_sidebar_session() -> None:
             )
         else:
             model_name = get_state("active_model_name") or "Ingested Model"
-            domain = get_state("active_model_domain", "Unknown")
+            defense_name = get_state("active_defense_name")
 
             stage_labels = {
                 "ingestion": "1. Model Ingestion",
                 "attack_config": "2. Attack Discovery & Config",
                 "attack_results": "3. Attack Results",
+                "defense_config": "4. Defense Configuration",
+                "defense_results": "5. Hardening & Re-Test",
+                "report": "6. Security Report",
             }
             stage_str = stage_labels.get(stage, "Active")
+
+            defense_badge = (
+                f"<div style='font-size: 0.8rem; color: var(--text-secondary); margin-top: 0.2rem;'>Defense: <strong style='color: var(--stat-val-cyan);'>{str(defense_name).replace('_', ' ').title()}</strong></div>"
+                if defense_name
+                else ""
+            )
 
             st.markdown(
                 f"""
@@ -74,6 +83,7 @@ def render_sidebar_session() -> None:
                     <div class="stat-label">Active Model</div>
                     <div style="font-size: 0.95rem; font-weight: 700; color: var(--text-primary); margin: 0.2rem 0;">{model_name}</div>
                     <div style="font-size: 0.8rem; color: var(--text-secondary);">Domain: <strong style="color: var(--text-primary);">{str(domain).capitalize()}</strong></div>
+                    {defense_badge}
                 </div>
                 """,
                 unsafe_allow_html=True,

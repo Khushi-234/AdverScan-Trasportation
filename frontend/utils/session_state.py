@@ -20,6 +20,7 @@ DEFAULT_SESSION_STATE: Dict[str, Any] = {
     "active_model_framework": None,
     "active_metadata_dict": None,
     "active_attack_name": None,
+    "active_defense_name": None,
     "last_error": None,
     # Internal in-memory handles for the active assessment run
     "_active_assessment_data": None,
@@ -28,6 +29,8 @@ DEFAULT_SESSION_STATE: Dict[str, Any] = {
     "_test_inputs": None,
     "_test_labels": None,
     "_latest_attack_result": None,
+    "_latest_defense_result": None,
+    "_latest_report_result": None,
 }
 
 
@@ -70,7 +73,15 @@ def get_workflow_stage() -> str:
 def set_workflow_stage(stage: str) -> None:
     """Transition to a new assessment workflow stage."""
     init_session_state()
-    valid_stages = ("dashboard", "ingestion", "attack_config", "attack_results")
+    valid_stages = (
+        "dashboard",
+        "ingestion",
+        "attack_config",
+        "attack_results",
+        "defense_config",
+        "defense_results",
+        "report",
+    )
     if stage not in valid_stages:
         raise ValueError(
             f"Invalid workflow stage '{stage}'. Must be one of {valid_stages}"
@@ -130,6 +141,31 @@ def get_attack_result() -> Optional[Dict[str, Any]]:
     """Get latest attack execution result."""
     init_session_state()
     return st.session_state.get("_latest_attack_result")
+
+
+def set_defense_result(result: Dict[str, Any]) -> None:
+    """Save latest hardening and defense execution result."""
+    init_session_state()
+    st.session_state["_latest_defense_result"] = result
+    st.session_state["active_defense_name"] = result.get("selected_defense") or result.get("defense_name")
+
+
+def get_defense_result() -> Optional[Dict[str, Any]]:
+    """Get latest hardening and defense execution result."""
+    init_session_state()
+    return st.session_state.get("_latest_defense_result")
+
+
+def set_report_result(report: Any) -> None:
+    """Save latest generated security report DTO or dict."""
+    init_session_state()
+    st.session_state["_latest_report_result"] = report
+
+
+def get_report_result() -> Optional[Any]:
+    """Get latest generated security report DTO or dict."""
+    init_session_state()
+    return st.session_state.get("_latest_report_result")
 
 
 def reset_workflow_state() -> None:
