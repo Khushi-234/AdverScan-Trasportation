@@ -23,6 +23,7 @@ def reduce_bit_depth(
     bit_depth: int = 4,
     clip_min: float = 0.0,
     clip_max: float = 1.0,
+    use_ste: bool = True,
 ) -> torch.Tensor:
     """
     Reduce color/feature bit-depth (Feature Squeezing).
@@ -34,10 +35,14 @@ def reduce_bit_depth(
         bit_depth: Target bit depth (1 to 16).
         clip_min: Minimum bound.
         clip_max: Maximum bound.
+        use_ste: Whether to use Straight-Through Estimator for differentiable backward pass.
 
     Returns:
         torch.Tensor: Quantized feature squeezed tensor.
     """
+    if not isinstance(inputs, torch.Tensor) or not inputs.is_floating_point():
+        return inputs
+
     bit_depth = max(1, min(16, int(bit_depth)))
     max_level = (2**bit_depth) - 1
 
@@ -46,14 +51,19 @@ def reduce_bit_depth(
     if range_val <= 0:
         return inputs
 
+    orig_dtype = inputs.dtype
     normalized = (inputs - clip_min) / range_val
     normalized = torch.clamp(normalized, 0.0, 1.0)
 
-    # Quantize
-    quantized = torch.round(normalized * max_level) / max_level
+    # Quantize with optional Straight-Through Estimator (STE)
+    quant_discrete = torch.round(normalized * max_level) / max_level
+    if use_ste and inputs.requires_grad:
+        quantized = normalized + (quant_discrete - normalized).detach()
+    else:
+        quantized = quant_discrete
 
     # Scale back to original range
-    squeezed = quantized * range_val + clip_min
+    squeezed = (quantized * range_val + clip_min).to(dtype=orig_dtype)
     return squeezed
 
 
