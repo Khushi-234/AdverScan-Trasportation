@@ -174,7 +174,10 @@ class RetestThresholds:
 
         improvement_sufficient = robustness_passed and clean_passed and latency_passed and not is_harmful
 
-        if improvement_sufficient:
+        if vuln_before is None and asr_before is None:
+            status = "inconclusive"
+            reason = "No baseline vulnerability score or ASR metrics available to verify improvement"
+        elif improvement_sufficient:
             status = "accepted"
             reason = "Defense satisfies all acceptance thresholds with meaningful improvement."
         elif is_harmful:
