@@ -1,0 +1,790 @@
+/* ============================================================
+   AdverScan - SHARED BASE STYLES
+   File: styles/base.css
+
+   All colors are controlled through theme variables.
+   Do not hardcode dark or light colors in shared components.
+   ============================================================ */
+
+/* ============================================================
+   1. GLOBAL APPLICATION BACKGROUND
+   ============================================================ */
+
+html,
+body,
+.stApp,
+.stApp>header,
+header[data-testid="stHeader"],
+div[data-testid="stToolbar"],
+div[data-testid="stAppViewContainer"],
+div[data-testid="stAppViewBlockContainer"],
+div[data-testid="stMain"],
+div[data-testid="stMainBlockContainer"],
+.main,
+main,
+.block-container,
+div[data-testid="stBottom"],
+footer {
+    background-color: var(--app-bg) !important;
+    color: var(--text-primary) !important;
+}
+
+/* Main application container */
+
+.stApp {
+    color: var(--text-primary) !important;
+}
+
+.block-container {
+    padding-top: 2rem !important;
+    padding-bottom: 3rem !important;
+    max-width: 100% !important;
+}
+
+/* Header & Sidebar toggle controls */
+header[data-testid="stHeader"] button,
+header[data-testid="stHeader"] svg,
+header[data-testid="stHeader"] span,
+button[data-testid="stSidebarCollapsedControl"],
+button[data-testid="stSidebarCollapseButton"],
+div[data-testid="stSidebarCollapseButton"],
+.e149qiiz5,
+.st-emotion-cache-jma0kd {
+    color: var(--text-primary) !important;
+}
+
+button[data-testid="stSidebarCollapsedControl"] svg,
+button[data-testid="stSidebarCollapseButton"] svg,
+.e149qiiz5 svg,
+.st-emotion-cache-jma0kd svg {
+    fill: currentColor !important;
+    stroke: currentColor !important;
+}
+
+
+/* ============================================================
+   2. SIDEBAR
+   ============================================================ */
+
+section[data-testid="stSidebar"],
+section[data-testid="stSidebar"]>div,
+div[data-testid="stSidebarContent"],
+div[data-testid="stSidebarUserContent"],
+div[data-testid="stSidebarHeader"] {
+    background: var(--sidebar-bg) !important;
+    background-color: var(--sidebar-bg) !important;
+    color: var(--text-primary) !important;
+}
+
+section[data-testid="stSidebar"] {
+    border-right: 1px solid var(--border-color) !important;
+}
+
+section[data-testid="stSidebar"]>div {
+    border-right: 1px solid var(--border-color) !important;
+}
+
+/* Sidebar text */
+
+section[data-testid="stSidebar"] p,
+section[data-testid="stSidebar"] span,
+section[data-testid="stSidebar"] label,
+section[data-testid="stSidebar"] .stMarkdown {
+    color: var(--text-secondary) !important;
+}
+
+/* Sidebar branding */
+
+.sidebar-brand {
+    color: var(--text-primary) !important;
+    font-weight: 700;
+}
+
+.sidebar-brand .brand-icon {
+    color: var(--accent-color) !important;
+}
+
+.sidebar-brand .brand-subtitle {
+    color: var(--accent-color) !important;
+    font-weight: 700;
+    letter-spacing: 1px;
+}
+
+.sidebar-section-title {
+    color: var(--text-primary) !important;
+    font-weight: 700;
+}
+
+/* Assessment session */
+
+.assessment-session {
+    background: var(--card-bg) !important;
+    border: 1px solid var(--border-color) !important;
+    border-left: 4px solid var(--accent-color) !important;
+    border-radius: 10px;
+    padding: 14px;
+    color: var(--text-primary) !important;
+}
+
+.assessment-session .status-idle {
+    background: var(--badge-emerald-bg) !important;
+    color: var(--badge-emerald-text) !important;
+    border: 1px solid var(--badge-emerald-border) !important;
+    border-radius: 20px;
+    padding: 4px 10px;
+    font-weight: 700;
+}
+
+.sidebar-version {
+    color: var(--text-muted) !important;
+    border-top: 1px solid var(--border-color);
+    padding-top: 12px;
+}
+
+/* ============================================================
+   3. TYPOGRAPHY
+   ============================================================ */
+
+h1,
+h2,
+h3,
+h4,
+h5,
+h6,
+.stMarkdown h1,
+.stMarkdown h2,
+.stMarkdown h3,
+.stMarkdown h4,
+.stMarkdown h5,
+.stMarkdown h6 {
+    color: var(--text-primary) !important;
+    font-weight: 700;
+}
+
+p,
+.stMarkdown p,
+div[data-testid="stMarkdownContainer"] p {
+    color: var(--text-secondary) !important;
+}
+
+label,
+div[data-testid="stWidgetLabel"] label,
+div[data-testid="stWidgetLabel"] p,
+div[data-testid="stWidgetLabel"] span {
+    color: var(--text-primary) !important;
+    font-weight: 600;
+}
+
+.stCaption,
+small,
+[data-testid="stCaptionContainer"] {
+    color: var(--text-muted) !important;
+}
+
+hr {
+    border-color: var(--border-color) !important;
+}
+
+/* Avoid forcing every span to the same color.
+   This allows badges and custom status labels to work. */
+
+/* ============================================================
+   4. MODERN CARDS
+   ============================================================ */
+
+.modern-card {
+    background: var(--card-bg) !important;
+    border: 1px solid var(--border-color) !important;
+    border-radius: 14px;
+    padding: 1.25rem 1.5rem;
+    box-shadow: var(--card-shadow);
+    transition: transform 0.2s ease,
+        border-color 0.2s ease,
+        box-shadow 0.2s ease;
+    margin-bottom: 1rem;
+    color: var(--text-primary) !important;
+}
+
+.modern-card:hover {
+    transform: translateY(-2px);
+    border-color: var(--border-focus) !important;
+    box-shadow: var(--card-shadow-hover);
+}
+
+.modern-card h2,
+.modern-card h3,
+.modern-card h4 {
+    color: var(--text-primary) !important;
+}
+
+.modern-card p {
+    color: var(--text-secondary) !important;
+}
+
+/* Card accent borders */
+
+.card-accent-cyan {
+    border-top: 3px solid var(--accent-cyan) !important;
+}
+
+.card-accent-emerald {
+    border-top: 3px solid var(--accent-emerald) !important;
+}
+
+.card-accent-violet {
+    border-top: 3px solid var(--accent-violet) !important;
+}
+
+.card-accent-amber {
+    border-top: 3px solid var(--accent-amber) !important;
+}
+
+.card-accent-rose {
+    border-top: 3px solid var(--accent-rose) !important;
+}
+
+.card-accent-indigo {
+    border-top: 3px solid var(--accent-indigo) !important;
+}
+
+/* ============================================================
+   5. HERO BANNER AND SECTION BANNERS
+   ============================================================ */
+
+.hero-banner {
+    background: var(--hero-bg) !important;
+    border: 1px solid var(--hero-border) !important;
+    border-radius: 14px;
+    padding: 2rem;
+    margin-bottom: 2rem;
+    color: var(--text-primary) !important;
+    box-shadow: var(--card-shadow);
+}
+
+.hero-banner h1,
+.hero-banner h2 {
+    color: var(--text-primary) !important;
+}
+
+.hero-banner p {
+    color: var(--text-secondary) !important;
+}
+
+.section-banner {
+    background: var(--banner-bg) !important;
+    border: 1px solid var(--banner-border) !important;
+    border-left: 4px solid var(--border-focus) !important;
+    border-radius: 8px;
+    padding: 0.85rem 1.25rem;
+    margin: 1.25rem 0 1rem 0;
+}
+
+.section-banner h3 {
+    margin: 0;
+    font-size: 1.15rem;
+    color: var(--text-primary) !important;
+}
+
+.section-banner p {
+    margin: 0.2rem 0 0 0;
+    font-size: 0.85rem;
+    color: var(--text-muted) !important;
+}
+
+/* ============================================================
+   6. MODEL INFORMATION COMPONENTS
+   ============================================================ */
+
+.model-summary-card,
+.model-architecture,
+.model-modality,
+.model-telemetry {
+    background: var(--card-bg) !important;
+    border: 1px solid var(--border-color) !important;
+    border-radius: 12px;
+    padding: 18px;
+    margin-bottom: 14px;
+    box-shadow: var(--card-shadow);
+    color: var(--text-primary) !important;
+}
+
+.model-summary-card {
+    border-left: 4px solid var(--accent-color) !important;
+}
+
+.model-architecture {
+    border-left: 4px solid var(--accent-emerald) !important;
+}
+
+.model-modality {
+    border-left: 4px solid var(--accent-cyan) !important;
+}
+
+.model-telemetry {
+    border-left: 4px solid var(--accent-violet) !important;
+}
+
+.model-summary-card h2,
+.model-summary-card h3,
+.model-summary-card h4,
+.model-architecture h3,
+.model-modality h3,
+.model-telemetry h3 {
+    color: var(--text-primary) !important;
+}
+
+.model-summary-card strong,
+.model-architecture strong,
+.model-modality strong,
+.model-telemetry strong {
+    color: var(--accent-color) !important;
+}
+
+.model-summary-card .section-heading {
+    color: var(--accent-color) !important;
+    font-weight: 700;
+}
+
+.model-summary-card .model-value {
+    color: var(--text-primary) !important;
+    font-weight: 600;
+}
+
+/* ============================================================
+   7. ATTACK DISCOVERY COMPONENTS
+   ============================================================ */
+
+.target-model-card {
+    background: var(--card-bg) !important;
+    border: 1px solid var(--border-color) !important;
+    border-left: 4px solid var(--accent-emerald) !important;
+    border-radius: 12px;
+    padding: 18px;
+    margin: 14px 0;
+    box-shadow: var(--card-shadow);
+    color: var(--text-primary) !important;
+}
+
+.target-model-card h2,
+.target-model-card h3,
+.target-model-card h4 {
+    color: var(--text-primary) !important;
+}
+
+.target-model-card strong {
+    color: var(--accent-color) !important;
+}
+
+.threat-model-banner {
+    background: var(--explainer-bg) !important;
+    border: 1px solid var(--border-color) !important;
+    border-left: 4px solid var(--accent-emerald) !important;
+    border-radius: 10px;
+    padding: 15px;
+    color: var(--text-primary) !important;
+}
+
+.threat-model-banner strong {
+    color: var(--accent-color) !important;
+}
+
+.domain-context-banner {
+    background: var(--banner-bg) !important;
+    border: 1px solid var(--banner-border) !important;
+    border-left: 4px solid var(--border-focus) !important;
+    border-radius: 8px;
+    padding: 14px;
+    color: var(--text-secondary) !important;
+}
+
+/* ============================================================
+   8. METRICS AND STATISTICS
+   ============================================================ */
+
+div[data-testid="stMetric"] {
+    background: var(--card-bg) !important;
+    border: 1px solid var(--border-color) !important;
+    border-radius: 12px !important;
+    padding: 1rem !important;
+    box-shadow: var(--card-shadow) !important;
+}
+
+div[data-testid="stMetricValue"] {
+    color: var(--text-primary) !important;
+    font-weight: 700 !important;
+}
+
+div[data-testid="stMetricLabel"] {
+    color: var(--text-muted) !important;
+    font-weight: 600 !important;
+}
+
+.stat-label {
+    font-size: 0.78rem;
+    font-weight: 600;
+    color: var(--text-muted) !important;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    margin-bottom: 0.35rem;
+}
+
+.stat-value {
+    font-size: 1.65rem;
+    font-weight: 700;
+    color: var(--text-primary) !important;
+    line-height: 1.2;
+}
+
+.stat-subtext {
+    font-size: 0.82rem;
+    color: var(--text-secondary) !important;
+    margin-top: 0.35rem;
+}
+
+/* ============================================================
+   9. PARAMETER GUIDANCE
+   ============================================================ */
+
+.param-explainer {
+    background: var(--explainer-bg) !important;
+    border: 1px solid var(--border-color) !important;
+    border-left: 3px solid var(--explainer-border) !important;
+    border-radius: 6px;
+    padding: 0.75rem 1rem;
+    margin: 0.5rem 0 1rem 0;
+    font-size: 0.85rem;
+    color: var(--explainer-text) !important;
+    line-height: 1.45;
+}
+
+.param-explainer strong {
+    color: var(--accent-color) !important;
+}
+
+.param-impact {
+    display: block;
+    margin-top: 0.35rem;
+    font-size: 0.82rem;
+    color: var(--text-muted) !important;
+}
+
+/* ============================================================
+   10. STATUS BADGES
+   ============================================================ */
+
+.badge-status {
+    display: inline-block;
+    padding: 0.25rem 0.65rem;
+    border-radius: 9999px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    letter-spacing: 0.025em;
+    text-align: center;
+}
+
+.badge-cyan {
+    background: var(--badge-cyan-bg) !important;
+    color: var(--badge-cyan-text) !important;
+    border: 1px solid var(--badge-cyan-border) !important;
+}
+
+.badge-emerald {
+    background: var(--badge-emerald-bg) !important;
+    color: var(--badge-emerald-text) !important;
+    border: 1px solid var(--badge-emerald-border) !important;
+}
+
+.badge-rose {
+    background: var(--badge-rose-bg) !important;
+    color: var(--badge-rose-text) !important;
+    border: 1px solid var(--badge-rose-border) !important;
+}
+
+.badge-amber {
+    background: var(--badge-amber-bg) !important;
+    color: var(--badge-amber-text) !important;
+    border: 1px solid var(--badge-amber-border) !important;
+}
+
+.badge-violet {
+    background: var(--badge-violet-bg) !important;
+    color: var(--badge-violet-text) !important;
+    border: 1px solid var(--badge-violet-border) !important;
+}
+
+/* ============================================================
+   11. INPUTS AND TEXT AREAS
+   ============================================================ */
+
+[data-baseweb="input"],
+[data-baseweb="base-input"],
+.stTextInput>div>div>input,
+.stNumberInput>div>div>input,
+.stTextArea>div>div>textarea,
+[data-baseweb="textarea"] {
+    background: var(--input-bg) !important;
+    color: var(--text-primary) !important;
+    -webkit-text-fill-color: var(--text-primary) !important;
+    border-color: var(--border-color) !important;
+    border-radius: 8px !important;
+}
+
+.stTextInput input,
+.stNumberInput input,
+.stTextArea textarea {
+    color: var(--text-primary) !important;
+    -webkit-text-fill-color: var(--text-primary) !important;
+    caret-color: var(--accent-color);
+}
+
+.stTextInput input::placeholder,
+.stTextArea textarea::placeholder {
+    color: var(--text-muted) !important;
+    -webkit-text-fill-color: var(--text-muted) !important;
+}
+
+.stTextInput>div>div>input:focus,
+.stNumberInput>div>div>input:focus,
+.stTextArea textarea:focus {
+    border-color: var(--border-focus) !important;
+    box-shadow: 0 0 0 1px var(--border-focus) !important;
+}
+
+/* ============================================================
+   12. SELECTBOXES AND DROPDOWNS
+   ============================================================ */
+
+[data-baseweb="select"]>div {
+    background: var(--input-bg) !important;
+    color: var(--text-primary) !important;
+    border-color: var(--border-color) !important;
+    border-radius: 8px !important;
+}
+
+[data-baseweb="select"] * {
+    color: var(--text-primary) !important;
+    -webkit-text-fill-color: var(--text-primary) !important;
+}
+
+[data-baseweb="popover"],
+[data-baseweb="menu"],
+ul[role="listbox"] {
+    background: var(--card-bg) !important;
+    color: var(--text-primary) !important;
+    border: 1px solid var(--border-color) !important;
+    box-shadow: var(--card-shadow) !important;
+}
+
+[data-baseweb="menu"] li,
+ul[role="listbox"] li {
+    background: var(--card-bg) !important;
+    color: var(--text-primary) !important;
+}
+
+[data-baseweb="menu"] li:hover,
+ul[role="listbox"] li:hover,
+[data-baseweb="menu"] li[aria-selected="true"],
+ul[role="listbox"] li[aria-selected="true"] {
+    background: var(--card-bg-hover) !important;
+    color: var(--accent-color) !important;
+}
+
+/* ============================================================
+   13. RADIO BUTTONS, CHECKBOXES AND SLIDERS
+   ============================================================ */
+
+[data-testid="stRadio"] label,
+[data-testid="stCheckbox"] label,
+[data-testid="stRadio"] p,
+[data-testid="stCheckbox"] p,
+[data-testid="stSlider"] label {
+    color: var(--text-primary) !important;
+}
+
+[data-testid="stCheckbox"] input,
+[data-testid="stRadio"] input {
+    accent-color: var(--accent-color);
+}
+
+[data-testid="stSlider"] [role="slider"] {
+    background: var(--accent-color) !important;
+}
+
+/* ============================================================
+   14. BUTTONS
+   ============================================================ */
+
+.stButton>button,
+button[data-testid="baseButton-primary"],
+button[data-testid="baseButton-secondary"] {
+    border-radius: 8px !important;
+    font-weight: 600 !important;
+    transition: all 0.2s ease !important;
+}
+
+.stButton>button[kind="primary"],
+button[data-testid="baseButton-primary"] {
+    background: var(--button-bg) !important;
+    color: var(--button-text) !important;
+    border: 1px solid var(--button-bg) !important;
+}
+
+.stButton>button[kind="primary"]:hover,
+button[data-testid="baseButton-primary"]:hover {
+    background: var(--button-hover) !important;
+    border-color: var(--button-hover) !important;
+    color: var(--button-text) !important;
+    box-shadow: var(--card-shadow-hover);
+}
+
+.stButton>button[kind="secondary"],
+button[data-testid="baseButton-secondary"],
+.stButton>button:not([kind="primary"]) {
+    background: var(--button-secondary-bg) !important;
+    color: var(--button-secondary-text) !important;
+    border: 1px solid var(--button-secondary-border) !important;
+}
+
+.stButton>button:not([kind="primary"]):hover,
+button[data-testid="baseButton-secondary"]:hover {
+    background: var(--card-bg-hover) !important;
+    border-color: var(--border-focus) !important;
+    color: var(--accent-color) !important;
+}
+
+/* ============================================================
+   15. TABLES AND DATAFRAMES
+   ============================================================ */
+
+table,
+[data-testid="stTable"] {
+    width: 100%;
+    border-collapse: collapse;
+    background: var(--card-bg) !important;
+    color: var(--text-primary) !important;
+}
+
+div[data-testid="stDataFrame"],
+div[data-testid="stGlideDataGridContainer"],
+div.stDataFrameGlideDataEditor,
+div.gdg-wmyidgi,
+div.dvn-scroller,
+div.dvn-scroller.stDataFrameGlideDataEditor,
+div[data-testid="stDataFrameResizable"] {
+    background: var(--card-bg) !important;
+    background-color: var(--card-bg) !important;
+    color: var(--text-primary) !important;
+    border: 1px solid var(--border-color) !important;
+    border-radius: 8px !important;
+}
+
+table th {
+    background: var(--card-bg-hover) !important;
+    color: var(--text-primary) !important;
+    padding: 0.65rem 0.85rem;
+    border-bottom: 2px solid var(--border-color);
+    font-size: 0.85rem;
+    font-weight: 700;
+}
+
+table td {
+    padding: 0.65rem 0.85rem;
+    border-bottom: 1px solid var(--border-color);
+    color: var(--text-secondary) !important;
+    font-size: 0.88rem;
+}
+
+table tbody tr:hover td {
+    background: var(--card-bg-hover) !important;
+}
+
+
+/* ============================================================
+   16. ALERTS
+   ============================================================ */
+
+div[data-testid="stAlert"] {
+    background: var(--card-bg) !important;
+    color: var(--text-primary) !important;
+    border: 1px solid var(--border-color) !important;
+    border-radius: 8px !important;
+}
+
+div[data-testid="stAlert"] p {
+    color: var(--text-secondary) !important;
+}
+
+/* ============================================================
+   17. EXPANDERS
+   ============================================================ */
+
+div[data-testid="stExpander"] {
+    background: var(--card-bg) !important;
+    border: 1px solid var(--border-color) !important;
+    border-radius: 8px !important;
+}
+
+div[data-testid="stExpander"] details summary {
+    background: var(--card-bg-hover) !important;
+    color: var(--text-primary) !important;
+}
+
+div[data-testid="stExpander"] details summary p {
+    color: var(--text-primary) !important;
+}
+
+/* ============================================================
+   18. CODE BLOCKS
+   ============================================================ */
+
+code {
+    background: var(--explainer-bg) !important;
+    color: var(--accent-color) !important;
+    border: 1px solid var(--border-color) !important;
+    border-radius: 4px;
+    padding: 0.15rem 0.35rem;
+}
+
+pre {
+    background: var(--card-bg) !important;
+    color: var(--text-primary) !important;
+    border: 1px solid var(--border-color) !important;
+    border-radius: 6px;
+}
+
+/* ============================================================
+   19. PROGRESS BARS
+   ============================================================ */
+
+div[data-testid="stProgress"]>div {
+    background: var(--border-color) !important;
+}
+
+div[data-testid="stProgress"]>div>div>div>div {
+    background: var(--accent-color) !important;
+}
+
+/* ============================================================
+   20. LINKS AND FOCUS
+   ============================================================ */
+
+a {
+    color: var(--accent-color) !important;
+}
+
+a:hover {
+    color: var(--accent-hover) !important;
+}
+
+*:focus-visible {
+    outline-color: var(--border-focus) !important;
+}
+
+/* ============================================================
+   21. SELECTION
+   ============================================================ */
+
+::selection {
+    background: var(--accent-light);
+    color: var(--accent-dark);
+}

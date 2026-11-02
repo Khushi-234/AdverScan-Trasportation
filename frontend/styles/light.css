@@ -1,0 +1,251 @@
+/* ============================================================
+   AdverScan — LIGHT THEME
+   White + Emerald Green Security Dashboard
+   File: frontend/styles/light.css
+   ============================================================ */
+
+:root,
+html,
+body,
+.stApp {
+    color-scheme: light;
+
+    /* Main surfaces */
+    --app-bg: #f5f9f6;
+    --sidebar-bg: #ffffff;
+    --card-bg: #ffffff;
+    --card-bg-hover: #effaf2;
+    --input-bg: #ffffff;
+    --code-bg: #f8fbf9;
+
+    /* Typography */
+    --text-primary: #14271b;
+    --text-secondary: #46584c;
+    --text-muted: #748278;
+    --text-inverse: #ffffff;
+
+    /* Borders */
+    --border-color: #dce9df;
+    --border-focus: #16a34a;
+    --border-strong: #b9d9c2;
+
+    /* Emerald brand palette */
+    --accent-color: #15803d;
+    --accent-hover: #166534;
+    --accent-light: #bbf7d0;
+    --accent-soft: #f0fdf4;
+    --accent-dark: #14532d;
+
+    /* Buttons */
+    --button-bg: #16a34a;
+    --button-hover: #15803d;
+    --button-text: #ffffff;
+    --button-secondary-bg: #ffffff;
+    --button-secondary-text: #166534;
+    --button-secondary-border: #bbd9c2;
+    --button-secondary-hover: #effaf2;
+
+    /* Structural surfaces */
+    --hero-bg: linear-gradient(135deg, #dcfce7 0%, #ffffff 72%);
+    --hero-border: #bbf7d0;
+    --banner-bg: linear-gradient(100deg, #effaf2 0%, #ffffff 100%);
+    --banner-border: #c9e8d0;
+    --explainer-bg: #effaf2;
+    --explainer-border: #86c99a;
+    --explainer-text: #365443;
+
+    /* Shadows */
+    --card-shadow:
+        0 1px 3px rgba(20, 39, 27, .045),
+        0 3px 10px rgba(22, 101, 52, .045);
+    --card-shadow-hover:
+        0 7px 20px rgba(22, 101, 52, .11);
+
+    /* Semantic accents */
+    --accent-cyan: #087eaa;
+    --accent-sky: #0284c7;
+    --accent-emerald: #15803d;
+    --accent-amber: #a16207;
+    --accent-orange: #c2410c;
+    --accent-rose: #be123c;
+    --accent-violet: #6d28d9;
+    --accent-indigo: #4338ca;
+
+    /* Metric colors */
+    --stat-val-rose: #be123c;
+    --stat-val-amber: #a16207;
+    --stat-val-violet: #6d28d9;
+    --stat-val-cyan: #0369a1;
+
+    /* Semantic status colors */
+    --success: #15803d;
+    --warning: #a16207;
+    --danger: #be123c;
+    --info: #0369a1;
+
+    /* Badges */
+    --badge-cyan-bg: #e0f2fe;
+    --badge-cyan-text: #075985;
+    --badge-cyan-border: #bae6fd;
+
+    --badge-emerald-bg: #dcfce7;
+    --badge-emerald-text: #166534;
+    --badge-emerald-border: #86efac;
+
+    --badge-rose-bg: #ffe4e6;
+    --badge-rose-text: #9f1239;
+    --badge-rose-border: #fecdd3;
+
+    --badge-amber-bg: #fef3c7;
+    --badge-amber-text: #92400e;
+    --badge-amber-border: #fde68a;
+
+    --badge-violet-bg: #ede9fe;
+    --badge-violet-text: #5b21b6;
+    --badge-violet-border: #ddd6fe;
+
+    /* Streamlit native theme compatibility */
+    --background-color: #f5f9f6;
+    --secondary-background-color: #ffffff;
+    --text-color: #14271b;
+    --primary-color: #15803d;
+}
+
+/* Model details */
+.model-architecture,
+.model-telemetry {
+    background: #f0fdf4 !important;
+    border-color: #c9e8d0 !important;
+}
+
+.model-modality,
+.model-summary-card,
+.target-model-card {
+    background: #ffffff !important;
+}
+
+/* Green ready state */
+.badge-ready,
+.assessment-session .status-idle {
+    background: #dcfce7 !important;
+    color: #166534 !important;
+    border-color: #86efac !important;
+}
+
+/* Attack discovery and target model */
+.attack-discovery-card,
+.target-model-card {
+    background: #ffffff !important;
+    border-color: #cfe5d4 !important;
+}
+
+/* Threat model banner */
+.threat-model-banner {
+    background: #ecfdf3 !important;
+    border-color: #a7dfb5 !important;
+    border-left-color: #15803d !important;
+}
+
+/* Domain context banner */
+.domain-context-banner {
+    background: #f0fdf4 !important;
+    border-color: #c9e8d0 !important;
+    border-left-color: #16a34a !important;
+}
+
+/* Data grid — preserve native light rendering */
+div.stDataFrameGlideDataEditor canvas,
+div[data-testid="stDataFrame"] canvas,
+.dvn-scroller canvas,
+.gdg-wmyidgi canvas {
+    filter: none !important;
+}
+
+/* Text selection */
+::selection {
+    background: #bbf7d0;
+    color: #14532d;
+}
+
+/* ============================================================
+   Buttons — Lighter green with white text, bold on hover
+   ============================================================ */
+.stButton > button,
+button[data-testid="baseButton-primary"],
+button[data-testid="baseButton-secondary"],
+.stButton > button:not([kind="primary"]) {
+    background: #16a34a !important;
+    background-color: #16a34a !important;
+    color: #ffffff !important;
+    -webkit-text-fill-color: #ffffff !important;
+    border: 1px solid #15803d !important;
+    border-radius: 8px !important;
+    font-weight: 600 !important;
+    transition: all 0.2s ease !important;
+}
+
+.stButton > button p,
+button[data-testid="baseButton-primary"] p,
+button[data-testid="baseButton-secondary"] p {
+    color: #ffffff !important;
+    -webkit-text-fill-color: #ffffff !important;
+    font-weight: inherit !important;
+}
+
+.stButton > button:hover,
+button[data-testid="baseButton-primary"]:hover,
+button[data-testid="baseButton-secondary"]:hover,
+.stButton > button:not([kind="primary"]):hover {
+    background: #15803d !important;
+    background-color: #15803d !important;
+    color: #ffffff !important;
+    -webkit-text-fill-color: #ffffff !important;
+    border-color: #14532d !important;
+    font-weight: 700 !important;
+    box-shadow: 0 4px 14px rgba(22, 163, 74, 0.35) !important;
+    transform: translateY(-1px) !important;
+}
+
+.stButton > button:hover p,
+button[data-testid="baseButton-primary"]:hover p,
+button[data-testid="baseButton-secondary"]:hover p {
+    font-weight: 700 !important;
+}
+
+/* ============================================================
+   Dropdowns & Selectboxes — Pure white in Light Theme
+   ============================================================ */
+div[data-testid="stSelectbox"] > div,
+div[data-baseweb="select"],
+div[data-baseweb="select"] > div,
+div[data-baseweb="select"] input,
+[data-baseweb="popover"],
+[data-baseweb="menu"],
+ul[role="listbox"],
+[data-baseweb="menu"] li,
+ul[role="listbox"] li {
+    background: #ffffff !important;
+    background-color: #ffffff !important;
+    color: #14271b !important;
+    -webkit-text-fill-color: #14271b !important;
+}
+
+div[data-baseweb="select"] > div {
+    border: 1px solid #dce9df !important;
+    border-radius: 8px !important;
+}
+
+div[data-baseweb="select"] > div:hover,
+div[data-baseweb="select"] > div:focus-within {
+    border-color: #16a34a !important;
+}
+
+[data-baseweb="menu"] li:hover,
+ul[role="listbox"] li:hover,
+[data-baseweb="menu"] li[aria-selected="true"],
+ul[role="listbox"] li[aria-selected="true"] {
+    background: #effaf2 !important;
+    background-color: #effaf2 !important;
+    color: #15803d !important;
+    -webkit-text-fill-color: #15803d !important;
+}

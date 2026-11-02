@@ -32,6 +32,10 @@ captum>=0.7.0
 shap>=0.42.0
 lime>=0.2.0
 
+# Frontend & Visualization
+streamlit>=1.30.0
+plotly>=5.18.0
+
 # Development & Testing
 pytest>=7.0.0
 pytest-cov>=4.0.0

@@ -1,0 +1,122 @@
+/* =========================================================
+   AdverScan - DARK CYBERSECURITY THEME
+   ========================================================= */
+
+:root {
+    color-scheme: dark;
+
+    --app-bg: #080d19;
+    --sidebar-bg: #101a2d;
+    --card-bg: #131f34;
+    --card-hover: #1a2a43;
+    --input-bg: #1b2940;
+
+    --text-primary: #f1f5f9;
+    --text-secondary: #cbd5e1;
+    --text-muted: #94a3b8;
+
+    --border-color: #293b55;
+    --border-focus: #38bdf8;
+
+    --accent-color: #0ea5e9;
+    --accent-hover: #0284c7;
+
+    --button-bg: #0284c7;
+    --button-hover: #0369a1;
+    --button-text: #ffffff;
+
+    --button-secondary-bg: #1b2940;
+    --button-secondary-text: #e2e8f0;
+    --button-secondary-border: #3b4d67;
+
+    --hero-bg: linear-gradient(135deg, #102b49, #131f34);
+    --banner-bg: #14243a;
+    --explainer-bg: #17283e;
+
+    --shadow: 0 4px 16px rgba(0, 0, 0, 0.25);
+
+    --success: #34d399;
+    --warning: #fbbf24;
+    --danger: #fb7185;
+    --info: #38bdf8;
+
+    --badge-success-bg: #103c34;
+    --badge-warning-bg: #443416;
+    --badge-danger-bg: #451d2b;
+    --badge-info-bg: #12354c;
+
+    /* Streamlit native theme compatibility */
+    --background-color: #080d19;
+    --secondary-background-color: #101a2d;
+    --text-color: #f1f5f9;
+    --primary-color: #0ea5e9;
+}
+
+/* =========================================================
+   1. DataFrames & Glide Data Grid - Dark Theme
+   ========================================================= */
+
+div[data-testid="stDataFrame"],
+div[data-testid="stGlideDataGridContainer"],
+div.stDataFrameGlideDataEditor,
+div.gdg-wmyidgi,
+div.dvn-scroller,
+div.dvn-scroller.stDataFrameGlideDataEditor,
+div.dvn-underlay,
+div[data-testid="stDataFrameResizable"] {
+    background-color: var(--card-bg) !important;
+    background: var(--card-bg) !important;
+    color: var(--text-primary) !important;
+    border: 1px solid var(--border-color) !important;
+    border-radius: 8px !important;
+}
+
+/* Invert Glide Data Grid canvas to render white cells as dark theme */
+div.stDataFrameGlideDataEditor canvas,
+div[data-testid="stDataFrame"] canvas,
+.dvn-scroller canvas,
+.gdg-wmyidgi canvas {
+    filter: invert(0.92) hue-rotate(180deg) brightness(0.95) contrast(1.1) !important;
+    border-radius: 6px;
+}
+
+/* Dataframe toolbar */
+div[data-testid="stDataFrameToolBar"],
+div[data-testid="stDataFrameToolBar"] button,
+div[data-testid="stDataFrameToolBar"] svg {
+    background-color: var(--card-bg) !important;
+    color: var(--text-primary) !important;
+    fill: var(--text-primary) !important;
+}
+
+/* =========================================================
+   2. Header & Sidebar Toggle / Collapse Button (White in Dark Theme)
+   ========================================================= */
+
+header[data-testid="stHeader"] button,
+header[data-testid="stHeader"] svg,
+header[data-testid="stHeader"] span,
+header[data-testid="stHeader"] [data-testid="stIconMaterial"],
+button[data-testid="stSidebarCollapsedControl"],
+button[data-testid="stSidebarCollapsedControl"] *,
+button[data-testid="stSidebarCollapseButton"],
+button[data-testid="stSidebarCollapseButton"] *,
+div[data-testid="stSidebarCollapseButton"],
+div[data-testid="stSidebarCollapseButton"] *,
+.e149qiiz5,
+.e149qiiz5 *,
+.st-emotion-cache-jma0kd,
+.st-emotion-cache-jma0kd * {
+    color: #f1f5f9 !important;
+    fill: #f1f5f9 !important;
+    stroke: #f1f5f9 !important;
+}
+
+button[data-testid="stSidebarCollapsedControl"]:hover,
+button[data-testid="stSidebarCollapseButton"]:hover,
+.e149qiiz5:hover,
+.st-emotion-cache-jma0kd:hover {
+    color: #38bdf8 !important;
+    fill: #38bdf8 !important;
+    stroke: #38bdf8 !important;
+}

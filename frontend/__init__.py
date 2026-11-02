@@ -1,0 +1,1 @@
+"""AdverScan Streamlit Frontend Package."""
