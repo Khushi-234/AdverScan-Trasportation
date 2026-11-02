@@ -50,7 +50,7 @@ class HardeningContext:
         self.input_domain = (self.input_domain or "image").lower().strip()
         if self.resource_limits is None:
             self.resource_limits = {}
-        if self.attack_name in ("pgd", "bim", "cw", "carlini_wagner", "autoattack"):
+        if self.attack_name in ("pgd", "bim", "cw", "carlini_wagner", "autoattack", "autopgd", "embedding_pgd"):
             self.is_iterative = True
 
     @property

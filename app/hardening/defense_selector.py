@@ -186,8 +186,14 @@ class DefenseSelector:
 
         attack = (context.attack_name or "").lower().strip()
 
+        # Domain-aware prioritization takes precedence
+        if context.input_domain in ("nlp", "text"):
+            primary_pool = [
+                "confidence_rejection",
+                "adversarial_detection",
+            ]
         # Problem 1 Fix: Attack-specific prioritization takes precedence over generic epsilon intervals
-        if attack in ("fgsm", "single_step", "fast_gradient"):
+        elif attack in ("fgsm", "single_step", "fast_gradient", "embedding_fgsm"):
             # Single-step gradient attacks: preprocessing and spatial filters excel
             primary_pool = [
                 "spatial_smoothing",
@@ -197,7 +203,7 @@ class DefenseSelector:
                 "image_denoising",
                 "jpeg_compression",
             ]
-        elif attack in ("pgd", "bim", "iterative"):
+        elif attack in ("pgd", "bim", "iterative", "embedding_pgd", "autopgd"):
             # Iterative gradient attacks: robust smoothing, feature denoising, and detection
             primary_pool = [
                 "randomized_smoothing",
