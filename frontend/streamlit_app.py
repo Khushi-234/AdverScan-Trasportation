@@ -1014,7 +1014,54 @@ elif stage == "attack_results":
     else:
         st.info("Perturbation metrics not applicable for this data modality.")
 
-    # 3. Hyperparameter Configuration & Execution Telemetry Table
+    # 3. Visual Charts for Attack Vulnerability & Impact
+    st.markdown("<div style='height: 10px;'></div>", unsafe_allow_html=True)
+    st.markdown(
+        """
+        <div class="section-banner">
+            <h3>📊 Attack Vulnerability Impact Charts</h3>
+            <p>Visual breakdown of accuracy degradation, confidence drops, and sample outcomes</p>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    col_atk_ch1, col_atk_ch2 = st.columns(2)
+    with col_atk_ch1:
+        st.markdown("##### 🎯 Classification Accuracy Impact")
+        df_atk_acc = pd.DataFrame(
+            {
+                "Evaluation Stage": ["Clean Accuracy", "Adversarial Accuracy", "Accuracy Drop"],
+                "Percentage (%)": [clean_acc_disp, adv_acc_disp, abs(acc_drop_disp)],
+            }
+        ).set_index("Evaluation Stage")
+        st.bar_chart(df_atk_acc)
+
+    with col_atk_ch2:
+        st.markdown("##### 📉 Prediction Confidence Degradation")
+        df_atk_conf = pd.DataFrame(
+            {
+                "Confidence Metric": ["Clean Confidence", "Adversarial Confidence", "Confidence Drop"],
+                "Percentage (%)": [clean_conf_disp, adv_conf_disp, abs(conf_drop_disp)],
+            }
+        ).set_index("Confidence Metric")
+        st.bar_chart(df_atk_conf)
+
+    comparisons = result.get("sample_comparisons", [])
+    if comparisons:
+        atk_outcomes = [c.get("Outcome", c.get("outcome", "Unknown")) for c in comparisons]
+        from collections import Counter
+        atk_counts = Counter(atk_outcomes)
+        df_atk_outcomes = pd.DataFrame(
+            {
+                "Sample Outcome": list(atk_counts.keys()),
+                "Number of Samples": list(atk_counts.values()),
+            }
+        ).set_index("Sample Outcome")
+        st.markdown("##### 🏷️ Sample Classification Outcome Distribution")
+        st.bar_chart(df_atk_outcomes)
+
+    # 4. Hyperparameter Configuration & Execution Telemetry Table
     st.markdown("<div style='height: 10px;'></div>", unsafe_allow_html=True)
     st.markdown(
         """
@@ -1053,11 +1100,9 @@ elif stage == "attack_results":
             "Value": str(active_data.get("device", "CPU")),
         },
     ]
-    st.dataframe(
-        pd.DataFrame(telemetry_rows), use_container_width=True, hide_index=True
-    )
+    st.table(pd.DataFrame(telemetry_rows))
 
-    # 4. Sample-by-Sample Prediction & Confidence Table
+    # 5. Sample-by-Sample Prediction & Confidence Table
     st.markdown("<div style='height: 10px;'></div>", unsafe_allow_html=True)
     st.markdown(
         """
@@ -1069,7 +1114,6 @@ elif stage == "attack_results":
         unsafe_allow_html=True,
     )
 
-    comparisons = result.get("sample_comparisons", [])
     if comparisons:
         df_comp = pd.DataFrame(comparisons)
         # Rename columns for clean human presentation
@@ -1083,7 +1127,7 @@ elif stage == "attack_results":
             "outcome": "Assessment Outcome",
         }
         df_comp = df_comp.rename(columns=display_cols)
-        st.dataframe(df_comp, use_container_width=True, hide_index=True)
+        st.table(df_comp)
     else:
         st.info("No per-sample prediction comparisons available.")
 
@@ -1453,8 +1497,8 @@ elif stage == "defense_results":
     st.markdown(
         """
         <div class="section-banner">
-            <h3>📊 Robustness Metrics Comparison</h3>
-            <p>Empirical before vs. after comparison of accuracy and attack vulnerability</p>
+            <h3>📊 Hardening Robustness Metrics & Visual Comparison</h3>
+            <p>Empirical before vs. after comparison of accuracy recovery, ASR suppression, and restoration distributions</p>
         </div>
         """,
         unsafe_allow_html=True,
@@ -1482,7 +1526,22 @@ elif stage == "defense_results":
         ).set_index("Assessment Stage")
         st.bar_chart(chart_data_asr)
 
-    # 4. Candidate Defense Attempts Breakdown
+    # Outcome distribution chart
+    sample_restorations = def_result.get("sample_restorations", [])
+    if sample_restorations:
+        outcomes = [s.get("Outcome", "Unknown") for s in sample_restorations]
+        from collections import Counter
+        outcome_counts = Counter(outcomes)
+        df_outcome_chart = pd.DataFrame(
+            {
+                "Restoration Outcome": list(outcome_counts.keys()),
+                "Number of Samples": list(outcome_counts.values()),
+            }
+        ).set_index("Restoration Outcome")
+        st.markdown("##### 📈 Sample Label Recovery Outcome Distribution")
+        st.bar_chart(df_outcome_chart)
+
+    # 4. Candidate Defense Attempts Breakdown & Chart
     candidate_attempts = def_result.get("candidate_attempts", [])
     if candidate_attempts:
         st.markdown("<div style='height: 12px;'></div>", unsafe_allow_html=True)
@@ -1490,16 +1549,40 @@ elif stage == "defense_results":
             """
             <div class="section-banner">
                 <h3>🔍 Iterative Candidate Defense Evaluation Log</h3>
-                <p>Telemetry and status across all evaluated candidate algorithms</p>
+                <p>Telemetry, charts, and status across all evaluated candidate algorithms</p>
             </div>
             """,
             unsafe_allow_html=True,
         )
+
+        # Candidate comparison chart if candidates exist
+        chart_candidates = []
+        for att in candidate_attempts:
+            try:
+                asr_val = float(str(att.get("ASR Reduction", "0")).replace("%", "").strip())
+            except Exception:
+                asr_val = 0.0
+            try:
+                drop_val = float(str(att.get("Clean Acc Drop", "0")).replace("%", "").strip())
+            except Exception:
+                drop_val = 0.0
+            chart_candidates.append(
+                {
+                    "Defense Candidate": str(att.get("Defense", "Unknown")),
+                    "ASR Reduction (%)": asr_val,
+                    "Clean Acc Drop (%)": drop_val,
+                }
+            )
+
+        if chart_candidates:
+            df_cand_chart = pd.DataFrame(chart_candidates).set_index("Defense Candidate")
+            st.markdown("##### 📊 Candidate Defense Performance Comparison")
+            st.bar_chart(df_cand_chart)
+
         df_attempts = pd.DataFrame(candidate_attempts)
-        st.dataframe(df_attempts, use_container_width=True, hide_index=True)
+        st.table(df_attempts)
 
     # 5. Sample-by-Sample Restored Prediction Table
-    sample_restorations = def_result.get("sample_restorations", [])
     if sample_restorations:
         st.markdown("<div style='height: 12px;'></div>", unsafe_allow_html=True)
         st.markdown(
@@ -1512,7 +1595,7 @@ elif stage == "defense_results":
             unsafe_allow_html=True,
         )
         df_restored = pd.DataFrame(sample_restorations)
-        st.dataframe(df_restored, use_container_width=True, hide_index=True)
+        st.table(df_restored)
 
     # 6. Hardening Recommendations
     recs = def_result.get("recommendations", [])
@@ -1653,7 +1736,7 @@ elif stage == "report":
             {"Property": "Input Shape", "Value": str(m_info.get("input_shape"))},
             {"Property": "Classes", "Value": str(m_info.get("num_classes"))},
         ]
-        st.dataframe(pd.DataFrame(m_rows), use_container_width=True, hide_index=True)
+        st.table(pd.DataFrame(m_rows))
 
     with st.expander("📦 Section 3: Evaluation Dataset Configuration (M2)", expanded=False):
         d_info = report_dict.get("dataset_config", {})
@@ -1663,7 +1746,7 @@ elif stage == "report":
             {"Parameter": "Total Samples Tested", "Value": str(d_info.get("total_samples"))},
             {"Parameter": "Evaluation Split", "Value": str(d_info.get("data_split", "test"))},
         ]
-        st.dataframe(pd.DataFrame(d_rows), use_container_width=True, hide_index=True)
+        st.table(pd.DataFrame(d_rows))
 
     with st.expander("⚡ Section 4: Baseline Clean Model Performance (M2)", expanded=False):
         b_info = report_dict.get("baseline_performance", {})
@@ -1746,7 +1829,7 @@ elif stage == "report":
         attempts = hard_data.get("defense_attempts", [])
         if attempts:
             st.markdown("##### Candidate Evaluation Attempts:")
-            st.dataframe(pd.DataFrame(attempts), use_container_width=True, hide_index=True)
+            st.table(pd.DataFrame(attempts))
 
     with st.expander("📈 Section 11 & 12: Empirical Re-Test & Robustness Comparison (M8)", expanded=True):
         bva = report_dict.get("before_vs_after", {})
@@ -1766,7 +1849,7 @@ elif stage == "report":
                         "Robustness Status": "Improved ✅" if c_data.get("is_improved") else "Stable ⚠️",
                     }
                 )
-            st.dataframe(pd.DataFrame(comp_rows), use_container_width=True, hide_index=True)
+            st.table(pd.DataFrame(comp_rows))
         else:
             st.info("No comparative re-test data available.")
 

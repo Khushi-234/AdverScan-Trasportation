@@ -40,10 +40,16 @@ body,
     --button-bg: #16a34a;
     --button-hover: #15803d;
     --button-text: #ffffff;
-    --button-secondary-bg: #ffffff;
-    --button-secondary-text: #166534;
-    --button-secondary-border: #bbd9c2;
-    --button-secondary-hover: #effaf2;
+    --button-secondary-bg: #e2e8f0;
+    --button-secondary-text: #0f172a;
+    --button-secondary-border: #94a3b8;
+    --button-secondary-hover: #cbd5e1;
+
+    /* Streamlit native theme compatibility */
+    --background-color: #ffffff;
+    --secondary-background-color: #f8fafc;
+    --text-color: #0f172a;
+    --primary-color: #16a34a;
 
     /* Structural surfaces */
     --hero-bg: linear-gradient(135deg, #dcfce7 0%, #ffffff 72%);
@@ -168,12 +174,10 @@ div[data-testid="stDataFrame"] canvas,
 }
 
 /* ============================================================
-   Buttons — Lighter green with white text, bold on hover
+   Buttons — Primary vibrant green, Secondary visible sleek grey
    ============================================================ */
-.stButton > button,
-button[data-testid="baseButton-primary"],
-button[data-testid="baseButton-secondary"],
-.stButton > button:not([kind="primary"]) {
+.stButton > button[kind="primary"],
+button[data-testid="baseButton-primary"] {
     background: #16a34a !important;
     background-color: #16a34a !important;
     color: #ffffff !important;
@@ -184,18 +188,17 @@ button[data-testid="baseButton-secondary"],
     transition: all 0.2s ease !important;
 }
 
-.stButton > button p,
+.stButton > button[kind="primary"] p,
+.stButton > button[kind="primary"] span,
 button[data-testid="baseButton-primary"] p,
-button[data-testid="baseButton-secondary"] p {
+button[data-testid="baseButton-primary"] span {
     color: #ffffff !important;
     -webkit-text-fill-color: #ffffff !important;
     font-weight: inherit !important;
 }
 
-.stButton > button:hover,
-button[data-testid="baseButton-primary"]:hover,
-button[data-testid="baseButton-secondary"]:hover,
-.stButton > button:not([kind="primary"]):hover {
+.stButton > button[kind="primary"]:hover,
+button[data-testid="baseButton-primary"]:hover {
     background: #15803d !important;
     background-color: #15803d !important;
     color: #ffffff !important;
@@ -206,10 +209,38 @@ button[data-testid="baseButton-secondary"]:hover,
     transform: translateY(-1px) !important;
 }
 
-.stButton > button:hover p,
-button[data-testid="baseButton-primary"]:hover p,
-button[data-testid="baseButton-secondary"]:hover p {
+/* Secondary / Outline buttons — Sleek visible grey with dark text */
+.stButton > button:not([kind="primary"]),
+button[data-testid="baseButton-secondary"] {
+    background: #e2e8f0 !important;
+    background-color: #e2e8f0 !important;
+    color: #0f172a !important;
+    -webkit-text-fill-color: #0f172a !important;
+    border: 1px solid #94a3b8 !important;
+    border-radius: 8px !important;
+    font-weight: 600 !important;
+    transition: all 0.2s ease !important;
+}
+
+.stButton > button:not([kind="primary"]) p,
+.stButton > button:not([kind="primary"]) span,
+button[data-testid="baseButton-secondary"] p,
+button[data-testid="baseButton-secondary"] span {
+    color: #0f172a !important;
+    -webkit-text-fill-color: #0f172a !important;
+    font-weight: inherit !important;
+}
+
+.stButton > button:not([kind="primary"]):hover,
+button[data-testid="baseButton-secondary"]:hover {
+    background: #cbd5e1 !important;
+    background-color: #cbd5e1 !important;
+    color: #000000 !important;
+    -webkit-text-fill-color: #000000 !important;
+    border-color: #64748b !important;
     font-weight: 700 !important;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08) !important;
+    transform: translateY(-1px) !important;
 }
 
 /* ============================================================

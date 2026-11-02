@@ -25,9 +25,10 @@
     --button-hover: #0369a1;
     --button-text: #ffffff;
 
-    --button-secondary-bg: #1b2940;
-    --button-secondary-text: #e2e8f0;
-    --button-secondary-border: #3b4d67;
+    --button-secondary-bg: #27354a;
+    --button-secondary-text: #f1f5f9;
+    --button-secondary-border: #475569;
+    --button-secondary-hover: #334155;
 
     --hero-bg: linear-gradient(135deg, #102b49, #131f34);
     --banner-bg: #14243a;
@@ -57,27 +58,9 @@
    ========================================================= */
 
 div[data-testid="stDataFrame"],
-div[data-testid="stGlideDataGridContainer"],
-div.stDataFrameGlideDataEditor,
-div.gdg-wmyidgi,
-div.dvn-scroller,
-div.dvn-scroller.stDataFrameGlideDataEditor,
-div.dvn-underlay,
 div[data-testid="stDataFrameResizable"] {
-    background-color: var(--card-bg) !important;
-    background: var(--card-bg) !important;
-    color: var(--text-primary) !important;
     border: 1px solid var(--border-color) !important;
     border-radius: 8px !important;
-}
-
-/* Invert Glide Data Grid canvas to render white cells as dark theme */
-div.stDataFrameGlideDataEditor canvas,
-div[data-testid="stDataFrame"] canvas,
-.dvn-scroller canvas,
-.gdg-wmyidgi canvas {
-    filter: invert(0.92) hue-rotate(180deg) brightness(0.95) contrast(1.1) !important;
-    border-radius: 6px;
 }
 
 /* Dataframe toolbar */

@@ -645,11 +645,21 @@ button[data-testid="baseButton-secondary"],
     border: 1px solid var(--button-secondary-border) !important;
 }
 
+.stButton>button[kind="secondary"] p,
+.stButton>button[kind="secondary"] span,
+button[data-testid="baseButton-secondary"] p,
+button[data-testid="baseButton-secondary"] span,
+.stButton>button:not([kind="primary"]) p,
+.stButton>button:not([kind="primary"]) span {
+    color: inherit !important;
+    -webkit-text-fill-color: currentColor !important;
+}
+
 .stButton>button:not([kind="primary"]):hover,
 button[data-testid="baseButton-secondary"]:hover {
-    background: var(--card-bg-hover) !important;
+    background: var(--button-secondary-hover, var(--card-bg-hover)) !important;
     border-color: var(--border-focus) !important;
-    color: var(--accent-color) !important;
+    color: var(--button-secondary-text) !important;
 }
 
 /* ============================================================
@@ -657,45 +667,46 @@ button[data-testid="baseButton-secondary"]:hover {
    ============================================================ */
 
 table,
-[data-testid="stTable"] {
-    width: 100%;
-    border-collapse: collapse;
+[data-testid="stTable"],
+.stTable {
+    width: 100% !important;
+    border-collapse: collapse !important;
     background: var(--card-bg) !important;
-    color: var(--text-primary) !important;
-}
-
-div[data-testid="stDataFrame"],
-div[data-testid="stGlideDataGridContainer"],
-div.stDataFrameGlideDataEditor,
-div.gdg-wmyidgi,
-div.dvn-scroller,
-div.dvn-scroller.stDataFrameGlideDataEditor,
-div[data-testid="stDataFrameResizable"] {
-    background: var(--card-bg) !important;
-    background-color: var(--card-bg) !important;
     color: var(--text-primary) !important;
     border: 1px solid var(--border-color) !important;
     border-radius: 8px !important;
+    overflow: hidden !important;
 }
 
-table th {
-    background: var(--card-bg-hover) !important;
+table th,
+[data-testid="stTable"] th {
+    background: var(--card-bg-hover, #f1f5f9) !important;
     color: var(--text-primary) !important;
-    padding: 0.65rem 0.85rem;
-    border-bottom: 2px solid var(--border-color);
-    font-size: 0.85rem;
-    font-weight: 700;
+    padding: 0.7rem 0.9rem !important;
+    border-bottom: 2px solid var(--border-color) !important;
+    font-size: 0.85rem !important;
+    font-weight: 700 !important;
+    text-align: left !important;
 }
 
-table td {
-    padding: 0.65rem 0.85rem;
-    border-bottom: 1px solid var(--border-color);
-    color: var(--text-secondary) !important;
-    font-size: 0.88rem;
+table td,
+[data-testid="stTable"] td {
+    padding: 0.7rem 0.9rem !important;
+    border-bottom: 1px solid var(--border-color) !important;
+    color: var(--text-primary) !important;
+    font-size: 0.88rem !important;
+    background: var(--card-bg) !important;
 }
 
-table tbody tr:hover td {
+table tbody tr:hover td,
+[data-testid="stTable"] tbody tr:hover td {
     background: var(--card-bg-hover) !important;
+}
+
+div[data-testid="stDataFrame"],
+div[data-testid="stDataFrameResizable"] {
+    border: 1px solid var(--border-color) !important;
+    border-radius: 8px !important;
 }
 
 

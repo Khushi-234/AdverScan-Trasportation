@@ -43,42 +43,27 @@ def load_theme(theme: str = "Dark"):
     )
 
 
-def initialize_theme():
+def initialize_theme() -> str:
     """
-    Initialize theme selection and loading.
-    Checks native Streamlit theme context, session state, and renders the right-side theme selector.
-    Removes theme selection from the left sidebar to prevent conflicts.
+    Initialize theme loading synchronized with native Streamlit theme selection.
+    Respects the theme chosen in the native 3-dots (⋮) Settings menu (Light / Dark).
+    Eliminates redundant on-page theme selector dropdowns.
     """
-    # Detect native Streamlit theme from st.context if selected via native right-side menu
+    # 1. Detect native Streamlit theme selected from the 3-dots menu (Settings -> Theme)
     native_theme = None
     if hasattr(st, "context") and hasattr(st.context, "theme"):
         ctx_theme = getattr(st.context, "theme", None)
-        if isinstance(ctx_theme, dict) and ctx_theme.get("type"):
-            native_theme = "Light" if ctx_theme["type"].lower() == "light" else "Dark"
+        if isinstance(ctx_theme, dict) or hasattr(ctx_theme, "get"):
+            theme_val = ctx_theme.get("type") or ctx_theme.get("base")
+            if theme_val:
+                native_theme = "Light" if str(theme_val).lower() == "light" else "Dark"
 
-    if "theme" not in st.session_state:
-        st.session_state["theme"] = native_theme or "Dark"
-    elif native_theme and native_theme != st.session_state.get("_last_native_theme"):
-        st.session_state["theme"] = native_theme
-
+    # 2. Resolve active theme
     if native_theme:
-        st.session_state["_last_native_theme"] = native_theme
+        theme = native_theme
+    else:
+        theme = st.session_state.get("theme", "Dark")
 
-    current_theme = st.session_state.get("theme", "Dark")
-
-    # Render right-aligned theme selector in the top-right header area
-    _, col_theme = st.columns([5.8, 1.2])
-    with col_theme:
-        selected_theme = st.selectbox(
-            "Interface Theme",
-            options=["Dark", "Light"],
-            index=0 if current_theme == "Dark" else 1,
-            key="interface_theme",
-            label_visibility="collapsed",
-            help="Switch Interface Theme (Dark Cybersecurity / Light Modern Dashboard)",
-        )
-
-    st.session_state["theme"] = selected_theme
-    load_theme(selected_theme)
-
-    return selected_theme
+    st.session_state["theme"] = theme
+    load_theme(theme)
+    return theme
