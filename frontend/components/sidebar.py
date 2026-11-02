@@ -59,6 +59,7 @@ def render_sidebar_session() -> None:
             )
         else:
             model_name = get_state("active_model_name") or "Ingested Model"
+            domain = get_state("active_model_domain", "Unknown")
             defense_name = get_state("active_defense_name")
 
             stage_labels = {
