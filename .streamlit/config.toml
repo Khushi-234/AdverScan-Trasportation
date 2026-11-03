@@ -1,2 +1,21 @@
 [client]
 showSidebarNavigation = false
+
+[theme]
+base = "dark"
+primaryColor = "#0284c7"
+backgroundColor = "#080d19"
+secondaryBackgroundColor = "#101a2d"
+textColor = "#f1f5f9"
+
+[theme.dark]
+primaryColor = "#0284c7"
+backgroundColor = "#080d19"
+secondaryBackgroundColor = "#101a2d"
+textColor = "#f1f5f9"
+
+[theme.light]
+primaryColor = "#16a34a"
+backgroundColor = "#f5f9f6"
+secondaryBackgroundColor = "#ffffff"
+textColor = "#14271b"

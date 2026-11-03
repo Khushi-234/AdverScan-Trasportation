@@ -949,7 +949,7 @@ elif stage == "attack_results":
         with col_m1:
             st.markdown(
                 f"""
-                <div class="modern-card">
+                <div class="modern-card card-accent-cyan">
                     <div class="stat-label">L-infinity Distance (L_inf)</div>
                     <div style="font-size: 1.4rem; font-weight: 700; color: var(--text-primary);">{metrics.get('linf', 0.0):.5f}</div>
                     <div class="stat-subtext">Budget (ε): <strong>{result.get('epsilon_used', 0.0):.3f}</strong></div>
@@ -961,7 +961,7 @@ elif stage == "attack_results":
         with col_m2:
             st.markdown(
                 f"""
-                <div class="modern-card">
+                <div class="modern-card card-accent-emerald">
                     <div class="stat-label">L2 Euclidean Distance</div>
                     <div style="font-size: 1.4rem; font-weight: 700; color: var(--text-primary);">{metrics.get('l2', 0.0):.4f}</div>
                     <div class="stat-subtext">Mean Euclidean displacement</div>
@@ -991,7 +991,7 @@ elif stage == "attack_results":
 
             st.markdown(
                 f"""
-                <div class="modern-card">
+                <div class="modern-card card-accent-violet">
                     <div class="stat-label">L0 Perturbed Elements</div>
                     <div style="font-size: 1.4rem; font-weight: 700; color: var(--text-primary);">{l0_val:,}</div>
                     <div class="stat-subtext"><strong>{l0_pct:.1f}%</strong> of total tensor elements changed</div>
@@ -1003,7 +1003,7 @@ elif stage == "attack_results":
         with col_m4:
             st.markdown(
                 f"""
-                <div class="modern-card">
+                <div class="modern-card card-accent-amber">
                     <div class="stat-label">Mean Absolute Error (MAE)</div>
                     <div style="font-size: 1.4rem; font-weight: 700; color: var(--text-primary);">{metrics.get('mean_abs_error', 0.0):.5f}</div>
                     <div class="stat-subtext">Average absolute element change</div>
@@ -1134,25 +1134,25 @@ elif stage == "attack_results":
     st.markdown("---")
 
     # Workflow Actions
-    col_act1, col_act2, col_act3 = st.columns([1.5, 1, 1])
+    col_back, col_fwd = st.columns([1, 1])
 
-    with col_act1:
-        if st.button("🛡️ Apply Defense Technique", type="primary", use_container_width=True):
-            set_workflow_stage("defense_config")
-            st.rerun()
-
-    with col_act2:
-        if st.button("⚡ Test Another Attack on this Model", use_container_width=True):
+    with col_back:
+        if st.button("⬅️ Test Another Attack on this Model", use_container_width=True):
             set_workflow_stage("attack_config")
             st.rerun()
 
-    with col_act3:
-        if st.button(
-            "🔄 Start New Assessment (Reset)", use_container_width=True
-        ):
-            reset_workflow_state()
-            set_workflow_stage("dashboard")
+    with col_fwd:
+        if st.button("🛡️ Apply Defense Technique ➡️", type="primary", use_container_width=True):
+            set_workflow_stage("defense_config")
             st.rerun()
+
+    st.markdown("<div style='height: 8px;'></div>", unsafe_allow_html=True)
+    if st.button(
+        "🔄 Start New Assessment (Reset)", use_container_width=True, key="reset_from_attack_results"
+    ):
+        reset_workflow_state()
+        set_workflow_stage("dashboard")
+        st.rerun()
 
 
 # ==============================================================================
@@ -1319,19 +1319,28 @@ elif stage == "defense_config":
 
     st.markdown("---")
 
-    col_btn1, col_btn2 = st.columns([1.5, 1])
+    # Workflow Navigation (Backward left, Forward right, Reset below)
+    col_back, col_fwd = st.columns([1, 1])
 
-    with col_btn1:
+    with col_back:
+        if st.button("⬅️ Back to Attack Results", use_container_width=True):
+            set_workflow_stage("attack_results")
+            st.rerun()
+
+    with col_fwd:
         apply_btn = st.button(
-            "🚀 Apply Defense & Harden Model",
+            "🚀 Apply Defense & Harden Model ➡️",
             type="primary",
             use_container_width=True,
         )
 
-    with col_btn2:
-        if st.button("⬅️ Back to Attack Results", use_container_width=True):
-            set_workflow_stage("attack_results")
-            st.rerun()
+    st.markdown("<div style='height: 8px;'></div>", unsafe_allow_html=True)
+    if st.button(
+        "🔄 Start New Assessment (Reset)", use_container_width=True, key="reset_from_defense_config"
+    ):
+        reset_workflow_state()
+        set_workflow_stage("dashboard")
+        st.rerun()
 
     if apply_btn:
         progress_bar = st.progress(0, text="Initializing Hardening Engine and defense candidates...")
@@ -1607,24 +1616,26 @@ elif stage == "defense_results":
 
     st.markdown("---")
 
-    # Workflow Actions
-    col_act1, col_act2, col_act3 = st.columns([1.5, 1, 1])
+    # Workflow Actions (Backward left, Forward right, Reset below)
+    col_back, col_fwd = st.columns([1, 1])
 
-    with col_act1:
-        if st.button("📄 Generate Security Assessment Report", type="primary", use_container_width=True):
-            set_workflow_stage("report")
-            st.rerun()
-
-    with col_act2:
-        if st.button("⚙️ Reconfigure Defense", use_container_width=True):
+    with col_back:
+        if st.button("⬅️ Reconfigure Defense", use_container_width=True):
             set_workflow_stage("defense_config")
             st.rerun()
 
-    with col_act3:
-        if st.button("🔄 Start New Assessment (Reset)", use_container_width=True):
-            reset_workflow_state()
-            set_workflow_stage("dashboard")
+    with col_fwd:
+        if st.button("📄 Generate Security Assessment Report ➡️", type="primary", use_container_width=True):
+            set_workflow_stage("report")
             st.rerun()
+
+    st.markdown("<div style='height: 8px;'></div>", unsafe_allow_html=True)
+    if st.button(
+        "🔄 Start New Assessment (Reset)", use_container_width=True, key="reset_from_defense_results"
+    ):
+        reset_workflow_state()
+        set_workflow_stage("dashboard")
+        st.rerun()
 
 
 # ==============================================================================

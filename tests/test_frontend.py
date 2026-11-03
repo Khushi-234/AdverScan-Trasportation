@@ -239,3 +239,26 @@ def test_session_state_workflow_transitions():
     assert get_workflow_stage() == "dashboard"
     assert get_defense_result() is None
     assert get_report_result() is None
+
+
+def test_theme_manager_initialization(monkeypatch):
+    """Verify theme manager synchronization with native theme context."""
+    from frontend.utils.theme_manager import initialize_theme, load_theme
+    import streamlit as st
+
+    # 1. Test default dark theme
+    if "theme" in st.session_state:
+        del st.session_state["theme"]
+    t = initialize_theme()
+    assert t in ("Dark", "Light")
+    assert st.session_state["theme"] == t
+
+    # 2. Test explicit Light theme loading
+    st.session_state["theme"] = "Light"
+    t_light = initialize_theme()
+    assert t_light == "Light"
+
+    # 3. Test load_theme execution
+    load_theme("Dark")
+    load_theme("Light")
+

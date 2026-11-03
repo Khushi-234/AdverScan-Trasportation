@@ -1,105 +1,268 @@
 /* =========================================================
-   AdverScan - DARK CYBERSECURITY THEME
+   AdverScan - DARK THEME (Professional Cybersecurity / SOC)
+   Navy + Cyan. Defines EVERY variable that base.css uses.
+   Both themes are always loaded; theme_manager.py's browser script sets
+   <html data-theme="dark|light"> to pick one (no Python rerun needed).
    ========================================================= */
 
-:root {
+:root:not([data-theme]),
+:root[data-theme="dark"] {
     color-scheme: dark;
 
+    /* Surfaces */
     --app-bg: #080d19;
-    --sidebar-bg: #101a2d;
+    --sidebar-bg: #0d1626;
     --card-bg: #131f34;
     --card-hover: #1a2a43;
+    --card-bg-hover: #1a2a43;
     --input-bg: #1b2940;
+    --code-bg: #0b1424;
 
+    /* Typography */
     --text-primary: #f1f5f9;
     --text-secondary: #cbd5e1;
     --text-muted: #94a3b8;
+    --text-inverse: #080d19;
 
+    /* Borders */
     --border-color: #293b55;
     --border-focus: #38bdf8;
+    --border-strong: #3a5275;
 
+    /* Cyan brand palette */
     --accent-color: #0ea5e9;
-    --accent-hover: #0284c7;
+    --accent-hover: #38bdf8;
+    --accent-light: #7dd3fc;
+    --accent-soft: #0f2a43;
+    --accent-dark: #075985;
 
+    /* Buttons */
     --button-bg: #0284c7;
     --button-hover: #0369a1;
     --button-text: #ffffff;
-
     --button-secondary-bg: #27354a;
     --button-secondary-text: #f1f5f9;
     --button-secondary-border: #475569;
     --button-secondary-hover: #334155;
 
-    --hero-bg: linear-gradient(135deg, #102b49, #131f34);
-    --banner-bg: #14243a;
+    /* Streamlit native theme compatibility */
+    --background-color: #080d19;
+    --secondary-background-color: #0d1626;
+    --text-color: #f1f5f9;
+    --primary-color: #0ea5e9;
+
+    /* Structural surfaces */
+    --hero-bg: linear-gradient(135deg, #102b49 0%, #131f34 75%);
+    --hero-border: #1e4a73;
+    --banner-bg: linear-gradient(100deg, #14243a 0%, #101a2d 100%);
+    --banner-border: #24405f;
     --explainer-bg: #17283e;
+    --explainer-border: #2b6a9a;
+    --explainer-text: #bcd3e6;
 
-    --shadow: 0 4px 16px rgba(0, 0, 0, 0.25);
+    /* Shadows & Card highlights */
+    --shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
+    --card-shadow: 0 4px 20px rgba(0, 0, 0, 0.45), 0 1px 4px rgba(0, 0, 0, 0.35);
+    --card-shadow-hover: 0 8px 30px rgba(14, 165, 233, 0.24), 0 2px 6px rgba(0, 0, 0, 0.5);
+    --stat-label-color: #94a3b8;
 
+    /* Card accent backgrounds with luminous top gradient sheen */
+    --card-accent-cyan-bg: linear-gradient(180deg, rgba(34, 211, 238, 0.08) 0%, #131f34 50%);
+    --card-accent-cyan-shadow: 0 4px 22px rgba(0, 0, 0, 0.45), 0 0 16px rgba(34, 211, 238, 0.14);
+    --card-accent-cyan-shadow-hover: 0 8px 30px rgba(34, 211, 238, 0.28), 0 0 20px rgba(34, 211, 238, 0.2);
+
+    --card-accent-emerald-bg: linear-gradient(180deg, rgba(52, 211, 153, 0.08) 0%, #131f34 50%);
+    --card-accent-emerald-shadow: 0 4px 22px rgba(0, 0, 0, 0.45), 0 0 16px rgba(52, 211, 153, 0.14);
+    --card-accent-emerald-shadow-hover: 0 8px 30px rgba(52, 211, 153, 0.28), 0 0 20px rgba(52, 211, 153, 0.2);
+
+    --card-accent-violet-bg: linear-gradient(180deg, rgba(167, 139, 250, 0.08) 0%, #131f34 50%);
+    --card-accent-violet-shadow: 0 4px 22px rgba(0, 0, 0, 0.45), 0 0 16px rgba(167, 139, 250, 0.14);
+    --card-accent-violet-shadow-hover: 0 8px 30px rgba(167, 139, 250, 0.28), 0 0 20px rgba(167, 139, 250, 0.2);
+
+    --card-accent-amber-bg: linear-gradient(180deg, rgba(251, 191, 36, 0.08) 0%, #131f34 50%);
+    --card-accent-amber-shadow: 0 4px 22px rgba(0, 0, 0, 0.45), 0 0 16px rgba(251, 191, 36, 0.14);
+    --card-accent-amber-shadow-hover: 0 8px 30px rgba(251, 191, 36, 0.28), 0 0 20px rgba(251, 191, 36, 0.2);
+
+    --card-accent-rose-bg: linear-gradient(180deg, rgba(251, 113, 133, 0.09) 0%, #131f34 50%);
+    --card-accent-rose-shadow: 0 4px 22px rgba(0, 0, 0, 0.45), 0 0 16px rgba(251, 113, 133, 0.16);
+    --card-accent-rose-shadow-hover: 0 8px 30px rgba(251, 113, 133, 0.32), 0 0 20px rgba(251, 113, 133, 0.24);
+
+    --card-accent-indigo-bg: linear-gradient(180deg, rgba(129, 140, 248, 0.08) 0%, #131f34 50%);
+    --card-accent-indigo-shadow: 0 4px 22px rgba(0, 0, 0, 0.45), 0 0 16px rgba(129, 140, 248, 0.14);
+    --card-accent-indigo-shadow-hover: 0 8px 30px rgba(129, 140, 248, 0.28), 0 0 20px rgba(129, 140, 248, 0.2);
+
+    /* Semantic accents */
+    --accent-cyan: #22d3ee;
+    --accent-sky: #38bdf8;
+    --accent-emerald: #34d399;
+    --accent-amber: #fbbf24;
+    --accent-orange: #fb923c;
+    --accent-rose: #fb7185;
+    --accent-violet: #a78bfa;
+    --accent-indigo: #818cf8;
+
+    /* Metric colors */
+    --stat-val-rose: #fb7185;
+    --stat-val-amber: #fbbf24;
+    --stat-val-violet: #a78bfa;
+    --stat-val-cyan: #22d3ee;
+
+    /* Semantic status colors */
     --success: #34d399;
     --warning: #fbbf24;
     --danger: #fb7185;
     --info: #38bdf8;
 
+    /* Legacy badge vars */
     --badge-success-bg: #103c34;
     --badge-warning-bg: #443416;
     --badge-danger-bg: #451d2b;
     --badge-info-bg: #12354c;
 
-    /* Streamlit native theme compatibility */
-    --background-color: #080d19;
-    --secondary-background-color: #101a2d;
-    --text-color: #f1f5f9;
-    --primary-color: #0ea5e9;
+    /* Badges */
+    --badge-cyan-bg: #0e3a52;
+    --badge-cyan-text: #67e8f9;
+    --badge-cyan-border: #155e75;
+
+    --badge-emerald-bg: #103c34;
+    --badge-emerald-text: #6ee7b7;
+    --badge-emerald-border: #166534;
+
+    --badge-rose-bg: #451d2b;
+    --badge-rose-text: #fda4af;
+    --badge-rose-border: #9f1239;
+
+    --badge-amber-bg: #443416;
+    --badge-amber-text: #fcd34d;
+    --badge-amber-border: #92400e;
+
+    --badge-violet-bg: #2e2358;
+    --badge-violet-text: #c4b5fd;
+    --badge-violet-border: #5b21b6;
 }
 
 /* =========================================================
-   1. DataFrames & Glide Data Grid - Dark Theme
+   Scoped overrides (dark)
    ========================================================= */
 
-div[data-testid="stDataFrame"],
-div[data-testid="stDataFrameResizable"] {
+/* DataFrames */
+[data-theme="dark"] div[data-testid="stDataFrame"],
+[data-theme="dark"] div[data-testid="stDataFrameResizable"] {
     border: 1px solid var(--border-color) !important;
     border-radius: 8px !important;
 }
 
-/* Dataframe toolbar */
-div[data-testid="stDataFrameToolBar"],
-div[data-testid="stDataFrameToolBar"] button,
-div[data-testid="stDataFrameToolBar"] svg {
+[data-theme="dark"] div[data-testid="stDataFrameToolBar"],
+[data-theme="dark"] div[data-testid="stDataFrameToolBar"] button,
+[data-theme="dark"] div[data-testid="stDataFrameToolBar"] svg {
     background-color: var(--card-bg) !important;
     color: var(--text-primary) !important;
     fill: var(--text-primary) !important;
 }
 
-/* =========================================================
-   2. Header & Sidebar Toggle / Collapse Button (White in Dark Theme)
-   ========================================================= */
-
-header[data-testid="stHeader"] button,
-header[data-testid="stHeader"] svg,
-header[data-testid="stHeader"] span,
-header[data-testid="stHeader"] [data-testid="stIconMaterial"],
-button[data-testid="stSidebarCollapsedControl"],
-button[data-testid="stSidebarCollapsedControl"] *,
-button[data-testid="stSidebarCollapseButton"],
-button[data-testid="stSidebarCollapseButton"] *,
-div[data-testid="stSidebarCollapseButton"],
-div[data-testid="stSidebarCollapseButton"] *,
-.e149qiiz5,
-.e149qiiz5 *,
-.st-emotion-cache-jma0kd,
-.st-emotion-cache-jma0kd * {
+/* Header & sidebar toggle - light icons on dark */
+[data-theme="dark"] header[data-testid="stHeader"] button,
+[data-theme="dark"] header[data-testid="stHeader"] svg,
+[data-theme="dark"] header[data-testid="stHeader"] span,
+[data-theme="dark"] header[data-testid="stHeader"] [data-testid="stIconMaterial"],
+[data-theme="dark"] button[data-testid="stSidebarCollapsedControl"],
+[data-theme="dark"] button[data-testid="stSidebarCollapsedControl"] *,
+[data-theme="dark"] button[data-testid="stSidebarCollapseButton"],
+[data-theme="dark"] button[data-testid="stSidebarCollapseButton"] *,
+[data-theme="dark"] div[data-testid="stSidebarCollapseButton"],
+[data-theme="dark"] div[data-testid="stSidebarCollapseButton"] * {
     color: #f1f5f9 !important;
     fill: #f1f5f9 !important;
     stroke: #f1f5f9 !important;
 }
 
-button[data-testid="stSidebarCollapsedControl"]:hover,
-button[data-testid="stSidebarCollapseButton"]:hover,
-.e149qiiz5:hover,
-.st-emotion-cache-jma0kd:hover {
+[data-theme="dark"] button[data-testid="stSidebarCollapsedControl"]:hover,
+[data-theme="dark"] button[data-testid="stSidebarCollapseButton"]:hover {
     color: #38bdf8 !important;
     fill: #38bdf8 !important;
     stroke: #38bdf8 !important;
+}
+
+/* Text selection */
+[data-theme="dark"] ::selection {
+    background: #0c4a6e;
+    color: #e0f2fe;
+}
+
+/* Buttons */
+[data-theme="dark"] .stButton > button[kind="primary"],
+[data-theme="dark"] button[data-testid="baseButton-primary"] {
+    background: #0284c7 !important;
+    color: #ffffff !important;
+    -webkit-text-fill-color: #ffffff !important;
+    border: 1px solid #0ea5e9 !important;
+    border-radius: 8px !important;
+    font-weight: 600 !important;
+    transition: all 0.2s ease !important;
+}
+[data-theme="dark"] .stButton > button[kind="primary"] p,
+[data-theme="dark"] .stButton > button[kind="primary"] span,
+[data-theme="dark"] button[data-testid="baseButton-primary"] p,
+[data-theme="dark"] button[data-testid="baseButton-primary"] span {
+    color: #ffffff !important;
+    -webkit-text-fill-color: #ffffff !important;
+}
+[data-theme="dark"] .stButton > button[kind="primary"]:hover,
+[data-theme="dark"] button[data-testid="baseButton-primary"]:hover {
+    background: #0369a1 !important;
+    border-color: #38bdf8 !important;
+    box-shadow: 0 4px 14px rgba(14, 165, 233, 0.35) !important;
+    transform: translateY(-1px) !important;
+}
+
+[data-theme="dark"] .stButton > button:not([kind="primary"]),
+[data-theme="dark"] button[data-testid="baseButton-secondary"] {
+    background: #27354a !important;
+    color: #f1f5f9 !important;
+    -webkit-text-fill-color: #f1f5f9 !important;
+    border: 1px solid #475569 !important;
+    border-radius: 8px !important;
+    font-weight: 600 !important;
+    transition: all 0.2s ease !important;
+}
+[data-theme="dark"] .stButton > button:not([kind="primary"]) p,
+[data-theme="dark"] .stButton > button:not([kind="primary"]) span,
+[data-theme="dark"] button[data-testid="baseButton-secondary"] p,
+[data-theme="dark"] button[data-testid="baseButton-secondary"] span {
+    color: #f1f5f9 !important;
+    -webkit-text-fill-color: #f1f5f9 !important;
+}
+[data-theme="dark"] .stButton > button:not([kind="primary"]):hover,
+[data-theme="dark"] button[data-testid="baseButton-secondary"]:hover {
+    background: #334155 !important;
+    border-color: #38bdf8 !important;
+    transform: translateY(-1px) !important;
+}
+
+/* Dropdowns & selectboxes */
+[data-theme="dark"] div[data-baseweb="select"] > div,
+[data-theme="dark"] [data-baseweb="popover"],
+[data-theme="dark"] [data-baseweb="menu"],
+[data-theme="dark"] ul[role="listbox"],
+[data-theme="dark"] [data-baseweb="menu"] li,
+[data-theme="dark"] ul[role="listbox"] li {
+    background: #1b2940 !important;
+    color: #f1f5f9 !important;
+    -webkit-text-fill-color: #f1f5f9 !important;
+}
+[data-theme="dark"] div[data-baseweb="select"] > div {
+    border: 1px solid #293b55 !important;
+    border-radius: 8px !important;
+}
+[data-theme="dark"] div[data-baseweb="select"] > div:hover,
+[data-theme="dark"] div[data-baseweb="select"] > div:focus-within {
+    border-color: #38bdf8 !important;
+}
+[data-theme="dark"] [data-baseweb="menu"] li:hover,
+[data-theme="dark"] ul[role="listbox"] li:hover,
+[data-theme="dark"] [data-baseweb="menu"] li[aria-selected="true"],
+[data-theme="dark"] ul[role="listbox"] li[aria-selected="true"] {
+    background: #1a2a43 !important;
+    color: #38bdf8 !important;
+    -webkit-text-fill-color: #38bdf8 !important;
 }

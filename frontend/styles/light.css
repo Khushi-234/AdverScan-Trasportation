@@ -2,18 +2,17 @@
    AdverScan — LIGHT THEME
    White + Emerald Green Security Dashboard
    File: frontend/styles/light.css
+   Activated when <html data-theme="light"> (set by theme_manager.py).
    ============================================================ */
 
-:root,
-html,
-body,
-.stApp {
+:root[data-theme="light"] {
     color-scheme: light;
 
     /* Main surfaces */
     --app-bg: #f5f9f6;
     --sidebar-bg: #ffffff;
     --card-bg: #ffffff;
+    --card-hover: #effaf2;
     --card-bg-hover: #effaf2;
     --input-bg: #ffffff;
     --code-bg: #f8fbf9;
@@ -46,9 +45,9 @@ body,
     --button-secondary-hover: #cbd5e1;
 
     /* Streamlit native theme compatibility */
-    --background-color: #ffffff;
-    --secondary-background-color: #f8fafc;
-    --text-color: #0f172a;
+    --background-color: #f5f9f6;
+    --secondary-background-color: #ffffff;
+    --text-color: #14271b;
     --primary-color: #16a34a;
 
     /* Structural surfaces */
@@ -60,12 +59,35 @@ body,
     --explainer-border: #86c99a;
     --explainer-text: #365443;
 
-    /* Shadows */
-    --card-shadow:
-        0 1px 3px rgba(20, 39, 27, .045),
-        0 3px 10px rgba(22, 101, 52, .045);
-    --card-shadow-hover:
-        0 7px 20px rgba(22, 101, 52, .11);
+    /* Shadows & Card highlights */
+    --card-shadow: 0 4px 18px rgba(20, 39, 27, 0.08), 0 1px 3px rgba(0, 0, 0, 0.04);
+    --card-shadow-hover: 0 8px 26px rgba(22, 101, 52, 0.14), 0 2px 6px rgba(0, 0, 0, 0.06);
+    --stat-label-color: #4b6353;
+
+    /* Card accent backgrounds with soft subtle tinted top wash */
+    --card-accent-cyan-bg: linear-gradient(180deg, rgba(224, 242, 254, 0.5) 0%, #ffffff 50%);
+    --card-accent-cyan-shadow: 0 4px 18px rgba(2, 132, 199, 0.1), 0 1px 3px rgba(0, 0, 0, 0.04);
+    --card-accent-cyan-shadow-hover: 0 8px 26px rgba(2, 132, 199, 0.22), 0 2px 6px rgba(0, 0, 0, 0.06);
+
+    --card-accent-emerald-bg: linear-gradient(180deg, rgba(220, 252, 231, 0.5) 0%, #ffffff 50%);
+    --card-accent-emerald-shadow: 0 4px 18px rgba(22, 163, 74, 0.1), 0 1px 3px rgba(0, 0, 0, 0.04);
+    --card-accent-emerald-shadow-hover: 0 8px 26px rgba(22, 163, 74, 0.22), 0 2px 6px rgba(0, 0, 0, 0.06);
+
+    --card-accent-violet-bg: linear-gradient(180deg, rgba(237, 233, 254, 0.5) 0%, #ffffff 50%);
+    --card-accent-violet-shadow: 0 4px 18px rgba(124, 58, 237, 0.1), 0 1px 3px rgba(0, 0, 0, 0.04);
+    --card-accent-violet-shadow-hover: 0 8px 26px rgba(124, 58, 237, 0.22), 0 2px 6px rgba(0, 0, 0, 0.06);
+
+    --card-accent-amber-bg: linear-gradient(180deg, rgba(254, 243, 199, 0.5) 0%, #ffffff 50%);
+    --card-accent-amber-shadow: 0 4px 18px rgba(217, 119, 6, 0.1), 0 1px 3px rgba(0, 0, 0, 0.04);
+    --card-accent-amber-shadow-hover: 0 8px 26px rgba(217, 119, 6, 0.22), 0 2px 6px rgba(0, 0, 0, 0.06);
+
+    --card-accent-rose-bg: linear-gradient(180deg, rgba(255, 228, 230, 0.5) 0%, #ffffff 50%);
+    --card-accent-rose-shadow: 0 4px 18px rgba(190, 18, 60, 0.1), 0 1px 3px rgba(0, 0, 0, 0.04);
+    --card-accent-rose-shadow-hover: 0 8px 26px rgba(190, 18, 60, 0.22), 0 2px 6px rgba(0, 0, 0, 0.06);
+
+    --card-accent-indigo-bg: linear-gradient(180deg, rgba(224, 231, 255, 0.5) 0%, #ffffff 50%);
+    --card-accent-indigo-shadow: 0 4px 18px rgba(67, 56, 202, 0.1), 0 1px 3px rgba(0, 0, 0, 0.04);
+    --card-accent-indigo-shadow-hover: 0 8px 26px rgba(67, 56, 202, 0.22), 0 2px 6px rgba(0, 0, 0, 0.06);
 
     /* Semantic accents */
     --accent-cyan: #087eaa;
@@ -109,66 +131,86 @@ body,
     --badge-violet-bg: #ede9fe;
     --badge-violet-text: #5b21b6;
     --badge-violet-border: #ddd6fe;
-
-    /* Streamlit native theme compatibility */
-    --background-color: #f5f9f6;
-    --secondary-background-color: #ffffff;
-    --text-color: #14271b;
-    --primary-color: #15803d;
 }
 
-/* Model details */
-.model-architecture,
-.model-telemetry {
+/* ============================================================
+   Scoped Overrides for Light Theme Components
+   ============================================================ */
+
+[data-theme="light"] .model-architecture,
+[data-theme="light"] .model-telemetry {
     background: #f0fdf4 !important;
     border-color: #c9e8d0 !important;
 }
 
-.model-modality,
-.model-summary-card,
-.target-model-card {
+[data-theme="light"] .model-modality,
+[data-theme="light"] .model-summary-card,
+[data-theme="light"] .target-model-card {
     background: #ffffff !important;
 }
 
 /* Green ready state */
-.badge-ready,
-.assessment-session .status-idle {
+[data-theme="light"] .badge-ready,
+[data-theme="light"] .assessment-session .status-idle {
     background: #dcfce7 !important;
     color: #166534 !important;
     border-color: #86efac !important;
 }
 
 /* Attack discovery and target model */
-.attack-discovery-card,
-.target-model-card {
+[data-theme="light"] .attack-discovery-card,
+[data-theme="light"] .target-model-card {
     background: #ffffff !important;
     border-color: #cfe5d4 !important;
 }
 
 /* Threat model banner */
-.threat-model-banner {
+[data-theme="light"] .threat-model-banner {
     background: #ecfdf3 !important;
     border-color: #a7dfb5 !important;
     border-left-color: #15803d !important;
 }
 
 /* Domain context banner */
-.domain-context-banner {
+[data-theme="light"] .domain-context-banner {
     background: #f0fdf4 !important;
     border-color: #c9e8d0 !important;
     border-left-color: #16a34a !important;
 }
 
+/* Header & Sidebar controls for Light Theme */
+[data-theme="light"] header[data-testid="stHeader"] button,
+[data-theme="light"] header[data-testid="stHeader"] svg,
+[data-theme="light"] header[data-testid="stHeader"] span,
+[data-theme="light"] header[data-testid="stHeader"] [data-testid="stIconMaterial"],
+[data-theme="light"] button[data-testid="stSidebarCollapsedControl"],
+[data-theme="light"] button[data-testid="stSidebarCollapsedControl"] *,
+[data-theme="light"] button[data-testid="stSidebarCollapseButton"],
+[data-theme="light"] button[data-testid="stSidebarCollapseButton"] *,
+[data-theme="light"] div[data-testid="stSidebarCollapseButton"],
+[data-theme="light"] div[data-testid="stSidebarCollapseButton"] * {
+    color: #14271b !important;
+    fill: #14271b !important;
+    stroke: #14271b !important;
+}
+
+[data-theme="light"] button[data-testid="stSidebarCollapsedControl"]:hover,
+[data-theme="light"] button[data-testid="stSidebarCollapseButton"]:hover {
+    color: #15803d !important;
+    fill: #15803d !important;
+    stroke: #15803d !important;
+}
+
 /* Data grid — preserve native light rendering */
-div.stDataFrameGlideDataEditor canvas,
-div[data-testid="stDataFrame"] canvas,
-.dvn-scroller canvas,
-.gdg-wmyidgi canvas {
+[data-theme="light"] div.stDataFrameGlideDataEditor canvas,
+[data-theme="light"] div[data-testid="stDataFrame"] canvas,
+[data-theme="light"] .dvn-scroller canvas,
+[data-theme="light"] .gdg-wmyidgi canvas {
     filter: none !important;
 }
 
 /* Text selection */
-::selection {
+[data-theme="light"] ::selection {
     background: #bbf7d0;
     color: #14532d;
 }
@@ -176,8 +218,8 @@ div[data-testid="stDataFrame"] canvas,
 /* ============================================================
    Buttons — Primary vibrant green, Secondary visible sleek grey
    ============================================================ */
-.stButton > button[kind="primary"],
-button[data-testid="baseButton-primary"] {
+[data-theme="light"] .stButton > button[kind="primary"],
+[data-theme="light"] button[data-testid="baseButton-primary"] {
     background: #16a34a !important;
     background-color: #16a34a !important;
     color: #ffffff !important;
@@ -188,17 +230,17 @@ button[data-testid="baseButton-primary"] {
     transition: all 0.2s ease !important;
 }
 
-.stButton > button[kind="primary"] p,
-.stButton > button[kind="primary"] span,
-button[data-testid="baseButton-primary"] p,
-button[data-testid="baseButton-primary"] span {
+[data-theme="light"] .stButton > button[kind="primary"] p,
+[data-theme="light"] .stButton > button[kind="primary"] span,
+[data-theme="light"] button[data-testid="baseButton-primary"] p,
+[data-theme="light"] button[data-testid="baseButton-primary"] span {
     color: #ffffff !important;
     -webkit-text-fill-color: #ffffff !important;
     font-weight: inherit !important;
 }
 
-.stButton > button[kind="primary"]:hover,
-button[data-testid="baseButton-primary"]:hover {
+[data-theme="light"] .stButton > button[kind="primary"]:hover,
+[data-theme="light"] button[data-testid="baseButton-primary"]:hover {
     background: #15803d !important;
     background-color: #15803d !important;
     color: #ffffff !important;
@@ -210,8 +252,8 @@ button[data-testid="baseButton-primary"]:hover {
 }
 
 /* Secondary / Outline buttons — Sleek visible grey with dark text */
-.stButton > button:not([kind="primary"]),
-button[data-testid="baseButton-secondary"] {
+[data-theme="light"] .stButton > button:not([kind="primary"]),
+[data-theme="light"] button[data-testid="baseButton-secondary"] {
     background: #e2e8f0 !important;
     background-color: #e2e8f0 !important;
     color: #0f172a !important;
@@ -222,17 +264,17 @@ button[data-testid="baseButton-secondary"] {
     transition: all 0.2s ease !important;
 }
 
-.stButton > button:not([kind="primary"]) p,
-.stButton > button:not([kind="primary"]) span,
-button[data-testid="baseButton-secondary"] p,
-button[data-testid="baseButton-secondary"] span {
+[data-theme="light"] .stButton > button:not([kind="primary"]) p,
+[data-theme="light"] .stButton > button:not([kind="primary"]) span,
+[data-theme="light"] button[data-testid="baseButton-secondary"] p,
+[data-theme="light"] button[data-testid="baseButton-secondary"] span {
     color: #0f172a !important;
     -webkit-text-fill-color: #0f172a !important;
     font-weight: inherit !important;
 }
 
-.stButton > button:not([kind="primary"]):hover,
-button[data-testid="baseButton-secondary"]:hover {
+[data-theme="light"] .stButton > button:not([kind="primary"]):hover,
+[data-theme="light"] button[data-testid="baseButton-secondary"]:hover {
     background: #cbd5e1 !important;
     background-color: #cbd5e1 !important;
     color: #000000 !important;
@@ -246,35 +288,35 @@ button[data-testid="baseButton-secondary"]:hover {
 /* ============================================================
    Dropdowns & Selectboxes — Pure white in Light Theme
    ============================================================ */
-div[data-testid="stSelectbox"] > div,
-div[data-baseweb="select"],
-div[data-baseweb="select"] > div,
-div[data-baseweb="select"] input,
-[data-baseweb="popover"],
-[data-baseweb="menu"],
-ul[role="listbox"],
-[data-baseweb="menu"] li,
-ul[role="listbox"] li {
+[data-theme="light"] div[data-testid="stSelectbox"] > div,
+[data-theme="light"] div[data-baseweb="select"],
+[data-theme="light"] div[data-baseweb="select"] > div,
+[data-theme="light"] div[data-baseweb="select"] input,
+[data-theme="light"] [data-baseweb="popover"],
+[data-theme="light"] [data-baseweb="menu"],
+[data-theme="light"] ul[role="listbox"],
+[data-theme="light"] [data-baseweb="menu"] li,
+[data-theme="light"] ul[role="listbox"] li {
     background: #ffffff !important;
     background-color: #ffffff !important;
     color: #14271b !important;
     -webkit-text-fill-color: #14271b !important;
 }
 
-div[data-baseweb="select"] > div {
+[data-theme="light"] div[data-baseweb="select"] > div {
     border: 1px solid #dce9df !important;
     border-radius: 8px !important;
 }
 
-div[data-baseweb="select"] > div:hover,
-div[data-baseweb="select"] > div:focus-within {
+[data-theme="light"] div[data-baseweb="select"] > div:hover,
+[data-theme="light"] div[data-baseweb="select"] > div:focus-within {
     border-color: #16a34a !important;
 }
 
-[data-baseweb="menu"] li:hover,
-ul[role="listbox"] li:hover,
-[data-baseweb="menu"] li[aria-selected="true"],
-ul[role="listbox"] li[aria-selected="true"] {
+[data-theme="light"] [data-baseweb="menu"] li:hover,
+[data-theme="light"] ul[role="listbox"] li:hover,
+[data-theme="light"] [data-baseweb="menu"] li[aria-selected="true"],
+[data-theme="light"] ul[role="listbox"] li[aria-selected="true"] {
     background: #effaf2 !important;
     background-color: #effaf2 !important;
     color: #15803d !important;
