@@ -200,6 +200,7 @@ class AdverScanOrchestrator:
                 max_samples=config.sample_count,
             )
             result.baseline_evaluation = baseline_result.to_dict()
+            result._raw_baseline_result = baseline_result
             resource_monitor.record_stage("M2_baseline")
             module_timings["M2_baseline"] = round(time.time() - step_start, 4)
             print(f"  ✔ M2 Clean Evaluation Completed ({time.time() - step_start:.2f}s) — Accuracy: {baseline_result.accuracy*100:.2f}%")
@@ -503,6 +504,7 @@ class AdverScanOrchestrator:
                 )
 
                 attack_results_coll[attack_name] = combined_atk_res
+                result._raw_attack_results = attack_results_coll
                 result.attack_results[attack_name] = {
                     "attack_name": combined_atk_res.metadata.attack_name,
                     "attack_class": combined_atk_res.metadata.attack_class,
@@ -548,6 +550,7 @@ class AdverScanOrchestrator:
                     max_samples=config.sample_count,
                 )
                 adv_evaluations_dict[attack_name] = adv_eval_res
+                result._raw_adv_evaluations = adv_evaluations_dict
                 result.adversarial_evaluations[attack_name] = adv_eval_res.to_dict()
             except Exception as e:
                 result.status = "PARTIAL_SUCCESS"
