@@ -17,6 +17,7 @@ as well as full scriptable CLI execution.
 """
 
 import argparse
+from collections.abc import Mapping
 from datetime import datetime
 import json
 import os
@@ -377,26 +378,161 @@ def prompt_attack_constraints(
 # Visual Quality & Perturbation Metrics Calculator
 # =====================================================================
 
+def _to_numpy_array(data: Any) -> Optional[np.ndarray]:
+    """Safely convert a tensor or array-like to np.ndarray of float32."""
+    if data is None:
+        return None
+    if isinstance(data, torch.Tensor):
+        return data.detach().cpu().float().numpy()
+    if isinstance(data, np.ndarray):
+        if np.issubdtype(data.dtype, np.number):
+            return data.astype(np.float32)
+        return None
+    if isinstance(data, (list, tuple)):
+        if not data:
+            return None
+        if isinstance(data[0], torch.Tensor):
+            try:
+                stacked = torch.stack(data)
+                return stacked.detach().cpu().float().numpy()
+            except Exception:
+                pass
+        try:
+            arr = np.asarray(data)
+            if np.issubdtype(arr.dtype, np.number):
+                return arr.astype(np.float32)
+        except (ValueError, TypeError):
+            return None
+    return None
+
+
+def _extract_clean_and_adv_arrays(
+    clean_data: Any,
+    adv_data: Any,
+    domain: str = "image",
+) -> Tuple[Optional[np.ndarray], Optional[np.ndarray]]:
+    """
+    Extract aligned float numpy arrays from clean and adversarial inputs,
+    handling dicts (e.g. HuggingFace batches), tensors, lists, and arrays.
+    """
+    if not isinstance(clean_data, Mapping) and not isinstance(adv_data, Mapping):
+        return _to_numpy_array(clean_data), _to_numpy_array(adv_data)
+
+    clean_dict = clean_data if isinstance(clean_data, Mapping) else {"data": clean_data}
+    adv_dict = adv_data if isinstance(adv_data, Mapping) else {"data": adv_data}
+
+    # Priority keys by domain
+    if domain == "image":
+        candidate_keys = ["pixel_values", "images", "image", "inputs", "x", "data"]
+    elif domain == "text":
+        candidate_keys = ["inputs_embeds", "embeddings", "input_ids", "inputs", "x", "data"]
+    elif domain == "tabular":
+        candidate_keys = ["features", "tabular_features", "inputs", "x", "data"]
+    elif domain == "time-series":
+        candidate_keys = ["series", "signals", "inputs", "x", "data"]
+    else:
+        candidate_keys = ["pixel_values", "images", "features", "inputs", "x", "data"]
+
+    # First attempt: priority key common to both
+    for key in candidate_keys:
+        if key in clean_dict and key in adv_dict:
+            c_arr = _to_numpy_array(clean_dict[key])
+            a_arr = _to_numpy_array(adv_dict[key])
+            if c_arr is not None and a_arr is not None:
+                return c_arr, a_arr
+
+    # Second attempt: any common key
+    for key in clean_dict.keys():
+        if key in adv_dict:
+            c_arr = _to_numpy_array(clean_dict[key])
+            a_arr = _to_numpy_array(adv_dict[key])
+            if c_arr is not None and a_arr is not None:
+                return c_arr, a_arr
+
+    # Third attempt: first convertible numeric array in each
+    c_arr = None
+    for val in clean_dict.values():
+        c_arr = _to_numpy_array(val)
+        if c_arr is not None:
+            break
+
+    a_arr = None
+    for val in adv_dict.values():
+        a_arr = _to_numpy_array(val)
+        if a_arr is not None:
+            break
+
+    return c_arr, a_arr
+
+
 def compute_perturbation_and_visual_metrics(
-    clean_tensors: Union[torch.Tensor, np.ndarray],
-    adv_tensors: Union[torch.Tensor, np.ndarray],
+    clean_tensors: Any,
+    adv_tensors: Any,
     domain: str = "image",
 ) -> Dict[str, Any]:
     """
     Compute rigorous perturbation distance norms and perceptual visual quality metrics.
     Includes L-infinity, L-2, L-0 sparsity, MAE, PSNR (dB), SSIM, and Visual Degradation Score.
     """
-    if isinstance(clean_tensors, torch.Tensor):
-        clean_np = clean_tensors.detach().cpu().float().numpy()
-    else:
-        clean_np = np.asarray(clean_tensors, dtype=np.float32)
+    clean_np, adv_np = _extract_clean_and_adv_arrays(clean_tensors, adv_tensors, domain=domain)
 
-    if isinstance(adv_tensors, torch.Tensor):
-        adv_np = adv_tensors.detach().cpu().float().numpy()
-    else:
-        adv_np = np.asarray(adv_tensors, dtype=np.float32)
+    if clean_np is None or adv_np is None:
+        return {
+            "batch_size": 0,
+            "linf_mean": 0.0,
+            "linf_max": 0.0,
+            "linf_min": 0.0,
+            "l2_mean": 0.0,
+            "l2_max": 0.0,
+            "l2_min": 0.0,
+            "l0_mean_count": 0.0,
+            "l0_mean_pct": 0.0,
+            "mae_mean": 0.0,
+            "sample_metrics": [],
+            "psnr_mean": None,
+            "ssim_mean": None,
+            "visual_degradation_pct_mean": None,
+        }
+
+    # Ensure 2D+ representation
+    if clean_np.ndim == 0:
+        clean_np = clean_np.reshape(1, 1)
+        adv_np = adv_np.reshape(1, 1)
+    elif clean_np.ndim == 1 and adv_np.ndim == 1:
+        clean_np = clean_np.reshape(1, -1)
+        adv_np = adv_np.reshape(1, -1)
+
+    # Align shapes if slightly mismatched (e.g. sequence padding)
+    if clean_np.shape != adv_np.shape:
+        if clean_np.shape[0] == adv_np.shape[0]:
+            min_dims = tuple(min(c, a) for c, a in zip(clean_np.shape[1:], adv_np.shape[1:]))
+            slices = tuple([slice(None)] + [slice(0, d) for d in min_dims])
+            clean_np = clean_np[slices]
+            adv_np = adv_np[slices]
+        else:
+            min_b = min(clean_np.shape[0], adv_np.shape[0])
+            clean_np = clean_np[:min_b]
+            adv_np = adv_np[:min_b]
 
     batch_size = clean_np.shape[0]
+    if batch_size == 0:
+        return {
+            "batch_size": 0,
+            "linf_mean": 0.0,
+            "linf_max": 0.0,
+            "linf_min": 0.0,
+            "l2_mean": 0.0,
+            "l2_max": 0.0,
+            "l2_min": 0.0,
+            "l0_mean_count": 0.0,
+            "l0_mean_pct": 0.0,
+            "mae_mean": 0.0,
+            "sample_metrics": [],
+            "psnr_mean": None,
+            "ssim_mean": None,
+            "visual_degradation_pct_mean": None,
+        }
+
     diff = adv_np - clean_np
     diff_flat = diff.reshape(batch_size, -1)
 
@@ -1001,40 +1137,44 @@ def main():
                     visuals_dir.mkdir(parents=True, exist_ok=True)
                     import matplotlib.pyplot as plt
 
-                    c_np = raw_combined.original_inputs.detach().cpu().float().numpy()
-                    a_np = raw_combined.adversarial_examples.detach().cpu().float().numpy()
-                    c_min, c_max = float(c_np.min()), float(c_np.max())
-                    v_range = max(1e-5, c_max - c_min)
+                    c_np, a_np = _extract_clean_and_adv_arrays(
+                        raw_combined.original_inputs,
+                        raw_combined.adversarial_examples,
+                        domain=selected_domain,
+                    )
+                    if c_np is not None and a_np is not None:
+                        c_min, c_max = float(c_np.min()), float(c_np.max())
+                        v_range = max(1e-5, c_max - c_min)
 
-                    num_to_save = min(5, c_np.shape[0])
-                    for s_idx in range(num_to_save):
-                        c_img = np.clip((c_np[s_idx] - c_min) / v_range, 0.0, 1.0)
-                        a_img = np.clip((a_np[s_idx] - c_min) / v_range, 0.0, 1.0)
-                        if c_img.shape[0] in (1, 3, 4):
-                            c_img = np.transpose(c_img, (1, 2, 0))
-                            a_img = np.transpose(a_img, (1, 2, 0))
+                        num_to_save = min(5, c_np.shape[0])
+                        for s_idx in range(num_to_save):
+                            c_img = np.clip((c_np[s_idx] - c_min) / v_range, 0.0, 1.0)
+                            a_img = np.clip((a_np[s_idx] - c_min) / v_range, 0.0, 1.0)
+                            if c_img.shape[0] in (1, 3, 4):
+                                c_img = np.transpose(c_img, (1, 2, 0))
+                                a_img = np.transpose(a_img, (1, 2, 0))
 
-                        diff_amp = np.clip(np.abs(a_img - c_img) * 10.0, 0.0, 1.0)
+                            diff_amp = np.clip(np.abs(a_img - c_img) * 10.0, 0.0, 1.0)
 
-                        fig, axes = plt.subplots(1, 3, figsize=(10, 3.5))
-                        axes[0].imshow(c_img.squeeze() if c_img.shape[-1] == 1 else c_img)
-                        axes[0].set_title(f"Clean (Pred: {clean_preds[s_idx] if s_idx < len(clean_preds) else '?'})")
-                        axes[0].axis("off")
+                            fig, axes = plt.subplots(1, 3, figsize=(10, 3.5))
+                            axes[0].imshow(c_img.squeeze() if c_img.shape[-1] == 1 else c_img)
+                            axes[0].set_title(f"Clean (Pred: {clean_preds[s_idx] if s_idx < len(clean_preds) else '?'})")
+                            axes[0].axis("off")
 
-                        axes[1].imshow(a_img.squeeze() if a_img.shape[-1] == 1 else a_img)
-                        axes[1].set_title(f"Adversarial (Pred: {adv_preds[s_idx] if s_idx < len(adv_preds) else '?'})")
-                        axes[1].axis("off")
+                            axes[1].imshow(a_img.squeeze() if a_img.shape[-1] == 1 else a_img)
+                            axes[1].set_title(f"Adversarial (Pred: {adv_preds[s_idx] if s_idx < len(adv_preds) else '?'})")
+                            axes[1].axis("off")
 
-                        axes[2].imshow(diff_amp.squeeze() if diff_amp.shape[-1] == 1 else diff_amp)
-                        axes[2].set_title("Perturbation (|Adv-Clean| x10)")
-                        axes[2].axis("off")
+                            axes[2].imshow(diff_amp.squeeze() if diff_amp.shape[-1] == 1 else diff_amp)
+                            axes[2].set_title("Perturbation (|Adv-Clean| x10)")
+                            axes[2].axis("off")
 
-                        plt.tight_layout()
-                        save_p = visuals_dir / f"sample_{s_idx}_comparison.png"
-                        plt.savefig(save_p, dpi=120)
-                        plt.close(fig)
+                            plt.tight_layout()
+                            save_p = visuals_dir / f"sample_{s_idx}_comparison.png"
+                            plt.savefig(save_p, dpi=120)
+                            plt.close(fig)
 
-                    print(f"\n  📸 Saved {num_to_save} visual comparison figures to: '{visuals_dir}'")
+                        print(f"\n  📸 Saved {num_to_save} visual comparison figures to: '{visuals_dir}'")
                 except Exception as vis_err:
                     print(f"  [Notice: Could not save visual figures: {vis_err}]")
 
