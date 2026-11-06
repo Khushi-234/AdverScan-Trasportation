@@ -124,7 +124,7 @@ class TabularCW(BaseAttack):
             params.get("c_penalty", params.get("c", params.get("initial_const", 1.0)))
         )
         targeted = bool(params.get("targeted", False))
-        target_label = params.get("target_label", None)
+        target_label = params.get("target_label", params.get("target", None))
         clip_min = params.get(
             "clip_min",
             (

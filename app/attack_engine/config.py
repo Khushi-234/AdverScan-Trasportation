@@ -20,7 +20,7 @@ class AttackConfig:
         params: Dictionary for additional attack-specific parameters.
     """
 
-    epsilon: float = 0.1
+    epsilon: Optional[float] = 0.1
     clip_min: Optional[float] = 0.0
     clip_max: Optional[float] = 1.0
     loss_fn: Any = None
@@ -29,7 +29,7 @@ class AttackConfig:
     def __post_init__(self):
         if self.params is None:
             self.params = {}
-        if self.epsilon < 0:
+        if self.epsilon is not None and self.epsilon < 0:
             raise AttackConfigurationError(
                 f"Epsilon cannot be negative, got {self.epsilon}"
             )

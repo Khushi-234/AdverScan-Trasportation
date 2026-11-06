@@ -106,7 +106,7 @@ class VAEAttack(BaseAttack):
         self._get_vae(params)
 
         epsilon = params.get("epsilon", params.get("eps_latent", 0.5))
-        if epsilon < 0:
+        if epsilon is not None and epsilon < 0:
             raise AttackConfigurationError(
                 f"epsilon/eps_latent cannot be negative, got {epsilon}"
             )
@@ -175,8 +175,8 @@ class VAEAttack(BaseAttack):
             params.get("num_steps", params.get("steps", params.get("iterations", 20)))
         )
         targeted = bool(params.get("targeted", False))
-        target_label = params.get("target_label", None)
-        loss_fn = config.loss_fn or nn.CrossEntropyLoss()
+        target_label = params.get("target_label", params.get("target", None))
+        loss_fn = params.get("loss_fn", config.loss_fn) or nn.CrossEntropyLoss()
         clip_min = params.get(
             "clip_min",
             (

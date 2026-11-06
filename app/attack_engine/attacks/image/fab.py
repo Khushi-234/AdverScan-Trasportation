@@ -57,15 +57,13 @@ class FAB(BaseAttack):
         """
         validate_attack_config(config)
         if config is not None:
-            if (
-                config.clip_min is not None
-                and config.clip_max is not None
-                and config.clip_min >= config.clip_max
-            ):
-                raise AttackConfigurationError(
-                    f"clip_min ({config.clip_min}) must be strictly less than clip_max ({config.clip_max})"
-                )
             params = config.params or {}
+            c_min = params.get("clip_min", config.clip_min)
+            c_max = params.get("clip_max", config.clip_max)
+            if c_min is not None and c_max is not None and c_min >= c_max:
+                raise AttackConfigurationError(
+                    f"clip_min ({c_min}) must be strictly less than clip_max ({c_max})"
+                )
             max_iter = params.get("max_iter", params.get("n_iter", params.get("num_steps")))
             if max_iter is not None and (not isinstance(max_iter, int) or isinstance(max_iter, bool) or max_iter <= 0):
                 raise AttackExecutionError("FAB max_iter must be greater than 0.")
@@ -81,6 +79,10 @@ class FAB(BaseAttack):
             eta = params.get("eta")
             if eta is not None and (not isinstance(eta, (int, float)) or isinstance(eta, bool) or eta < 1.0):
                 raise AttackExecutionError("FAB eta must be a float >= 1.0.")
+
+            beta = params.get("beta")
+            if beta is not None and (not isinstance(beta, (int, float)) or isinstance(beta, bool) or not (0.0 < beta < 1.0)):
+                raise AttackExecutionError("FAB beta must be a float between 0 and 1.")
 
             norm = params.get("norm")
             if norm is not None:
@@ -134,6 +136,10 @@ class FAB(BaseAttack):
         if not isinstance(eta, (int, float)) or isinstance(eta, bool) or eta < 1.0:
             raise AttackExecutionError("FAB eta must be a float >= 1.0.")
 
+        beta = float(params.get("beta", 0.5))
+        if not (0.0 < beta < 1.0):
+            raise AttackExecutionError("FAB beta must be a float between 0 and 1.")
+
         top_k = params.get("top_k", 10)
         if not isinstance(top_k, int) or isinstance(top_k, bool) or top_k <= 0:
             raise AttackExecutionError("FAB top_k must be greater than 0.")
@@ -155,9 +161,12 @@ class FAB(BaseAttack):
             )
 
         targeted = bool(params.get("targeted", False))
-        epsilon = float(config.epsilon) if config.epsilon is not None else float("inf")
+        epsilon = float(params.get("epsilon", config.epsilon)) if (params.get("epsilon") is not None or config.epsilon is not None) else float("inf")
         if epsilon < 0:
             raise AttackExecutionError("FAB epsilon cannot be negative.")
+
+        clip_min = params.get("clip_min", config.clip_min)
+        clip_max = params.get("clip_max", config.clip_max)
 
         device = get_device(self.raw_model)
         x_orig = inputs.clone().detach().to(device)
@@ -281,7 +290,7 @@ class FAB(BaseAttack):
                             best_adv = x_i.detach().clone()
 
                         # Interpolate back toward x_0 to seek minimal perturbation boundary
-                        x_i = (x_0 + x_i.detach()) / 2.0
+                        x_i = (1.0 - beta) * x_0 + beta * x_i.detach()
                         continue
 
                     # If model is not differentiable with respect to input, stop

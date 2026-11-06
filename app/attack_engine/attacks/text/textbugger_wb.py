@@ -209,9 +209,9 @@ class TextBuggerWB(BaseAttack):
                 "bug_types", ["insert", "delete", "swap", "sub_c", "sub_w"]
             )
         ]
-        targeted = params.get("targeted", False)
-        target_label = params.get("target_label", None)
-        loss_fn = config.loss_fn or nn.CrossEntropyLoss()
+        targeted = bool(params.get("targeted", False))
+        target_label = params.get("target_label", params.get("target", None))
+        loss_fn = params.get("loss_fn", config.loss_fn) or nn.CrossEntropyLoss()
 
         tokenizer = params.get("tokenizer", self.tokenizer)
         device = get_device(self.raw_model)

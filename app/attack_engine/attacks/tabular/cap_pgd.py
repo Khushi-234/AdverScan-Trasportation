@@ -72,7 +72,7 @@ class CapPGD(BaseAttack):
         params = config.params or {}
 
         epsilon = params.get("epsilon", config.epsilon)
-        if epsilon < 0:
+        if epsilon is not None and epsilon < 0:
             raise AttackConfigurationError(f"Epsilon cannot be negative, got {epsilon}")
 
         alpha = params.get("alpha", params.get("step_size", 0.05))
@@ -123,8 +123,8 @@ class CapPGD(BaseAttack):
         norm = str(params.get("norm", "Linf")).upper()
         random_init = bool(params.get("random_init", False))
         targeted = bool(params.get("targeted", False))
-        target_label = params.get("target_label", None)
-        loss_fn = config.loss_fn or nn.CrossEntropyLoss()
+        target_label = params.get("target_label", params.get("target", None))
+        loss_fn = params.get("loss_fn", config.loss_fn) or nn.CrossEntropyLoss()
 
         device = get_device(self.raw_model)
         x_orig, y = validate_tabular_inputs(inputs, labels, attack_name="CapPGD")

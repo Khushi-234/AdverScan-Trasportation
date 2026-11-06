@@ -87,7 +87,7 @@ class EmbeddingPGD(BaseAttack):
         params = config.params or {}
 
         epsilon = params.get("epsilon", config.epsilon)
-        if epsilon < 0:
+        if epsilon is not None and epsilon < 0:
             raise AttackConfigurationError(f"Epsilon cannot be negative, got {epsilon}")
 
         alpha = params.get("alpha", params.get("step_size", 0.1))
@@ -158,8 +158,8 @@ class EmbeddingPGD(BaseAttack):
         k_nearest = int(params.get("k_nearest", params.get("num_candidates", 1)))
         max_modifications = params.get("max_modifications", None)
         targeted = bool(params.get("targeted", False))
-        target_label = params.get("target_label", None)
-        loss_fn = config.loss_fn or nn.CrossEntropyLoss()
+        target_label = params.get("target_label", params.get("target", None))
+        loss_fn = params.get("loss_fn", config.loss_fn) or nn.CrossEntropyLoss()
 
         tokenizer = params.get("tokenizer", self.tokenizer)
         device = get_device(self.raw_model)

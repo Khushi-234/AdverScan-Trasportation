@@ -96,11 +96,6 @@ class HotFlip(BaseAttack):
                 f"candidate_vocab_size must be a positive integer, got {candidate_vocab_size}"
             )
 
-        if "epsilon" in params and params["epsilon"] < 0:
-            raise AttackConfigurationError(
-                f"Epsilon cannot be negative, got {params['epsilon']}"
-            )
-
     def generate(
         self, inputs: Any, labels: Any, config: Optional[AttackConfig] = None
     ) -> Any:
@@ -121,13 +116,13 @@ class HotFlip(BaseAttack):
         self.validate_config(config)
         params = config.params or {}
 
-        targeted = params.get("targeted", False)
-        target_label = params.get("target_label", None)
-        max_flips = params.get("max_modifications", params.get("max_flips", 5))
-        candidate_vocab_size = params.get(
-            "candidate_vocab_size", params.get("top_k_candidates", 50)
+        targeted = bool(params.get("targeted", False))
+        target_label = params.get("target_label", params.get("target", None))
+        max_flips = int(params.get("max_modifications", params.get("max_flips", 5)))
+        candidate_vocab_size = int(
+            params.get("candidate_vocab_size", params.get("top_k_candidates", 50))
         )
-        loss_fn = config.loss_fn or nn.CrossEntropyLoss()
+        loss_fn = params.get("loss_fn", config.loss_fn) or nn.CrossEntropyLoss()
 
         tokenizer = params.get("tokenizer", self.tokenizer)
         device = get_device(self.raw_model)

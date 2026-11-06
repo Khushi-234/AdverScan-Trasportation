@@ -173,18 +173,22 @@ class SoftDTWAttack(BaseAttack):
         if config is None:
             return
 
-        if config.epsilon < 0:
+        params = config.params or {}
+        eps = params.get("epsilon", config.epsilon)
+        if eps is not None and eps < 0:
             raise AttackConfigurationError(
-                f"Epsilon cannot be negative, got {config.epsilon}"
+                f"Epsilon cannot be negative, got {eps}"
             )
 
+        c_min = params.get("clip_min", config.clip_min)
+        c_max = params.get("clip_max", config.clip_max)
         if (
-            config.clip_min is not None
-            and config.clip_max is not None
-            and config.clip_min > config.clip_max
+            c_min is not None
+            and c_max is not None
+            and c_min > c_max
         ):
             raise AttackConfigurationError(
-                f"clip_min ({config.clip_min}) cannot be greater than clip_max ({config.clip_max})"
+                f"clip_min ({c_min}) cannot be greater than clip_max ({c_max})"
             )
 
         params = config.params or {}
@@ -318,6 +322,9 @@ class SoftDTWAttack(BaseAttack):
 
         f_min = params.get("feature_min")
         f_max = params.get("feature_max")
+        clip_min = params.get("clip_min", config.clip_min)
+        clip_max = params.get("clip_max", config.clip_max)
+        loss_fn = params.get("loss_fn", config.loss_fn) or nn.CrossEntropyLoss()
         bounds = params.get("feature_bounds", params.get("bounds"))
         if (
             bounds is not None
@@ -332,8 +339,8 @@ class SoftDTWAttack(BaseAttack):
             clamped = (
                 _apply_time_series_bounds(
                     x_orig,
-                    clip_min=config.clip_min,
-                    clip_max=config.clip_max,
+                    clip_min=clip_min,
+                    clip_max=clip_max,
                     feature_min=f_min,
                     feature_max=f_max,
                 )
@@ -414,8 +421,8 @@ class SoftDTWAttack(BaseAttack):
                 )
                 final_warped = _apply_time_series_bounds(
                     final_warped,
-                    clip_min=config.clip_min,
-                    clip_max=config.clip_max,
+                    clip_min=clip_min,
+                    clip_max=clip_max,
                     feature_min=f_min,
                     feature_max=f_max,
                 )

@@ -103,7 +103,7 @@ class TabularJSMA(BaseAttack):
         )
         step_size = float(params.get("step_size", params.get("theta", 0.1)))
         targeted = bool(params.get("targeted", False))
-        target_label = params.get("target_label", None)
+        target_label = params.get("target_label", params.get("target", None))
 
         device = get_device(self.raw_model)
         x_orig, y = validate_tabular_inputs(inputs, labels, attack_name="TabularJSMA")

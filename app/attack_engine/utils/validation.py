@@ -72,7 +72,7 @@ def validate_attack_config(config: Optional[AttackConfig]) -> None:
     if config is None:
         return
 
-    if config.epsilon < 0:
+    if config.epsilon is not None and config.epsilon < 0:
         raise AttackConfigurationError(
             f"Epsilon cannot be negative, got {config.epsilon}"
         )

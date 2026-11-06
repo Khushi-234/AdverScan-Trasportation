@@ -209,6 +209,8 @@ class JSMA(BaseAttack):
 
         theta = float(params.get("theta", params.get("step_size", 0.1)))
 
+        clip_min = params.get("clip_min", config.clip_min)
+        clip_max = params.get("clip_max", config.clip_max)
         f_min = params.get("feature_min")
         f_max = params.get("feature_max")
         bounds = params.get("feature_bounds", params.get("bounds"))
@@ -291,10 +293,10 @@ class JSMA(BaseAttack):
                         eligible[t_prev, d_prev] = False
 
                     # Exclude coordinates that cannot be perturbed further due to clip bounds
-                    if config.clip_max is not None and theta > 0:
-                        eligible = eligible & (x_adv[b] < config.clip_max - 1e-6)
-                    if config.clip_min is not None and theta < 0:
-                        eligible = eligible & (x_adv[b] > config.clip_min + 1e-6)
+                    if clip_max is not None and theta > 0:
+                        eligible = eligible & (x_adv[b] < clip_max - 1e-6)
+                    if clip_min is not None and theta < 0:
+                        eligible = eligible & (x_adv[b] > clip_min + 1e-6)
 
                     if not eligible.any():
                         finished[b] = True
@@ -342,8 +344,8 @@ class JSMA(BaseAttack):
                 # Apply bounds to ensure perturbed locations stay in valid range
                 x_adv = _apply_time_series_bounds(
                     x_adv,
-                    clip_min=config.clip_min,
-                    clip_max=config.clip_max,
+                    clip_min=clip_min,
+                    clip_max=clip_max,
                     feature_min=f_min,
                     feature_max=f_max,
                 )

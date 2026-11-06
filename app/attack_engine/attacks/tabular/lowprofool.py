@@ -123,8 +123,8 @@ class LowProFool(BaseAttack):
         )
         lambda_weight = float(params.get("lambda_weight", params.get("tradeoff", 0.1)))
         targeted = bool(params.get("targeted", False))
-        target_label = params.get("target_label", None)
-        loss_fn = config.loss_fn or nn.CrossEntropyLoss()
+        target_label = params.get("target_label", params.get("target", None))
+        loss_fn = params.get("loss_fn", config.loss_fn) or nn.CrossEntropyLoss()
         budget = params.get("budget", params.get("epsilon", None))
         if budget is not None:
             budget = float(budget)
