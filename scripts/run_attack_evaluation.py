@@ -41,6 +41,15 @@ sys.path.insert(0, str(REPO_ROOT))
 
 from app.attack_engine import discover_attacks
 from app.attack_engine.config import AttackConfig
+from app.attack_engine.exceptions import AttackConfigurationError
+from app.attack_engine.parameter_registry import (
+    ParameterSpec,
+    get_attack_param_specs,
+    get_supported_attacks,
+    normalize_attack_name,
+    normalize_domain,
+    prepare_attack_config,
+)
 from app.core.device_manager import DeviceManager
 from app.ingestion.model_registry import ModelPresetRegistry
 from app.ingestion.presets import DATASET_TO_RECOMMENDED_MODEL, KNOWN_DATASET_SAMPLE_COUNTS, MODEL_PRESETS
@@ -199,9 +208,30 @@ def parse_args():
 def prompt_attack_selection(domain: str) -> List[str]:
     """Display available attacks for the domain and prompt user to select."""
     discover_attacks()
-    catalog_list = DOMAIN_ATTACKS_CATALOG.get(domain, [])
+    norm_domain = normalize_domain(domain)
+    catalog_list = list(
+        DOMAIN_ATTACKS_CATALOG.get(domain)
+        or DOMAIN_ATTACKS_CATALOG.get(norm_domain.replace("_", "-"))
+        or DOMAIN_ATTACKS_CATALOG.get(norm_domain)
+        or []
+    )
+    supported_attacks = get_supported_attacks(norm_domain)
 
-    print(f"\n[Step 4/6] Select Adversarial Attack(s) for Domain [{domain.upper()}]:")
+    # Ensure all registered attacks from parameter registry are included in catalog
+    catalog_ids = {a["id"].lower() for a in catalog_list}
+    for supp_atk in supported_attacks:
+        canon = normalize_attack_name(norm_domain, supp_atk)
+        if supp_atk.lower() not in catalog_ids and canon.lower() not in catalog_ids:
+            catalog_list.append({
+                "id": supp_atk,
+                "name": supp_atk.upper(),
+                "full_name": f"{supp_atk.replace('_', ' ').title()} Attack",
+                "category": "Adversarial Attack",
+                "description": f"Registered attack for domain {norm_domain}",
+            })
+            catalog_ids.add(supp_atk.lower())
+
+    print(f"\n[Step 4/6] Select Adversarial Attack(s) for Domain [{norm_domain.upper()}]:")
     print("-" * 72)
     for idx, atk in enumerate(catalog_list, 1):
         print(f"  {idx}. [{atk['name']}] — {atk['full_name']}")
@@ -216,7 +246,7 @@ def prompt_attack_selection(domain: str) -> List[str]:
             return [atk["id"] for atk in catalog_list]
 
         selected: List[str] = []
-        tokens = raw_choice.split()
+        tokens = raw_choice.replace(",", " ").split()
         for tok in tokens:
             if tok.isdigit():
                 num = int(tok)
@@ -233,143 +263,340 @@ def prompt_attack_selection(domain: str) -> List[str]:
         print("  ❌ No recognized attacks selected. Please enter valid attack numbers or 'all'.")
 
 
+def _format_spec_constraints(spec: ParameterSpec) -> str:
+    """Format bounds, allowed choices, or conditional visibility of a ParameterSpec."""
+    parts = []
+    if spec.allowed_values:
+        parts.append(f"allowed: {spec.allowed_values}")
+    if spec.min_value is not None or spec.max_value is not None:
+        min_op = ">" if spec.exclusive_min else ">="
+        max_op = "<" if spec.exclusive_max else "<="
+        if spec.min_value is not None and spec.max_value is not None:
+            parts.append(f"range: {min_op}{spec.min_value}, {max_op}{spec.max_value}")
+        elif spec.min_value is not None:
+            parts.append(f"range: {min_op}{spec.min_value}")
+        elif spec.max_value is not None:
+            parts.append(f"range: {max_op}{spec.max_value}")
+    if spec.conditional_visibility:
+        cond_str = ", ".join(f"{k}={v}" for k, v in spec.conditional_visibility.items())
+        parts.append(f"condition: {cond_str}")
+    return f" ({'; '.join(parts)})" if parts else ""
+
+
+def _match_cli_override(spec: ParameterSpec, cli_args: argparse.Namespace) -> Tuple[bool, Any]:
+    """Check if any CLI flag explicitly provides an override value for this spec."""
+    spec_names = {spec.name.lower()} | {a.lower() for a in spec.aliases}
+
+    if "epsilon" in spec_names or "eps" in spec_names or "eps_latent" in spec_names:
+        if getattr(cli_args, "epsilon", None) is not None:
+            return True, float(cli_args.epsilon)
+
+    if any(k in spec_names for k in ("steps", "num_steps", "max_iter", "n_iter", "max_iterations", "num_iterations")):
+        if getattr(cli_args, "steps", None) is not None:
+            return True, int(cli_args.steps)
+
+    if any(k in spec_names for k in ("alpha", "step_size", "learning_rate", "lr", "alpha_max")):
+        if getattr(cli_args, "alpha", None) is not None:
+            return True, float(cli_args.alpha)
+
+    if "norm" in spec_names:
+        if any(arg == "--norm" or arg.startswith("--norm=") for arg in sys.argv):
+            return True, str(cli_args.norm)
+
+    if "clip_min" in spec_names:
+        if getattr(cli_args, "clip_min", None) is not None:
+            return True, float(cli_args.clip_min)
+
+    if "clip_max" in spec_names:
+        if getattr(cli_args, "clip_max", None) is not None:
+            return True, float(cli_args.clip_max)
+
+    if "targeted" in spec_names:
+        if any(arg == "--targeted" for arg in sys.argv):
+            return True, bool(cli_args.targeted)
+
+    return False, None
+
+
+def _prompt_single_parameter(spec: ParameterSpec, current_params: Dict[str, Any]) -> Any:
+    """Prompt the user for a single ParameterSpec with type-validation and default handling."""
+    default_disp = f"[{spec.default}]" if spec.default is not None else ("[required]" if spec.required else "[None]")
+    type_disp = f"({spec.data_type})"
+
+    prompt_label = f"    └─ {spec.name} {type_disp} {default_disp}: "
+    while True:
+        raw = input(prompt_label).strip()
+        if not raw:
+            if spec.default is not None:
+                return spec.default
+            if spec.required:
+                print(f"       ❌ Parameter '{spec.name}' is required. Please enter a value.")
+                continue
+            return None
+
+        # Allow user to type none / null / auto for optional parameters
+        if raw.lower() in ("none", "null", "auto", "unclipped") and not spec.required:
+            return None
+
+        # Type conversion and validation
+        if spec.data_type == "bool":
+            if raw.lower() in ("y", "yes", "true", "t", "1"):
+                return True
+            elif raw.lower() in ("n", "no", "false", "f", "0"):
+                return False
+            else:
+                print("       ❌ Invalid boolean. Enter 'y'/'yes'/'true' or 'n'/'no'/'false' (or press Enter).")
+                continue
+
+        elif spec.data_type == "int":
+            try:
+                val = int(raw)
+            except ValueError:
+                print("       ❌ Invalid integer. Please enter a whole number.")
+                continue
+            if spec.min_value is not None:
+                if spec.exclusive_min and val <= spec.min_value:
+                    print(f"       ❌ Value must be strictly greater than {spec.min_value}.")
+                    continue
+                elif not spec.exclusive_min and val < spec.min_value:
+                    print(f"       ❌ Value must be greater than or equal to {spec.min_value}.")
+                    continue
+            if spec.max_value is not None:
+                if spec.exclusive_max and val >= spec.max_value:
+                    print(f"       ❌ Value must be strictly less than {spec.max_value}.")
+                    continue
+                elif not spec.exclusive_max and val > spec.max_value:
+                    print(f"       ❌ Value must be less than or equal to {spec.max_value}.")
+                    continue
+            if spec.allowed_values and val not in spec.allowed_values:
+                print(f"       ❌ Value must be one of {spec.allowed_values}.")
+                continue
+            return val
+
+        elif spec.data_type == "float":
+            try:
+                val = float(raw)
+            except ValueError:
+                print("       ❌ Invalid number. Please enter a valid float or integer.")
+                continue
+            if spec.min_value is not None:
+                if spec.exclusive_min and val <= spec.min_value:
+                    print(f"       ❌ Value must be strictly greater than {spec.min_value}.")
+                    continue
+                elif not spec.exclusive_min and val < spec.min_value:
+                    print(f"       ❌ Value must be greater than or equal to {spec.min_value}.")
+                    continue
+            if spec.max_value is not None:
+                if spec.exclusive_max and val >= spec.max_value:
+                    print(f"       ❌ Value must be strictly less than {spec.max_value}.")
+                    continue
+                elif not spec.exclusive_max and val > spec.max_value:
+                    print(f"       ❌ Value must be less than or equal to {spec.max_value}.")
+                    continue
+            if spec.allowed_values and val not in spec.allowed_values:
+                print(f"       ❌ Value must be one of {spec.allowed_values}.")
+                continue
+            return val
+
+        elif spec.data_type == "str":
+            val = raw
+            if spec.allowed_values:
+                matched = None
+                for av in spec.allowed_values:
+                    if str(av).lower() == val.lower():
+                        matched = av
+                        break
+                if matched is None:
+                    print(f"       ❌ Invalid choice '{val}'. Must be one of: {spec.allowed_values}")
+                    continue
+                val = matched
+            return val
+
+        elif spec.data_type == "list":
+            items = [item.strip() for item in raw.split(",") if item.strip()]
+            if not items:
+                if spec.default is not None:
+                    return spec.default
+                print("       ❌ Please enter at least one item (comma-separated).")
+                continue
+            if spec.allowed_values:
+                allowed_map = {str(a).lower(): a for a in spec.allowed_values}
+                normalized_items = []
+                invalid_items = []
+                for it in items:
+                    if it.lower() in allowed_map:
+                        normalized_items.append(allowed_map[it.lower()])
+                    else:
+                        invalid_items.append(it)
+                if invalid_items:
+                    print(f"       ❌ Unrecognized item(s): {invalid_items}. Allowed choices: {spec.allowed_values}")
+                    continue
+                items = normalized_items
+            return items
+
+        return raw
+
+
+def configure_attack_params_interactive(
+    domain: str,
+    atk_id: str,
+    cli_args: argparse.Namespace,
+) -> AttackConfig:
+    """Interactively display and prompt parameters for a specific attack."""
+    norm_domain = normalize_domain(domain)
+    canonical_attack = normalize_attack_name(norm_domain, atk_id)
+    specs = get_attack_param_specs(norm_domain, canonical_attack)
+
+    print(f"  Registered Hyperparameters for '{atk_id}' ({len(specs)} parameters):")
+    for spec in specs:
+        constraint_str = _format_spec_constraints(spec)
+        def_repr = repr(spec.default) if spec.default is not None else "None"
+        req_repr = " [Required]" if spec.required else ""
+        print(f"    • {spec.name:<22} ({spec.data_type:<5}) Default: {def_repr:<10}{req_repr}{constraint_str}")
+        if spec.description:
+            print(f"      └─ {spec.description}")
+
+    print("\n  Configure parameters (press [Enter] to accept default):")
+
+    while True:
+        configured_params: Dict[str, Any] = {}
+        for spec in specs:
+            # Respect conditional visibility (e.g. {"targeted": True})
+            if spec.conditional_visibility:
+                meets_cond = all(
+                    configured_params.get(k) == v
+                    for k, v in spec.conditional_visibility.items()
+                )
+                if not meets_cond:
+                    continue
+
+            # Check CLI overrides
+            has_override, override_val = _match_cli_override(spec, cli_args)
+            if has_override:
+                print(f"    └─ {spec.name}: using CLI override ({override_val})")
+                configured_params[spec.name] = override_val
+                continue
+
+            val = _prompt_single_parameter(spec, configured_params)
+            if val is not None:
+                configured_params[spec.name] = val
+
+        # Construct and validate AttackConfig
+        raw_config = AttackConfig(
+            epsilon=configured_params.get("epsilon"),
+            clip_min=configured_params.get("clip_min"),
+            clip_max=configured_params.get("clip_max"),
+            params=configured_params,
+        )
+        if "targeted" in configured_params:
+            raw_config.targeted = configured_params["targeted"]
+        if "target_label" in configured_params:
+            raw_config.target_label = configured_params["target_label"]
+
+        try:
+            validated_config = prepare_attack_config(norm_domain, canonical_attack, raw_config)
+            print(f"  ✓ Parameters validated for '{atk_id}': {list(validated_config.params.keys())}")
+            return validated_config
+        except AttackConfigurationError as err:
+            print(f"\n  ❌ Configuration Error for '{atk_id}': {err}")
+            print("  Please re-enter the parameters for this attack.\n")
+
+
+def configure_attack_params_non_interactive(
+    domain: str,
+    selected_attacks: List[str],
+    cli_args: argparse.Namespace,
+) -> Dict[str, AttackConfig]:
+    """Build and validate AttackConfigs for non-interactive execution from defaults & CLI overrides."""
+    norm_domain = normalize_domain(domain)
+    attack_configs: Dict[str, AttackConfig] = {}
+
+    for atk in selected_attacks:
+        atk_id = atk.lower()
+        canonical_attack = normalize_attack_name(norm_domain, atk_id)
+        specs = get_attack_param_specs(norm_domain, canonical_attack)
+
+        params: Dict[str, Any] = {}
+        for spec in specs:
+            if spec.conditional_visibility:
+                meets_cond = all(
+                    params.get(k) == v
+                    for k, v in spec.conditional_visibility.items()
+                )
+                if not meets_cond:
+                    continue
+
+            has_override, override_val = _match_cli_override(spec, cli_args)
+            if has_override:
+                params[spec.name] = override_val
+            elif spec.default is not None:
+                params[spec.name] = spec.default
+
+        raw_config = AttackConfig(
+            epsilon=params.get("epsilon"),
+            clip_min=params.get("clip_min"),
+            clip_max=params.get("clip_max"),
+            params=params,
+        )
+        if "targeted" in params:
+            raw_config.targeted = params["targeted"]
+        if "target_label" in params:
+            raw_config.target_label = params["target_label"]
+
+        try:
+            validated_config = prepare_attack_config(norm_domain, canonical_attack, raw_config)
+        except AttackConfigurationError as err:
+            print(f"  [Warning: Attack {atk} configuration issue: {err}]")
+            validated_config = prepare_attack_config(norm_domain, canonical_attack, AttackConfig(params=params))
+
+        attack_configs[atk_id] = validated_config
+        attack_configs[canonical_attack] = validated_config
+
+    return attack_configs
+
+
 def prompt_attack_constraints(
     domain: str,
     selected_attacks: List[str],
     cli_args: argparse.Namespace,
 ) -> Dict[str, AttackConfig]:
     """
-    Prompt user for specific attack constraints (epsilon, alpha, steps, norm, clipping)
-    aiming for high ASR with minimal perturbation and high visual quality.
+    Prompt user dynamically for each selected attack's registered parameters
+    according to app.attack_engine.parameter_registry.
     """
-    print("\n" + "=" * 72)
-    print("  [Step 5/6] ATTACK CONSTRAINTS & PERTURBATION OBJECTIVES CONFIGURATION  ")
-    print("=" * 72)
-    print("  Goal: High ASR • Low L_inf • Low L_2 • Low L_0 • High Visual Quality")
-    print("  Tip : Smaller epsilon keeps perturbation imperceptible (higher PSNR/SSIM).")
-    print("        Iterative attacks (PGD/CW) achieve higher ASR at smaller epsilons.")
-    print("-" * 72)
+    norm_domain = normalize_domain(domain)
+    print("\n" + "=" * 76)
+    print("  [Step 5/6] DYNAMIC ATTACK PARAMETER CONFIGURATION (REGISTRY-DRIVEN)     ")
+    print("=" * 76)
+    print("  Goal: High ASR • Minimal Perturbation (L_inf, L_2, L_0) • High Stealth")
+    print("  Tip : Press [Enter] on any prompt to accept the shown default value.")
+    print("        Type 'none' or 'auto' to leave optional bounds unclipped.")
+    print("-" * 76)
 
-    # 1. Perturbation Budget (Epsilon)
-    if cli_args.epsilon is not None:
-        chosen_eps = float(cli_args.epsilon)
-        print(f"  • Epsilon (CLI override): {chosen_eps}")
-    else:
-        default_eps_map = {
-            "image": 0.03137,  # 8 / 255
-            "text": 0.1,
-            "tabular": 0.1,
-            "time-series": 0.05,
-        }
-        rec_eps = default_eps_map.get(domain, 0.03137)
-        if domain == "image":
-            print(f"  Recommended Epsilon for Image Domain:")
-            print(f"    - 0.0157 (~4/255) : Ultra-stealthy / Near-zero visual perturbation")
-            print(f"    - 0.0314 (~8/255) : Standard benchmarking default (Recommended)")
-            print(f"    - 0.0627 (~16/255): Aggressive perturbation (Higher ASR, noticeable distortion)")
-        prompt_text = f"  Enter perturbation budget epsilon (ε) [{rec_eps}]: "
-        eps_input = input(prompt_text).strip()
-        try:
-            chosen_eps = float(eps_input) if eps_input else rec_eps
-        except ValueError:
-            chosen_eps = rec_eps
-        print(f"  ✓ Epsilon set to: {chosen_eps:.5f}")
-
-    # 2. Iteration Steps (for iterative attacks like PGD, CW, FAB)
-    has_iterative = any(a.lower() in ("pgd", "cw", "deepfool", "fab", "embedding_pgd") for a in selected_attacks)
-    if cli_args.steps is not None:
-        chosen_steps = cli_args.steps
-    elif has_iterative:
-        print(f"\n  Iterative Steps Configuration:")
-        print(f"  Tip: More iterations (e.g. 20-40) allow smaller step sizes to find minimal perturbations.")
-        steps_input = input(f"  Enter number of attack iterations / steps [20]: ").strip()
-        try:
-            chosen_steps = int(steps_input) if steps_input else 20
-        except ValueError:
-            chosen_steps = 20
-        print(f"  ✓ Iteration steps set to: {chosen_steps}")
-    else:
-        chosen_steps = 10
-
-    # 3. Step size Alpha
-    if cli_args.alpha is not None:
-        chosen_alpha = cli_args.alpha
-    elif has_iterative:
-        default_alpha = max(0.001, round(2.0 * chosen_eps / chosen_steps, 5))
-        alpha_input = input(f"  Enter step size alpha (α) [{default_alpha:.5f}]: ").strip()
-        try:
-            chosen_alpha = float(alpha_input) if alpha_input else default_alpha
-        except ValueError:
-            chosen_alpha = default_alpha
-        print(f"  ✓ Step size alpha set to: {chosen_alpha:.5f}")
-    else:
-        chosen_alpha = chosen_eps
-
-    # 4. Norm Constraint
-    chosen_norm = cli_args.norm or "Linf"
-    if domain == "image" and cli_args.norm == "Linf":
-        norm_input = input(f"  Enter perturbation norm constraint ('Linf' | 'L2') [Linf]: ").strip()
-        if norm_input.lower() in ("l2", "2"):
-            chosen_norm = "L2"
-        else:
-            chosen_norm = "Linf"
-    print(f"  ✓ Norm constraint set to: {chosen_norm}")
-
-    # 5. Clipping bounds
-    if cli_args.clip_min is not None or cli_args.clip_max is not None:
-        clip_min = cli_args.clip_min
-        clip_max = cli_args.clip_max
-        print(f"  • Clipping bounds: [{clip_min}, {clip_max}]")
-    else:
-        clip_prompt = input("  Enable tensor clipping? (enter 'y' for [0.0, 1.0], or hit Enter for unclipped/auto) [auto]: ").strip().lower()
-        if clip_prompt in ("y", "yes", "1"):
-            clip_min = 0.0
-            clip_max = 1.0
-            print("  ✓ Clipping bounds set to: [0.0, 1.0]")
-        else:
-            clip_min = None
-            clip_max = None
-            print("  ✓ Clipping bounds: Unclipped / Preserves dataset normalization")
-
-    # 6. Targeting mode
-    is_targeted = cli_args.targeted
-
-    # Construct AttackConfig per selected attack
     attack_configs: Dict[str, AttackConfig] = {}
-    for atk in selected_attacks:
+    catalog_list = (
+        DOMAIN_ATTACKS_CATALOG.get(domain)
+        or DOMAIN_ATTACKS_CATALOG.get(norm_domain.replace("_", "-"))
+        or DOMAIN_ATTACKS_CATALOG.get(norm_domain)
+        or []
+    )
+    catalog_map = {a["id"].lower(): a for a in catalog_list}
+
+    for atk_idx, atk in enumerate(selected_attacks, 1):
         atk_id = atk.lower()
-        params: Dict[str, Any] = {
-            "norm": chosen_norm,
-            "targeted": is_targeted,
-        }
+        canonical_attack = normalize_attack_name(norm_domain, atk_id)
+        atk_info = catalog_map.get(atk_id, {})
+        full_title = f"{atk_info.get('name', atk_id.upper())} — {atk_info.get('full_name', canonical_attack)}"
 
-        if atk_id == "pgd":
-            params["num_steps"] = chosen_steps
-            params["steps"] = chosen_steps
-            params["alpha"] = chosen_alpha
-            params["step_size"] = chosen_alpha
-            params["random_start"] = True
-        elif atk_id == "cw":
-            params["max_iterations"] = chosen_steps
-            params["learning_rate"] = chosen_alpha
-            params["confidence"] = 0.0
-            params["initial_const"] = 1.0
-        elif atk_id == "deepfool":
-            params["max_iterations"] = chosen_steps
-            params["overshoot"] = 0.02
-        elif atk_id == "fab":
-            params["n_iter"] = chosen_steps
-            params["alpha_max"] = 0.1
-        elif atk_id == "embedding_pgd":
-            params["steps"] = chosen_steps
-            params["alpha"] = chosen_alpha
+        print(f"\n┌────────────────────────────────────────────────────────────────────────")
+        print(f"│ Attack [{atk_idx}/{len(selected_attacks)}]: {full_title}")
+        if atk_info.get("category"):
+            print(f"│ Category: {atk_info['category']}")
+        print(f"└────────────────────────────────────────────────────────────────────────")
 
-        attack_configs[atk_id] = AttackConfig(
-            epsilon=chosen_eps,
-            clip_min=clip_min,
-            clip_max=clip_max,
-            params=params,
-        )
+        config = configure_attack_params_interactive(domain, atk_id, cli_args)
+        attack_configs[atk_id] = config
+        attack_configs[canonical_attack] = config
 
     return attack_configs
 
@@ -858,33 +1085,31 @@ def main():
 
         if args.attacks:
             if "all" in args.attacks:
-                selected_attacks = [a["id"] for a in DOMAIN_ATTACKS_CATALOG.get(selected_domain, [])]
+                norm_d = normalize_domain(selected_domain)
+                catalog_list = (
+                    DOMAIN_ATTACKS_CATALOG.get(selected_domain)
+                    or DOMAIN_ATTACKS_CATALOG.get(norm_d.replace("_", "-"))
+                    or DOMAIN_ATTACKS_CATALOG.get(norm_d)
+                    or []
+                )
+                selected_attacks = [a["id"] for a in catalog_list]
             else:
                 selected_attacks = [a.lower() for a in args.attacks]
         else:
-            selected_attacks = ["pgd"] if selected_domain == "image" else ["fgsm"]
+            default_attacks = {
+                "image": ["pgd"],
+                "text": ["embedding_pgd"],
+                "time-series": ["time_series_pgd"],
+                "tabular": ["cap_pgd"],
+            }
+            selected_attacks = default_attacks.get(selected_domain, ["pgd"])
 
-        # Build attack configs from CLI args
-        attack_configs = {}
-        for atk in selected_attacks:
-            atk_id = atk.lower()
-            eps = args.epsilon if args.epsilon is not None else (0.03137 if selected_domain == "image" else 0.1)
-            steps = args.steps or 20
-            alpha = args.alpha or (2.0 * eps / steps)
-            attack_configs[atk_id] = AttackConfig(
-                epsilon=eps,
-                clip_min=args.clip_min,
-                clip_max=args.clip_max,
-                params={
-                    "num_steps": steps,
-                    "steps": steps,
-                    "alpha": alpha,
-                    "step_size": alpha,
-                    "norm": args.norm,
-                    "targeted": args.targeted,
-                    "random_start": True,
-                },
-            )
+        # Build attack configs via registry & CLI overrides
+        attack_configs = configure_attack_params_non_interactive(
+            domain=selected_domain,
+            selected_attacks=selected_attacks,
+            cli_args=args,
+        )
 
     # 2. Hardware Device Resolution
     dev_info = get_execution_device_info(args.device)
