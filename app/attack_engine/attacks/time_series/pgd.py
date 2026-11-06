@@ -137,18 +137,22 @@ class TimeSeriesPGD(BaseAttack):
         if config is None:
             return
 
-        if config.epsilon < 0:
+        params = config.params or {}
+        eps = params.get("epsilon", config.epsilon)
+        if eps is not None and eps < 0:
             raise AttackConfigurationError(
-                f"Epsilon cannot be negative, got {config.epsilon}"
+                f"Epsilon cannot be negative, got {eps}"
             )
 
+        c_min = params.get("clip_min", config.clip_min)
+        c_max = params.get("clip_max", config.clip_max)
         if (
-            config.clip_min is not None
-            and config.clip_max is not None
-            and config.clip_min > config.clip_max
+            c_min is not None
+            and c_max is not None
+            and c_min > c_max
         ):
             raise AttackConfigurationError(
-                f"clip_min ({config.clip_min}) cannot be greater than clip_max ({config.clip_max})"
+                f"clip_min ({c_min}) cannot be greater than clip_max ({c_max})"
             )
 
         params = config.params or {}
@@ -268,7 +272,10 @@ class TimeSeriesPGD(BaseAttack):
                 f"Inputs batch size ({inputs.size(0)}) does not match labels batch size ({labels.size(0)})."
             )
 
-        epsilon = float(config.epsilon)
+        epsilon = float(params.get("epsilon", config.epsilon if config.epsilon is not None else 0.1))
+        clip_min = params.get("clip_min", config.clip_min)
+        clip_max = params.get("clip_max", config.clip_max)
+        loss_fn = params.get("loss_fn", config.loss_fn) or nn.CrossEntropyLoss()
         num_steps = params.get(
             "num_steps", params.get("steps", params.get("iters", 10))
         )
@@ -292,8 +299,8 @@ class TimeSeriesPGD(BaseAttack):
             return (
                 _apply_time_series_bounds(
                     x_orig,
-                    clip_min=config.clip_min,
-                    clip_max=config.clip_max,
+                    clip_min=clip_min,
+                    clip_max=clip_max,
                     feature_min=f_min,
                     feature_max=f_max,
                 )
@@ -307,12 +314,6 @@ class TimeSeriesPGD(BaseAttack):
             alpha = float(params["step_size"])
         else:
             alpha = (2.0 * epsilon / num_steps) if num_steps > 0 else epsilon
-
-        # Loss function
-        if config.loss_fn is not None:
-            loss_fn = config.loss_fn
-        else:
-            loss_fn = nn.CrossEntropyLoss()
 
         was_training = self.raw_model.training
         self.raw_model.eval()
@@ -344,8 +345,8 @@ class TimeSeriesPGD(BaseAttack):
                 )
                 x_adv = _apply_time_series_bounds(
                     x_adv,
-                    clip_min=config.clip_min,
-                    clip_max=config.clip_max,
+                    clip_min=clip_min,
+                    clip_max=clip_max,
                     feature_min=f_min,
                     feature_max=f_max,
                 )
@@ -396,8 +397,8 @@ class TimeSeriesPGD(BaseAttack):
                 # Clipping to valid scalar/feature-wise range
                 x_adv = _apply_time_series_bounds(
                     x_adv,
-                    clip_min=config.clip_min,
-                    clip_max=config.clip_max,
+                    clip_min=clip_min,
+                    clip_max=clip_max,
                     feature_min=f_min,
                     feature_max=f_max,
                 )
@@ -406,8 +407,8 @@ class TimeSeriesPGD(BaseAttack):
             x_adv = project_lp(x_adv.contiguous(), x_orig, epsilon=epsilon, norm=norm)
             x_adv = _apply_time_series_bounds(
                 x_adv,
-                clip_min=config.clip_min,
-                clip_max=config.clip_max,
+                clip_min=clip_min,
+                clip_max=clip_max,
                 feature_min=f_min,
                 feature_max=f_max,
             )

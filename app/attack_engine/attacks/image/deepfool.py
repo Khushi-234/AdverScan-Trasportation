@@ -115,6 +115,9 @@ class DeepFool(BaseAttack):
             top_k = params.get("top_k")
             if top_k is not None and (not isinstance(top_k, int) or top_k <= 0):
                 raise AttackExecutionError("DeepFool top_k must be greater than 0.")
+            overshoot = params.get("overshoot")
+            if overshoot is not None and (not isinstance(overshoot, (int, float)) or isinstance(overshoot, bool) or overshoot <= 0):
+                raise AttackExecutionError("DeepFool overshoot must be greater than 0.")
 
     def generate(self, inputs: Any, labels: Any, config: Optional[AttackConfig] = None) -> Any:
         """
@@ -146,8 +149,10 @@ class DeepFool(BaseAttack):
         if not isinstance(top_k, int) or top_k <= 0:
             raise AttackExecutionError("DeepFool top_k must be greater than 0.")
 
-        overshoot = params.get("overshoot", 0.02)
-        epsilon = config.epsilon if config.epsilon is not None else float("inf")
+        overshoot = float(params.get("overshoot", 0.02))
+        clip_min = params.get("clip_min", config.clip_min)
+        clip_max = params.get("clip_max", config.clip_max)
+        epsilon = float(params.get("epsilon", config.epsilon)) if (params.get("epsilon") is not None or config.epsilon is not None) else float("inf")
 
         # Device selection
         device = get_device(self.raw_model)
@@ -234,7 +239,7 @@ class DeepFool(BaseAttack):
                         x_i = x_start + perturbation
 
                     # Apply clipping bounds
-                    x_i = clip_tensor(x_i, config.clip_min, config.clip_max)
+                    x_i = clip_tensor(x_i, clip_min, clip_max)
 
                 adv_samples.append(x_i.detach())
 

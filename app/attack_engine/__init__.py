@@ -18,6 +18,11 @@ from app.attack_engine.attacks.tabular.lowprofool import LowProFool
 from app.attack_engine.attacks.tabular.carlini_wagner import TabularCW
 from app.attack_engine.attacks.tabular.jsma import TabularJSMA
 from app.attack_engine.attacks.tabular.vae_attack import VAEAttack
+from app.attack_engine.attacks.time_series.pgd import TimeSeriesPGD
+from app.attack_engine.attacks.time_series.smooth_pgd import SmoothPGD
+from app.attack_engine.attacks.time_series.wavelet import WaveletAttack
+from app.attack_engine.attacks.time_series.soft_dtw import SoftDTWAttack
+from app.attack_engine.attacks.time_series.jsma import JSMA as TimeSeriesJSMA
 from app.attack_engine.config import AttackConfig
 from app.attack_engine.models import AttackMetadata, AttackResult, AttackResults
 from app.attack_engine.exceptions import (
@@ -39,6 +44,13 @@ from app.attack_engine.attack_selector import (
 )
 from app.attack_engine.attack_executor import execute_attack
 from app.attack_engine.attack_engine import AttackEngine, run_attack_pipeline
+from app.attack_engine.parameter_registry import (
+    ParameterSpec,
+    get_attack_param_specs,
+    get_supported_attacks,
+    validate_attack_params,
+    prepare_attack_config,
+)
 
 __all__ = [
     "BaseAttack",
@@ -58,6 +70,11 @@ __all__ = [
     "TabularCW",
     "TabularJSMA",
     "VAEAttack",
+    "TimeSeriesPGD",
+    "SmoothPGD",
+    "WaveletAttack",
+    "SoftDTWAttack",
+    "TimeSeriesJSMA",
     "AttackConfig",
     "AttackResult",
     "AttackResults",
@@ -75,4 +92,9 @@ __all__ = [
     "execute_attack",
     "AttackEngine",
     "run_attack_pipeline",
+    "ParameterSpec",
+    "get_attack_param_specs",
+    "get_supported_attacks",
+    "validate_attack_params",
+    "prepare_attack_config",
 ]

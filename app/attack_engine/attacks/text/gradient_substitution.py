@@ -127,8 +127,8 @@ class GradientSubstitution(BaseAttack):
         num_candidates = int(params.get("num_candidates", 10))
         similarity_threshold = float(params.get("similarity_threshold", 0.4))
         targeted = bool(params.get("targeted", False))
-        target_label = params.get("target_label", None)
-        loss_fn = config.loss_fn or nn.CrossEntropyLoss()
+        target_label = params.get("target_label", params.get("target", None))
+        loss_fn = params.get("loss_fn", config.loss_fn) or nn.CrossEntropyLoss()
 
         tokenizer = params.get("tokenizer", self.tokenizer)
         device = get_device(self.raw_model)

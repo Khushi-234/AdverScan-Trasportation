@@ -46,7 +46,13 @@ def execute_attack(
             )
 
         static_metadata = getattr(attack_cls, "metadata", None)
+        domain = getattr(static_metadata, "domain", "image")
         attack_name = getattr(static_metadata, "name", getattr(attack_cls, "attack_name", attack_cls.__name__.lower()))
+
+        # Normalize and validate configuration using centralized parameter registry
+        from app.attack_engine.parameter_registry import prepare_attack_config
+        config = prepare_attack_config(domain=domain, attack_name=attack_name, config=config)
+
         attack_instance = attack_cls(model)
 
         # Validate configuration against attack requirements

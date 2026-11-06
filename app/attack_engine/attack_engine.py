@@ -29,6 +29,29 @@ class AttackEngine:
         # Ensure attack discovery runs on engine initialization
         discover_attacks()
 
+    def validate_attack_config(
+        self,
+        attack_name: str,
+        config: Optional[AttackConfig] = None,
+    ) -> AttackConfig:
+        """
+        Validate and normalize an attack configuration against the parameter registry.
+
+        Args:
+            attack_name: Registered attack name.
+            config: Optional AttackConfig instance.
+
+        Returns:
+            Validated and normalized AttackConfig instance.
+        """
+        selected_classes = select_compatible_attacks(self.model, attack_name)
+        attack_cls = selected_classes[0]
+        static_metadata = getattr(attack_cls, "metadata", None)
+        domain = getattr(static_metadata, "domain", "image")
+        name = getattr(static_metadata, "name", attack_name)
+        from app.attack_engine.parameter_registry import prepare_attack_config
+        return prepare_attack_config(domain=domain, attack_name=name, config=config)
+
     def run_attack(
         self,
         attack_name: str,

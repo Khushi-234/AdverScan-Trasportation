@@ -65,24 +65,26 @@ class CW(BaseAttack):
         """
         validate_attack_config(config)
         if config is not None:
-            if (
-                config.clip_min is not None
-                and config.clip_max is not None
-                and config.clip_min >= config.clip_max
-            ):
-                raise AttackConfigurationError(
-                    f"clip_min ({config.clip_min}) must be strictly less than clip_max ({config.clip_max})"
-                )
             params = config.params or {}
-            if "max_iterations" in params and params["max_iterations"] <= 0:
+            c_min = params.get("clip_min", config.clip_min)
+            c_max = params.get("clip_max", config.clip_max)
+            if c_min is not None and c_max is not None and c_min >= c_max:
+                raise AttackConfigurationError(
+                    f"clip_min ({c_min}) must be strictly less than clip_max ({c_max})"
+                )
+            max_iter = params.get("max_iterations", params.get("iters", params.get("num_steps")))
+            if max_iter is not None and max_iter <= 0:
                 raise AttackConfigurationError("max_iterations must be positive")
             if "binary_search_steps" in params and params["binary_search_steps"] < 1:
                 raise AttackConfigurationError("binary_search_steps must be at least 1")
-            if "initial_const" in params and params["initial_const"] <= 0:
+            init_c = params.get("initial_const", params.get("c"))
+            if init_c is not None and init_c <= 0:
                 raise AttackConfigurationError("initial_const must be positive")
-            if "learning_rate" in params and params["learning_rate"] <= 0:
+            lr = params.get("learning_rate", params.get("lr"))
+            if lr is not None and lr <= 0:
                 raise AttackConfigurationError("learning_rate must be positive")
-            if "confidence" in params and params["confidence"] < 0:
+            conf = params.get("confidence", params.get("kappa"))
+            if conf is not None and conf < 0:
                 raise AttackConfigurationError("confidence must be non-negative")
 
     def _to_tanh_space(
@@ -152,14 +154,26 @@ class CW(BaseAttack):
         binary_search_steps = int(params.get("binary_search_steps", 1))
         initial_const = float(params.get("initial_const", params.get("c", 1.0)))
         targeted = bool(params.get("targeted", False))
+        target_label = params.get("target_label", params.get("target", None))
 
-        clip_min = float(config.clip_min) if config.clip_min is not None else 0.0
-        clip_max = float(config.clip_max) if config.clip_max is not None else 1.0
+        clip_min = float(params.get("clip_min", config.clip_min if config.clip_min is not None else 0.0))
+        clip_max = float(params.get("clip_max", config.clip_max if config.clip_max is not None else 1.0))
 
         device = get_device(self.raw_model)
         x_orig = inputs.clone().detach().to(device)
         labels = labels.to(device)
         batch_size = x_orig.size(0)
+
+        if targeted and target_label is not None:
+            if isinstance(target_label, int):
+                loss_labels = torch.full((batch_size,), target_label, dtype=torch.long, device=device)
+            else:
+                target_tensor = torch.as_tensor(target_label, dtype=torch.long, device=device)
+                if target_tensor.dim() == 0:
+                    target_tensor = target_tensor.repeat(batch_size)
+                loss_labels = target_tensor
+        else:
+            loss_labels = labels
 
         was_training = self.raw_model.training
         self.raw_model.eval()
@@ -199,9 +213,9 @@ class CW(BaseAttack):
 
                     pred = logits.argmax(dim=1)
                     if targeted:
-                        successful = (pred == labels)
+                        successful = (pred == loss_labels)
                     else:
-                        successful = (pred != labels)
+                        successful = (pred != loss_labels)
 
                     # Update best adversarial examples for successful candidates with lower L2
                     with torch.no_grad():
@@ -213,11 +227,11 @@ class CW(BaseAttack):
 
                     # Compute CW margin loss f(x_adv)
                     # real_logits: logit for target class (targeted) or true class (untargeted)
-                    real_logits = logits.gather(1, labels.unsqueeze(1)).squeeze(1)
+                    real_logits = logits.gather(1, loss_labels.unsqueeze(1)).squeeze(1)
 
                     # other_logits: max logit among all classes other than label
                     masked_logits = logits.clone()
-                    masked_logits.scatter_(1, labels.unsqueeze(1), float("-inf"))
+                    masked_logits.scatter_(1, loss_labels.unsqueeze(1), float("-inf"))
                     other_logits = torch.max(masked_logits, dim=1)[0]
 
                     if targeted:

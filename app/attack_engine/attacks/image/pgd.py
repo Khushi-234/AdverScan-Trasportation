@@ -56,6 +56,20 @@ class PGD(BaseAttack):
         Validate PGD-specific configuration.
         """
         validate_attack_config(config)
+        if config is not None:
+            params = config.params or {}
+            eps = params.get("epsilon", config.epsilon)
+            if eps is not None and eps < 0:
+                raise AttackConfigurationError(f"Epsilon cannot be negative, got {eps}")
+            num_steps = params.get("num_steps", params.get("steps", params.get("iters")))
+            if num_steps is not None and (not isinstance(num_steps, int) or isinstance(num_steps, bool) or num_steps <= 0):
+                raise AttackExecutionError("PGD num_steps must be greater than 0.")
+            alpha = params.get("alpha", params.get("step_size"))
+            if alpha is not None and (not isinstance(alpha, (int, float)) or isinstance(alpha, bool) or alpha <= 0):
+                raise AttackExecutionError("PGD alpha/step_size must be greater than 0.")
+            norm = params.get("norm")
+            if norm is not None and str(norm).upper() not in ("LINF", "INF", "L2", "2"):
+                raise AttackExecutionError(f"Unsupported norm '{norm}' for PGD. Supported norms: ['Linf', 'L2'].")
 
     def generate(self, inputs: Any, labels: Any, config: Optional[AttackConfig] = None) -> Any:
         """
@@ -76,22 +90,26 @@ class PGD(BaseAttack):
         self.validate_config(config)
         validate_inputs(inputs, labels, attack_name="PGD")
 
-        epsilon = config.epsilon
         params = config.params or {}
+        epsilon = float(params.get("epsilon", config.epsilon if config.epsilon is not None else 0.1))
+        clip_min = params.get("clip_min", config.clip_min)
+        clip_max = params.get("clip_max", config.clip_max)
+        loss_fn = params.get("loss_fn", config.loss_fn) or nn.CrossEntropyLoss()
 
         # Extract PGD specific parameters with sensible defaults
         num_steps = params.get("num_steps", params.get("steps", params.get("iters", 10)))
-        if num_steps <= 0:
+        if not isinstance(num_steps, int) or isinstance(num_steps, bool) or num_steps <= 0:
             raise AttackExecutionError("PGD num_steps must be greater than 0.")
 
-        random_start = params.get("random_start", True)
-        targeted = params.get("targeted", False)
-        norm = params.get("norm", "Linf")
+        random_start = bool(params.get("random_start", True))
+        targeted = bool(params.get("targeted", False))
+        target_label = params.get("target_label", params.get("target", None))
+        norm = str(params.get("norm", "Linf"))
 
         if "alpha" in params:
-            alpha = params["alpha"]
+            alpha = float(params["alpha"])
         elif "step_size" in params:
-            alpha = params["step_size"]
+            alpha = float(params["step_size"])
         else:
             alpha = 2.0 * epsilon / num_steps
 
@@ -104,11 +122,16 @@ class PGD(BaseAttack):
             labels = torch.as_tensor(labels)
         labels = labels.to(device)
 
-        # Determine loss function
-        if config.loss_fn is not None:
-            loss_fn = config.loss_fn
+        if targeted and target_label is not None:
+            if isinstance(target_label, int):
+                loss_labels = torch.full((x_orig.size(0),), target_label, dtype=torch.long, device=device)
+            else:
+                target_tensor = torch.as_tensor(target_label, dtype=torch.long, device=device)
+                if target_tensor.dim() == 0:
+                    target_tensor = target_tensor.repeat(x_orig.size(0))
+                loss_labels = target_tensor
         else:
-            loss_fn = nn.CrossEntropyLoss()
+            loss_labels = labels
 
         was_training = self.raw_model.training
         self.raw_model.eval()
@@ -132,7 +155,7 @@ class PGD(BaseAttack):
                     ).view(-1, *([1] * (x_adv.dim() - 1))) * epsilon
                     noise = noise * radius
                 x_adv = x_adv + noise
-                x_adv = clip_tensor(x_adv, config.clip_min, config.clip_max)
+                x_adv = clip_tensor(x_adv, clip_min, clip_max)
 
             # Iterative gradient ascent/descent steps
             for _ in range(num_steps):
@@ -141,7 +164,7 @@ class PGD(BaseAttack):
                 # Forward pass
                 outputs = self.raw_model(x_adv)
                 logits = outputs.logits if hasattr(outputs, "logits") else outputs
-                loss = loss_fn(logits, labels)
+                loss = loss_fn(logits, loss_labels)
 
                 # Compute gradient w.r.t x_adv
                 grad = torch.autograd.grad(
@@ -166,7 +189,7 @@ class PGD(BaseAttack):
                 x_adv = project_lp(x_adv, x_orig, epsilon=epsilon, norm=norm)
 
                 # Clipping bounds
-                x_adv = clip_tensor(x_adv, config.clip_min, config.clip_max)
+                x_adv = clip_tensor(x_adv, clip_min, clip_max)
 
             return x_adv.detach()
 

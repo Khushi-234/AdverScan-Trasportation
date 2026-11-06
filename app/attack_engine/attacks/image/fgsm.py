@@ -56,6 +56,11 @@ class FGSM(BaseAttack):
         Validate FGSM-specific configuration.
         """
         validate_attack_config(config)
+        if config is not None:
+            params = config.params or {}
+            eps = params.get("epsilon", config.epsilon)
+            if eps is not None and eps < 0:
+                raise AttackConfigurationError(f"Epsilon cannot be negative, got {eps}")
 
     def generate(self, inputs: Any, labels: Any, config: Optional[AttackConfig] = None) -> Any:
         """
@@ -76,7 +81,12 @@ class FGSM(BaseAttack):
         validate_inputs(inputs, labels, attack_name="FGSM")
 
         params = config.params or {}
-        targeted = params.get("targeted", False)
+        targeted = bool(params.get("targeted", False))
+        target_label = params.get("target_label", params.get("target", None))
+        epsilon = float(params.get("epsilon", config.epsilon if config.epsilon is not None else 0.1))
+        clip_min = params.get("clip_min", config.clip_min)
+        clip_max = params.get("clip_max", config.clip_max)
+        loss_fn = params.get("loss_fn", config.loss_fn) or nn.CrossEntropyLoss()
 
         # Device selection
         device = get_device(self.raw_model)
@@ -88,11 +98,17 @@ class FGSM(BaseAttack):
         labels = labels.to(device)
         inputs.requires_grad_(True)
 
-        # Determine loss function
-        if config.loss_fn is not None:
-            loss_fn = config.loss_fn
+        # Determine target tensor if explicitly provided
+        if targeted and target_label is not None:
+            if isinstance(target_label, int):
+                loss_labels = torch.full((inputs.size(0),), target_label, dtype=torch.long, device=device)
+            else:
+                target_tensor = torch.as_tensor(target_label, dtype=torch.long, device=device)
+                if target_tensor.dim() == 0:
+                    target_tensor = target_tensor.repeat(inputs.size(0))
+                loss_labels = target_tensor
         else:
-            loss_fn = nn.CrossEntropyLoss()
+            loss_labels = labels
 
         was_training = self.raw_model.training
         self.raw_model.eval()
@@ -100,7 +116,7 @@ class FGSM(BaseAttack):
         try:
             outputs = self.raw_model(inputs)
             logits = outputs.logits if hasattr(outputs, "logits") else outputs
-            loss = loss_fn(logits, labels)
+            loss = loss_fn(logits, loss_labels)
 
             grad = torch.autograd.grad(
                 loss,
@@ -114,7 +130,6 @@ class FGSM(BaseAttack):
                     "Gradients w.r.t input tensor were not computed."
                 )
 
-            epsilon = config.epsilon
             grad_sign = grad.sign()
 
             if targeted:
@@ -124,8 +139,8 @@ class FGSM(BaseAttack):
 
             adv_inputs = clip_tensor(
                 adv_inputs,
-                config.clip_min,
-                config.clip_max
+                clip_min,
+                clip_max
             )
 
             return adv_inputs.detach()
