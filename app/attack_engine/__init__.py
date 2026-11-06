@@ -39,6 +39,12 @@ from app.attack_engine.attack_selector import (
 )
 from app.attack_engine.attack_executor import execute_attack
 from app.attack_engine.attack_engine import AttackEngine, run_attack_pipeline
+from app.attack_engine.parameter_registry import (
+    ParameterSpec,
+    get_attack_param_specs,
+    get_supported_attacks,
+    validate_attack_params,
+)
 
 __all__ = [
     "BaseAttack",
@@ -75,4 +81,8 @@ __all__ = [
     "execute_attack",
     "AttackEngine",
     "run_attack_pipeline",
+    "ParameterSpec",
+    "get_attack_param_specs",
+    "get_supported_attacks",
+    "validate_attack_params",
 ]
