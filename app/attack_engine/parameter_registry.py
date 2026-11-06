@@ -199,20 +199,38 @@ _ATTACK_ALIASES: Dict[str, Dict[str, str]] = {
 
 # Runtime dependencies and dataset constraints kept separate from attack hyperparameters
 RUNTIME_CONTEXT_KEYS: Set[str] = {
+    # Models, tokenizers, auxiliary encoders
     "tokenizer",
     "embedding_layer",
     "vae",
     "vae_model",
     "device",
     "loss_fn",
+    # Tabular dataset constraints and metadata
+    "feature_metadata",
+    "tabular_metadata",
+    "immutable_features",
+    "categorical_features",
+    "integer_features",
+    "binary_features",
+    "feature_names",
+    "feature_importance",
+    "importance_weights",
+    "feature_perturbation_limits",
+    "perturbation_limits",
+    "distance_metric",
+    "random_init",
+    # Time-series constraints and options
     "feature_bounds",
     "bounds",
-    "feature_names",
-    "categorical_features",
     "feature_min",
     "feature_max",
+    "tv_norm",
+    "regularize_perturbation",
     "max_allowed_delta",
     "max_delta",
+    # Text tokenization constraints
+    "max_length",
 }
 
 
@@ -298,7 +316,7 @@ _ATTACK_PARAM_REGISTRY: Dict[str, Dict[str, List[ParameterSpec]]] = {
                 min_value=1,
                 description="Number of iterative gradient steps",
                 required=False,
-                aliases=["steps", "iters"],
+                aliases=["steps", "iters", "iterations", "max_iter", "max_iterations"],
                 ui_control="number_input",
             ),
             ParameterSpec(
@@ -384,6 +402,15 @@ _ATTACK_PARAM_REGISTRY: Dict[str, Dict[str, List[ParameterSpec]]] = {
                 ui_control="number_input",
             ),
             ParameterSpec(
+                name="epsilon",
+                data_type="float",
+                default=None,
+                min_value=0.0,
+                description="Optional maximum perturbation radius epsilon cap (unbounded search if None)",
+                required=False,
+                ui_control="number_input",
+            ),
+            ParameterSpec(
                 name="clip_min",
                 data_type="float",
                 default=0.0,
@@ -425,17 +452,17 @@ _ATTACK_PARAM_REGISTRY: Dict[str, Dict[str, List[ParameterSpec]]] = {
             ParameterSpec(
                 name="max_iterations",
                 data_type="int",
-                default=1000,
+                default=20,
                 min_value=1,
-                description="Maximum optimization iterations per search step",
+                description="Optimization steps per binary search step",
                 required=False,
-                aliases=["iters", "num_steps"],
+                aliases=["iters", "num_steps", "steps"],
                 ui_control="number_input",
             ),
             ParameterSpec(
                 name="binary_search_steps",
                 data_type="int",
-                default=9,
+                default=1,
                 min_value=1,
                 description="Number of binary search steps for trade-off constant c",
                 required=False,
@@ -444,21 +471,13 @@ _ATTACK_PARAM_REGISTRY: Dict[str, Dict[str, List[ParameterSpec]]] = {
             ParameterSpec(
                 name="initial_const",
                 data_type="float",
-                default=0.001,
+                default=1.0,
                 min_value=0.0,
                 exclusive_min=True,
                 description="Initial trade-off constant c for binary search",
                 required=False,
                 aliases=["c"],
                 ui_control="number_input",
-            ),
-            ParameterSpec(
-                name="abort_early",
-                data_type="bool",
-                default=True,
-                description="Whether to abort optimization early if loss plateaus",
-                required=False,
-                ui_control="checkbox",
             ),
             ParameterSpec(
                 name="targeted",
@@ -535,6 +554,15 @@ _ATTACK_PARAM_REGISTRY: Dict[str, Dict[str, List[ParameterSpec]]] = {
                 ui_control="number_input",
             ),
             ParameterSpec(
+                name="top_k",
+                data_type="int",
+                default=None,
+                min_value=1,
+                description="Number of nearest classes to evaluate at each step",
+                required=False,
+                ui_control="number_input",
+            ),
+            ParameterSpec(
                 name="alpha_max",
                 data_type="float",
                 default=0.1,
@@ -580,7 +608,7 @@ _ATTACK_PARAM_REGISTRY: Dict[str, Dict[str, List[ParameterSpec]]] = {
                 description="Target class index for targeted attack",
                 required=False,
                 conditional_visibility={"targeted": True},
-                aliases=["target"],
+                aliases=["target", "target_labels"],
                 ui_control="number_input",
             ),
             ParameterSpec(
@@ -634,7 +662,7 @@ _ATTACK_PARAM_REGISTRY: Dict[str, Dict[str, List[ParameterSpec]]] = {
                 min_value=1,
                 description="Number of PGD optimization iterations",
                 required=False,
-                aliases=["steps", "iterations"],
+                aliases=["steps", "iterations", "iters", "max_iter", "max_iterations"],
                 ui_control="number_input",
             ),
             ParameterSpec(
@@ -684,7 +712,7 @@ _ATTACK_PARAM_REGISTRY: Dict[str, Dict[str, List[ParameterSpec]]] = {
                 min_value=1,
                 description="Number of iterative optimization steps",
                 required=False,
-                aliases=["steps", "iterations"],
+                aliases=["steps", "iterations", "iters", "max_iter", "max_iterations"],
                 ui_control="number_input",
             ),
             ParameterSpec(
@@ -767,7 +795,7 @@ _ATTACK_PARAM_REGISTRY: Dict[str, Dict[str, List[ParameterSpec]]] = {
                 min_value=1,
                 description="Number of Adam optimization iterations",
                 required=False,
-                aliases=["num_steps", "steps"],
+                aliases=["num_steps", "steps", "iters", "iterations", "max_iter"],
                 ui_control="number_input",
             ),
             ParameterSpec(
@@ -859,7 +887,7 @@ _ATTACK_PARAM_REGISTRY: Dict[str, Dict[str, List[ParameterSpec]]] = {
                 min_value=1,
                 description="Number of latent space gradient steps",
                 required=False,
-                aliases=["steps", "iterations"],
+                aliases=["steps", "iterations", "iters", "max_iter", "max_iterations"],
                 ui_control="number_input",
             ),
             ParameterSpec(
@@ -924,7 +952,7 @@ _ATTACK_PARAM_REGISTRY: Dict[str, Dict[str, List[ParameterSpec]]] = {
                 min_value=1,
                 description="Number of gradient iterations",
                 required=False,
-                aliases=["steps", "iters"],
+                aliases=["steps", "iters", "iterations", "max_iter", "max_iterations"],
                 ui_control="number_input",
             ),
             ParameterSpec(
@@ -1007,7 +1035,7 @@ _ATTACK_PARAM_REGISTRY: Dict[str, Dict[str, List[ParameterSpec]]] = {
                 min_value=1,
                 description="Number of gradient iterations",
                 required=False,
-                aliases=["steps", "iters"],
+                aliases=["steps", "iters", "iterations", "max_iter", "max_iterations"],
                 ui_control="number_input",
             ),
             ParameterSpec(
@@ -1100,7 +1128,7 @@ _ATTACK_PARAM_REGISTRY: Dict[str, Dict[str, List[ParameterSpec]]] = {
                 min_value=1,
                 description="Number of gradient iterations",
                 required=False,
-                aliases=["steps", "iters"],
+                aliases=["steps", "iters", "iterations", "max_iter", "max_iterations"],
                 ui_control="number_input",
             ),
             ParameterSpec(
@@ -1129,23 +1157,6 @@ _ATTACK_PARAM_REGISTRY: Dict[str, Dict[str, List[ParameterSpec]]] = {
                 description="Targeted frequency band",
                 required=False,
                 ui_control="select",
-            ),
-            ParameterSpec(
-                name="wavelet",
-                data_type="str",
-                default="haar",
-                description="Wavelet basis type",
-                required=False,
-                ui_control="text_input",
-            ),
-            ParameterSpec(
-                name="level",
-                data_type="int",
-                default=1,
-                min_value=1,
-                description="Wavelet decomposition level",
-                required=False,
-                ui_control="number_input",
             ),
             ParameterSpec(
                 name="clip_min",
@@ -1200,7 +1211,7 @@ _ATTACK_PARAM_REGISTRY: Dict[str, Dict[str, List[ParameterSpec]]] = {
                 exclusive_min=True,
                 description="Step size per iteration",
                 required=False,
-                aliases=["step_size"],
+                aliases=["step_size", "lr"],
                 ui_control="number_input",
             ),
             ParameterSpec(
@@ -1210,7 +1221,7 @@ _ATTACK_PARAM_REGISTRY: Dict[str, Dict[str, List[ParameterSpec]]] = {
                 min_value=1,
                 description="Number of gradient iterations",
                 required=False,
-                aliases=["steps", "iters"],
+                aliases=["steps", "iters", "iterations", "max_iter", "max_iterations"],
                 ui_control="number_input",
             ),
             ParameterSpec(
@@ -1220,7 +1231,7 @@ _ATTACK_PARAM_REGISTRY: Dict[str, Dict[str, List[ParameterSpec]]] = {
                 min_value=0.0,
                 description="Maximum temporal warp budget",
                 required=False,
-                aliases=["epsilon_warp"],
+                aliases=["epsilon_warp", "epsilon"],
                 ui_control="number_input",
             ),
             ParameterSpec(
@@ -1241,6 +1252,24 @@ _ATTACK_PARAM_REGISTRY: Dict[str, Dict[str, List[ParameterSpec]]] = {
                 description="DTW shape loss penalty weight",
                 required=False,
                 aliases=["dtw_weight"],
+                ui_control="number_input",
+            ),
+            ParameterSpec(
+                name="lambda_smooth",
+                data_type="float",
+                default=0.01,
+                min_value=0.0,
+                description="Temporal smoothness penalty weight",
+                required=False,
+                ui_control="number_input",
+            ),
+            ParameterSpec(
+                name="downsample_threshold",
+                data_type="int",
+                default=64,
+                min_value=1,
+                description="Sequence length threshold to downsample for soft-DTW",
+                required=False,
                 ui_control="number_input",
             ),
             ParameterSpec(
@@ -1295,7 +1324,7 @@ _ATTACK_PARAM_REGISTRY: Dict[str, Dict[str, List[ParameterSpec]]] = {
                 min_value=1,
                 description="Maximum saliency modification steps",
                 required=False,
-                aliases=["max_iterations", "max_locations", "max_steps"],
+                aliases=["max_iterations", "max_locations", "max_steps", "num_steps", "steps", "iters"],
                 ui_control="number_input",
             ),
             ParameterSpec(
@@ -1844,28 +1873,43 @@ def validate_attack_params(
 
         # Type and Value Validation
         if spec.data_type == "int":
-            if not isinstance(raw_val, int) or isinstance(raw_val, bool):
-                raise AttackConfigurationError(
-                    f"Parameter '{canonical_name}' must be an integer, got {type(raw_val).__name__} ({raw_val})."
+            if canonical_name == "target_label":
+                is_valid_target = (
+                    (isinstance(raw_val, int) and not isinstance(raw_val, bool))
+                    or hasattr(raw_val, "shape")
+                    or isinstance(raw_val, (list, tuple))
                 )
-            if spec.min_value is not None:
-                if spec.exclusive_min and raw_val <= spec.min_value:
+                if not is_valid_target:
                     raise AttackConfigurationError(
-                        f"Parameter '{canonical_name}' must be strictly greater than {spec.min_value}, got {raw_val}."
+                        f"Parameter '{canonical_name}' must be an integer class index or target tensor/list, got {type(raw_val).__name__} ({raw_val})."
                     )
-                elif not spec.exclusive_min and raw_val < spec.min_value:
+                if isinstance(raw_val, int) and raw_val < 0:
                     raise AttackConfigurationError(
-                        f"Parameter '{canonical_name}' must be at least {spec.min_value}, got {raw_val}."
+                        f"Parameter '{canonical_name}' must be at least 0, got {raw_val}."
                     )
-            if spec.max_value is not None:
-                if spec.exclusive_max and raw_val >= spec.max_value:
+            else:
+                if not isinstance(raw_val, int) or isinstance(raw_val, bool):
                     raise AttackConfigurationError(
-                        f"Parameter '{canonical_name}' must be strictly less than {spec.max_value}, got {raw_val}."
+                        f"Parameter '{canonical_name}' must be an integer, got {type(raw_val).__name__} ({raw_val})."
                     )
-                elif not spec.exclusive_max and raw_val > spec.max_value:
-                    raise AttackConfigurationError(
-                        f"Parameter '{canonical_name}' must be at most {spec.max_value}, got {raw_val}."
-                    )
+                if spec.min_value is not None:
+                    if spec.exclusive_min and raw_val <= spec.min_value:
+                        raise AttackConfigurationError(
+                            f"Parameter '{canonical_name}' must be strictly greater than {spec.min_value}, got {raw_val}."
+                        )
+                    elif not spec.exclusive_min and raw_val < spec.min_value:
+                        raise AttackConfigurationError(
+                            f"Parameter '{canonical_name}' must be at least {spec.min_value}, got {raw_val}."
+                        )
+                if spec.max_value is not None:
+                    if spec.exclusive_max and raw_val >= spec.max_value:
+                        raise AttackConfigurationError(
+                            f"Parameter '{canonical_name}' must be strictly less than {spec.max_value}, got {raw_val}."
+                        )
+                    elif not spec.exclusive_max and raw_val > spec.max_value:
+                        raise AttackConfigurationError(
+                            f"Parameter '{canonical_name}' must be at most {spec.max_value}, got {raw_val}."
+                        )
             validated_params[canonical_name] = raw_val
 
         elif spec.data_type == "float":
@@ -1984,6 +2028,99 @@ def validate_attack_params(
     return validated_params
 
 
+def prepare_attack_config(
+    domain: str,
+    attack_name: str,
+    config: Optional[Any] = None,
+) -> Any:
+    """
+    Validate and normalize an AttackConfig for a specific attack using the parameter registry.
+
+    1. Resolves canonical domain and attack name. If attack is uncataloged, leaves config as-is.
+    2. Collects attack-specific parameters from config.params and relevant direct fields.
+    3. Validates hyperparameters using validate_attack_params():
+       - Enforces data types, range bounds, allowed values, and conditional visibility.
+       - Resolves aliases to canonical parameter names.
+       - Rejects unsupported parameters with clear error messages.
+       - Preserves runtime context (tokenizer, VAE, loss function, bounds, device) untouched.
+    4. Updates config.params with the validated and normalized dictionary.
+
+    Args:
+        domain: Input domain identifier ('image', 'tabular', 'time_series', 'text').
+        attack_name: Attack name or alias.
+        config: Optional AttackConfig instance. If None, a new default AttackConfig is created.
+
+    Returns:
+        The normalized and validated AttackConfig instance.
+
+    Raises:
+        AttackConfigurationError: If any parameter value or constraint is invalid.
+    """
+    if config is None:
+        from app.attack_engine.config import AttackConfig
+        config = AttackConfig()
+
+    try:
+        norm_domain = normalize_domain(domain)
+        canonical_attack = normalize_attack_name(norm_domain, attack_name)
+        specs = get_attack_param_specs(norm_domain, canonical_attack)
+        spec_names = {s.name for s in specs}
+    except AttackConfigurationError:
+        # Non-registered / custom attack: preserve backward compatibility
+        return config
+
+    raw_params = dict(config.params) if getattr(config, "params", None) else {}
+
+    # Incorporate direct config attributes if supported by this attack and not already in raw_params
+    if "epsilon" in spec_names and "epsilon" not in raw_params:
+        if getattr(config, "epsilon", None) is not None:
+            raw_params["epsilon"] = config.epsilon
+
+    if "clip_min" in spec_names and "clip_min" not in raw_params:
+        if norm_domain == "image":
+            if getattr(config, "clip_min", None) is not None:
+                raw_params["clip_min"] = config.clip_min
+        elif norm_domain == "time_series":
+            if getattr(config, "clip_min", None) not in (None, 0.0):
+                raw_params["clip_min"] = config.clip_min
+
+    if "clip_max" in spec_names and "clip_max" not in raw_params:
+        if norm_domain == "image":
+            if getattr(config, "clip_max", None) is not None:
+                raw_params["clip_max"] = config.clip_max
+        elif norm_domain == "time_series":
+            if getattr(config, "clip_max", None) not in (None, 1.0):
+                raw_params["clip_max"] = config.clip_max
+
+    if getattr(config, "loss_fn", None) is not None and "loss_fn" not in raw_params:
+        raw_params["loss_fn"] = config.loss_fn
+
+    if getattr(config, "targeted", None) is not None and "targeted" not in raw_params:
+        raw_params["targeted"] = config.targeted
+
+    if getattr(config, "target_label", None) is not None and "target_label" not in raw_params:
+        raw_params["target_label"] = config.target_label
+
+    validated_params = validate_attack_params(
+        domain=norm_domain,
+        attack_name=canonical_attack,
+        params=raw_params,
+        fill_defaults=False,
+    )
+
+    config.params = validated_params
+    if "epsilon" in validated_params:
+        config.epsilon = validated_params["epsilon"]
+    if "clip_min" in validated_params:
+        config.clip_min = validated_params["clip_min"]
+    if "clip_max" in validated_params:
+        config.clip_max = validated_params["clip_max"]
+    if "loss_fn" in validated_params:
+        config.loss_fn = validated_params["loss_fn"]
+
+    return config
+
+
 __all__ = [
     "ParameterSpec",
     "SUPPORTED_DOMAINS",
@@ -1994,5 +2131,6 @@ __all__ = [
     "get_attack_param_specs",
     "get_attack_param_specs_dict",
     "validate_attack_params",
+    "prepare_attack_config",
 ]
 

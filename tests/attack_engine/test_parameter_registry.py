@@ -103,9 +103,9 @@ def test_get_supported_attacks_text():
         # Image
         ("image", "fgsm", ["epsilon", "clip_min", "clip_max", "targeted", "target_label"]),
         ("image", "pgd", ["epsilon", "alpha", "num_steps", "norm", "random_start", "clip_min", "clip_max", "targeted", "target_label"]),
-        ("image", "deepfool", ["max_iter", "overshoot", "top_k", "clip_min", "clip_max"]),
-        ("image", "cw", ["confidence", "learning_rate", "max_iterations", "binary_search_steps", "initial_const", "abort_early", "targeted", "target_label", "clip_min", "clip_max"]),
-        ("image", "fab", ["norm", "n_restarts", "n_iter", "eps", "alpha_max", "eta", "beta", "targeted", "target_label", "clip_min", "clip_max"]),
+        ("image", "deepfool", ["max_iter", "overshoot", "top_k", "epsilon", "clip_min", "clip_max"]),
+        ("image", "cw", ["confidence", "learning_rate", "max_iterations", "binary_search_steps", "initial_const", "targeted", "target_label", "clip_min", "clip_max"]),
+        ("image", "fab", ["norm", "n_restarts", "n_iter", "eps", "top_k", "alpha_max", "eta", "beta", "targeted", "target_label", "clip_min", "clip_max"]),
         # Tabular
         ("tabular", "cap_pgd", ["epsilon", "alpha", "num_steps", "norm", "targeted", "target_label"]),
         ("tabular", "lowprofool", ["alpha", "num_steps", "lambda_weight", "budget", "targeted", "target_label"]),
@@ -115,8 +115,8 @@ def test_get_supported_attacks_text():
         # Time-series
         ("time_series", "time_series_pgd", ["epsilon", "alpha", "num_steps", "norm", "random_start", "clip_min", "clip_max", "targeted", "target_label"]),
         ("time_series", "smooth_pgd", ["epsilon", "alpha", "num_steps", "norm", "tv_weight", "random_start", "clip_min", "clip_max", "targeted", "target_label"]),
-        ("time_series", "wavelet_attack", ["epsilon", "alpha", "num_steps", "norm", "transform_type", "band", "wavelet", "level", "clip_min", "clip_max", "targeted", "target_label"]),
-        ("time_series", "soft_dtw_attack", ["epsilon", "alpha", "num_steps", "max_warp", "gamma", "lambda_dtw", "clip_min", "clip_max", "targeted", "target_label"]),
+        ("time_series", "wavelet_attack", ["epsilon", "alpha", "num_steps", "norm", "transform_type", "band", "clip_min", "clip_max", "targeted", "target_label"]),
+        ("time_series", "soft_dtw_attack", ["epsilon", "alpha", "num_steps", "max_warp", "gamma", "lambda_dtw", "lambda_smooth", "downsample_threshold", "clip_min", "clip_max", "targeted", "target_label"]),
         ("time_series", "jsma", ["theta", "max_iter", "max_fraction", "increase", "clip_min", "clip_max", "targeted", "target_label"]),
         # Text
         ("text", "hotflip", ["max_modifications", "candidate_vocab_size", "targeted", "target_label"]),
