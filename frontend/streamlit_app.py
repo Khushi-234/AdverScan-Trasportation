@@ -281,16 +281,11 @@ elif stage == "ingestion":
         if sample_choice.startswith("Half Dataset"):
             sample_size = half_samples
             st.markdown(
-                f"""
-                <div style="background: rgba(16, 185, 129, 0.08); border: 1px solid rgba(16, 185, 129, 0.25); border-radius: 8px; padding: 10px 14px; margin-top: 6px;">
-                    <div style="font-weight: 700; color: var(--stat-val-emerald); font-size: 0.95rem;">
-                        ⚡ Half Dataset Mode Selected
-                    </div>
-                    <div style="font-size: 0.85rem; color: var(--text-secondary); margin-top: 4px; line-height: 1.4;">
-                        Evaluating <strong>{sample_size:,}</strong> samples (50.0% coverage of {total_avail_samples:,} total samples).
-                    </div>
-                </div>
-                """,
+                f'<div style="background: rgba(16, 185, 129, 0.08); border: 1px solid rgba(16, 185, 129, 0.25); border-radius: 8px; padding: 10px 14px; margin-top: 6px;">'
+                f'<div style="font-weight: 700; color: var(--stat-val-emerald); font-size: 0.95rem;">⚡ Half Dataset Mode Selected</div>'
+                f'<div style="font-size: 0.85rem; color: var(--text-secondary); margin-top: 4px; line-height: 1.4;">'
+                f'Evaluating <strong>{sample_size:,}</strong> samples (50.0% coverage of {total_avail_samples:,} total samples).'
+                f'</div></div>',
                 unsafe_allow_html=True,
             )
         elif sample_choice.startswith("Full Dataset"):
@@ -299,17 +294,11 @@ elif stage == "ingestion":
             if full_samples > 1000 and default_domain in ("image", "vision"):
                 warning_msg = f"<div style='font-size: 0.78rem; color: #f59e0b; margin-top: 4px;'>⚠️ Note: Ingesting {sample_size:,} vision tensors will run gradient backpropagation across all images.</div>"
             st.markdown(
-                f"""
-                <div style="background: rgba(139, 92, 246, 0.08); border: 1px solid rgba(139, 92, 246, 0.25); border-radius: 8px; padding: 10px 14px; margin-top: 6px;">
-                    <div style="font-weight: 700; color: #8b5cf6; font-size: 0.95rem;">
-                        🚀 Full Dataset Mode Selected
-                    </div>
-                    <div style="font-size: 0.85rem; color: var(--text-secondary); margin-top: 4px; line-height: 1.4;">
-                        Evaluating all <strong>{sample_size:,}</strong> samples (100.0% full benchmark coverage).
-                        {warning_msg}
-                    </div>
-                </div>
-                """,
+                f'<div style="background: rgba(139, 92, 246, 0.08); border: 1px solid rgba(139, 92, 246, 0.25); border-radius: 8px; padding: 10px 14px; margin-top: 6px;">'
+                f'<div style="font-weight: 700; color: #8b5cf6; font-size: 0.95rem;">🚀 Full Dataset Mode Selected</div>'
+                f'<div style="font-size: 0.85rem; color: var(--text-secondary); margin-top: 4px; line-height: 1.4;">'
+                f'Evaluating all <strong>{sample_size:,}</strong> samples (100.0% full benchmark coverage).'
+                f'{warning_msg}</div></div>',
                 unsafe_allow_html=True,
             )
         else:
@@ -593,11 +582,19 @@ elif stage == "attack_config":
     model_adapter = active_data["adapter"]
     domain = active_data.get("domain", "image")
     meta_dict = active_data.get("metadata_dict") or active_data.get("telemetry") or {}
-    available_samples = (
-        active_data.get("test_inputs").shape[0]
-        if active_data.get("test_inputs") is not None
-        else 1
-    )
+    raw_test_inputs = active_data.get("test_inputs")
+    if raw_test_inputs is not None:
+        if hasattr(raw_test_inputs, "shape") and len(raw_test_inputs.shape) > 0:
+            available_samples = int(raw_test_inputs.shape[0])
+        elif isinstance(raw_test_inputs, dict):
+            first_v = next(iter(raw_test_inputs.values()), None)
+            available_samples = len(first_v) if first_v is not None else 1
+        elif hasattr(raw_test_inputs, "__len__"):
+            available_samples = len(raw_test_inputs)
+        else:
+            available_samples = 1
+    else:
+        available_samples = 1
 
     # Target Model Banner
     model_name_disp = (
@@ -857,14 +854,13 @@ elif stage == "attack_config":
                 )
                 params_dict["binary_search_steps"] = binary_search_steps
 
-            params_dict["initial_const"] = c_param
-            params_dict["c"] = c_param
-            params_dict["c_penalty"] = c_param
-            params_dict["confidence"] = confidence
-            params_dict["kappa"] = confidence
-            params_dict["max_iterations"] = max_iter
-            params_dict["learning_rate"] = lr
-            params_dict["lr"] = lr
+            if "tabular" in atk_id or domain == "tabular":
+                params_dict["c_penalty"] = float(c_param)
+            else:
+                params_dict["initial_const"] = float(c_param)
+            params_dict["confidence"] = float(confidence)
+            params_dict["max_iterations"] = int(max_iter)
+            params_dict["learning_rate"] = float(lr)
             epsilon = 1.0  # Nominal reference bound for unconstrained L2 C&W
 
     elif is_deepfool:
@@ -960,10 +956,14 @@ elif stage == "attack_config":
             )
 
         with col_p2:
-            params_dict["max_features"] = max_features
-            params_dict["max_modifications"] = max_features
-            params_dict["step_size"] = step_size
             params_dict["theta"] = step_size
+            if atk_id in ("time_series_jsma", "jsma") and domain in ("time-series", "timeseries"):
+                params_dict["max_iter"] = int(max_features)
+                params_dict["max_fraction"] = 1.0
+                params_dict["increase"] = True
+            else:
+                params_dict["max_features"] = int(max_features)
+                params_dict["max_modifications"] = int(max_features)
             epsilon = float(step_size)
 
     elif is_soft_dtw:
@@ -1015,7 +1015,7 @@ elif stage == "attack_config":
             params_dict["gamma"] = gamma
             params_dict["lambda_dtw"] = lambda_dtw
             params_dict["num_steps"] = num_steps
-            params_dict["learning_rate"] = lr
+            params_dict["alpha"] = lr
             params_dict["lr"] = lr
             epsilon = float(max_warp)
 
@@ -1158,13 +1158,48 @@ elif stage == "attack_config":
         # --- TEXT TOKEN ATTACKS (HotFlip, TextBugger, Gradient Substitution) ---
         with col_p1:
             max_mod = st.slider("Max Token Replacements", min_value=1, max_value=10, value=3, step=1, help="Maximum words or subwords to substitute")
-            num_steps = st.slider("Search Iterations", min_value=2, max_value=30, value=10, step=1)
             clip_min = 0.0
             clip_max = 1.0
 
         with col_p2:
-            params_dict["max_modifications"] = max_mod
-            params_dict["num_steps"] = num_steps
+            params_dict["max_modifications"] = int(max_mod)
+            if atk_id == "hotflip":
+                cand_size = st.slider(
+                    "Candidate Vocab Size (Top-k)",
+                    min_value=5,
+                    max_value=100,
+                    value=50,
+                    step=5,
+                    help="Top-k nearest gradient candidate vocabulary tokens to evaluate",
+                )
+                params_dict["candidate_vocab_size"] = int(cand_size)
+            elif atk_id == "textbugger_wb":
+                bug_types = st.multiselect(
+                    "Bug Transformation Types",
+                    options=["insert", "delete", "swap", "sub_c", "sub_w"],
+                    default=["insert", "delete", "swap", "sub_c", "sub_w"],
+                    help="Allowed character/word bug perturbation operators",
+                )
+                params_dict["bug_types"] = bug_types if bug_types else ["sub_w"]
+            elif atk_id == "gradient_substitution":
+                num_cand = st.slider(
+                    "Candidate Tokens (Top-k)",
+                    min_value=2,
+                    max_value=50,
+                    value=10,
+                    step=2,
+                    help="Top candidates filtered by gradient first-order Taylor approximation",
+                )
+                sim_thresh = st.slider(
+                    "Cosine Similarity Threshold",
+                    min_value=0.1,
+                    max_value=0.9,
+                    value=0.4,
+                    step=0.05,
+                    help="Minimum cosine similarity required with original embedding",
+                )
+                params_dict["num_candidates"] = int(num_cand)
+                params_dict["similarity_threshold"] = float(sim_thresh)
             epsilon = 0.05
 
     elif is_universal_trigger:
@@ -1176,8 +1211,8 @@ elif stage == "attack_config":
             clip_max = 1.0
 
         with col_p2:
-            params_dict["trigger_length"] = trigger_len
-            params_dict["num_steps"] = num_steps
+            params_dict["trigger_length"] = int(trigger_len)
+            params_dict["num_iterations"] = int(num_steps)
             epsilon = 0.05
 
     else:
@@ -1352,7 +1387,12 @@ elif stage == "attack_config":
 
         # Slice samples based on user selection
         if test_inputs is not None:
-            eval_inputs = test_inputs[:eval_sample_count]
+            if hasattr(test_inputs, "items"):
+                eval_inputs = {k: (v[:eval_sample_count] if hasattr(v, "__getitem__") else v) for k, v in test_inputs.items()}
+            elif hasattr(test_inputs, "__getitem__"):
+                eval_inputs = test_inputs[:eval_sample_count]
+            else:
+                eval_inputs = test_inputs
         else:
             eval_inputs = None
 

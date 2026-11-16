@@ -304,8 +304,8 @@ def load_model_and_dataset(
         test_inputs, test_labels = _generate_domain_sample_batch(metadata, sample_size)
         is_synthetic_dataset = True
 
-    actual_evaluated_samples = (
-        int(test_inputs.shape[0]) if test_inputs is not None else sample_size
+    actual_evaluated_samples = _get_input_sample_count(
+        test_inputs, default=sample_size
     )
 
     # Class resolution
@@ -339,11 +339,11 @@ def load_model_and_dataset(
     )
 
     # Observed input tensor shape
-    observed_input_shape = (
-        list(test_inputs.shape[1:])
-        if test_inputs is not None
-        else (preset_info.get("input_resolution") or metadata.input_shape or None)
-    )
+    observed_input_shape, batch_shape_str = _get_input_shape_desc(test_inputs)
+    if observed_input_shape is None:
+        observed_input_shape = (
+            preset_info.get("input_resolution") or metadata.input_shape or None
+        )
 
     total_dataset_samples = get_dataset_total_samples(
         dataset_name=resolved_dataset,
@@ -378,9 +378,7 @@ def load_model_and_dataset(
             if observed_input_shape is not None
             else "Not available"
         ),
-        "batch_shape": (
-            str(list(test_inputs.shape)) if test_inputs is not None else "Not available"
-        ),
+        "batch_shape": batch_shape_str,
         "sample_count": actual_evaluated_samples,
         "gradient_access": gradient_access,
         "supports_gradients": supports_gradients,
@@ -421,11 +419,7 @@ def load_model_and_dataset(
         "model_architecture": arch_name,
         "num_classes": metadata_dict["Total Classes"],
         "input_shape": metadata_dict["Input Shape"],
-        "batch_tensor_shape": str(
-            list(test_inputs.shape)
-            if test_inputs is not None
-            else f"({sample_size}, ...)"
-        ),
+        "batch_tensor_shape": batch_shape_str,
         "sample_size": actual_evaluated_samples,
         "total_dataset_samples": total_dataset_samples,
         "device": device_name,
@@ -438,10 +432,47 @@ def load_model_and_dataset(
     }
 
 
+def _get_input_sample_count(inputs: Any, default: int = 1) -> int:
+    """Safely count number of evaluation samples across tensors, dicts, BatchEncodings, and lists."""
+    if inputs is None:
+        return default
+    if hasattr(inputs, "shape") and len(inputs.shape) > 0:
+        return int(inputs.shape[0])
+    if isinstance(inputs, dict):
+        for k in ("input_ids", "inputs", "pixel_values", "values"):
+            if k in inputs and hasattr(inputs[k], "shape") and len(inputs[k].shape) > 0:
+                return int(inputs[k].shape[0])
+        for v in inputs.values():
+            if hasattr(v, "__len__"):
+                return len(v)
+    if hasattr(inputs, "__len__"):
+        return len(inputs)
+    return default
+
+
+def _get_input_shape_desc(inputs: Any) -> Tuple[Optional[List[int]], str]:
+    """Safely describe input and batch shape across arbitrary tensor, dict, and text structures."""
+    if inputs is None:
+        return None, "Not available"
+    if hasattr(inputs, "shape"):
+        try:
+            return list(inputs.shape[1:]), str(list(inputs.shape))
+        except Exception:
+            pass
+    if isinstance(inputs, dict):
+        for k in ("input_ids", "inputs", "pixel_values", "values"):
+            if k in inputs and hasattr(inputs[k], "shape"):
+                return list(inputs[k].shape[1:]), f"Dict[{k}: {list(inputs[k].shape)}]"
+        return None, f"Dict[{', '.join(inputs.keys())}]"
+    if hasattr(inputs, "__len__"):
+        return None, f"({len(inputs)}, ...)"
+    return None, "Not available"
+
+
 def _generate_domain_sample_batch(
     metadata: Any, sample_size: int = 10
-) -> Tuple[torch.Tensor, torch.Tensor]:
-    """Generate a sample input tensor conforming to the model's expected shape."""
+) -> Tuple[Any, Any]:
+    """Generate a sample input tensor conforming to the model's expected shape and domain."""
     domain = str(getattr(metadata, "data_domain", "image")).lower().replace("_", "-")
     num_classes = getattr(metadata, "num_classes", 2) or 2
 
@@ -452,8 +483,20 @@ def _generate_domain_sample_batch(
         num_features = getattr(metadata, "num_features", 14) or 14
         inputs = torch.randn(sample_size, num_features)
         labels = torch.randint(0, num_classes, (sample_size,))
-    elif domain in ("time-series", "timeseries"):
-        inputs = torch.randn(sample_size, 1, 14)
+    elif domain in ("time-series", "timeseries", "sequence"):
+        # Correctly format time-series tensors as (batch_size, sequence_length, num_channels)
+        seq_len = getattr(metadata, "sequence_length", 14) or 14
+        num_channels = (
+            getattr(metadata, "num_channels", getattr(metadata, "num_features", 1)) or 1
+        )
+        inputs = torch.randn(sample_size, seq_len, num_channels)
+        labels = torch.randint(0, num_classes, (sample_size,))
+    elif domain in ("text", "nlp"):
+        # Generate tokenized text representation for text models
+        seq_len = getattr(metadata, "max_length", 32) or 32
+        input_ids = torch.randint(100, 2000, (sample_size, seq_len))
+        attention_mask = torch.ones((sample_size, seq_len), dtype=torch.long)
+        inputs = {"input_ids": input_ids, "attention_mask": attention_mask}
         labels = torch.randint(0, num_classes, (sample_size,))
     else:
         inputs = torch.rand(sample_size, 3, 224, 224)

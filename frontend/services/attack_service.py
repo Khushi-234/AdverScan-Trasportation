@@ -387,6 +387,29 @@ def get_class_labels_mapping(
     return {i: f"Class {i}" for i in range(n)}
 
 
+class SimpleTabularVAE(torch.nn.Module):
+    """Automatic lightweight fallback VAE for tabular models when model.vae is not pre-packaged."""
+    def __init__(self, in_features: int = 14, latent_dim: int = 4):
+        super().__init__()
+        l_dim = min(latent_dim, max(1, in_features // 2))
+        self.encoder = torch.nn.Sequential(
+            torch.nn.Linear(in_features, max(8, in_features)),
+            torch.nn.ReLU(),
+            torch.nn.Linear(max(8, in_features), l_dim),
+        )
+        self.decoder = torch.nn.Sequential(
+            torch.nn.Linear(l_dim, max(8, in_features)),
+            torch.nn.ReLU(),
+            torch.nn.Linear(max(8, in_features), in_features),
+        )
+
+    def encode(self, x: torch.Tensor) -> torch.Tensor:
+        return self.encoder(x)
+
+    def decode(self, z: torch.Tensor) -> torch.Tensor:
+        return self.decoder(z)
+
+
 def _execute_attack_batched(
     model: Any,
     attack_cls: Any,
@@ -427,16 +450,29 @@ def _execute_attack_batched(
         # Tabular 2D tensor [N, D]
         chunk_size = 64 if is_cuda else 128
 
+    # Filter out runtime return stats so they do not contaminate config.params
+    clean_params = {
+        k: v for k, v in (config.params or {}).items()
+        if k not in ("perturbation_stats", "weighted_distance", "success_rate")
+    }
+
     # If the batch is already small, run directly with memory cleanup
     if total_samples <= chunk_size:
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
+        single_config = AttackConfig(
+            epsilon=config.epsilon,
+            clip_min=config.clip_min,
+            clip_max=config.clip_max,
+            loss_fn=config.loss_fn,
+            params=dict(clean_params),
+        )
         return execute_attack(
             model=model,
             attack_cls=attack_cls,
             inputs=inputs,
             labels=labels,
-            config=config,
+            config=single_config,
         )
 
     # Process in safe micro-batches to guarantee VRAM bounds
@@ -458,13 +494,21 @@ def _execute_attack_batched(
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
 
+        chunk_config = AttackConfig(
+            epsilon=config.epsilon,
+            clip_min=config.clip_min,
+            clip_max=config.clip_max,
+            loss_fn=config.loss_fn,
+            params=dict(clean_params),
+        )
+
         try:
             chunk_res = execute_attack(
                 model=model,
                 attack_cls=attack_cls,
                 inputs=batch_inputs,
                 labels=batch_labels,
-                config=config,
+                config=chunk_config,
             )
         except Exception as oom_exc:
             # Fallback if a very large model (e.g. ViT-Large) still OOMs on 16: retry with half batch size
@@ -479,12 +523,19 @@ def _execute_attack_batched(
                     s_lbl = labels_tensor[s_i:e_i] if labels_tensor is not None else None
                     if torch.cuda.is_available():
                         torch.cuda.empty_cache()
+                    sub_cfg = AttackConfig(
+                        epsilon=config.epsilon,
+                        clip_min=config.clip_min,
+                        clip_max=config.clip_max,
+                        loss_fn=config.loss_fn,
+                        params=dict(clean_params),
+                    )
                     s_res = execute_attack(
                         model=model,
                         attack_cls=attack_cls,
                         inputs=s_in,
                         labels=s_lbl,
-                        config=config,
+                        config=sub_cfg,
                     )
                     if isinstance(s_res.adversarial_examples, torch.Tensor):
                         sub_advs.append(s_res.adversarial_examples.detach().cpu())

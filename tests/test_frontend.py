@@ -786,6 +786,27 @@ def test_cw_dynamic_attack_parameters_has_no_alpha():
     assert "alpha" not in res["parameters_used"]
     assert res["parameters_used"]["max_iterations"] == 5
 
+    # Test that passing c_penalty to image CW is accepted via alias mapping
+    res_c_pen = execute_configured_attack(
+        model=model,
+        attack_name="cw",
+        inputs=inputs,
+        labels=labels,
+        epsilon=0.0,
+        clip_min=0.0,
+        clip_max=1.0,
+        params={
+            "max_iterations": 5,
+            "learning_rate": 0.01,
+            "c_penalty": 1.5,
+            "confidence": 0.0,
+            "binary_search_steps": 1,
+        },
+    )
+    assert res_c_pen is not None
+    assert res_c_pen["parameters_used"]["c_penalty"] == 1.5
+    assert "asr_percentage" in res_c_pen
+
 
 def test_deepfool_and_jsma_dynamic_parameters():
     """Verify DeepFool and JSMA configure algorithm-accurate parameters without alpha."""
@@ -845,6 +866,62 @@ def test_batched_attack_execution_prevents_oom():
     assert "clean_accuracy" in res
     assert "adversarial_accuracy" in res
     assert "asr_percentage" in res
+
+
+def test_text_tokenizers_encoding_normalization_and_parameters():
+    """Verify that normalize_text_inputs supports tokenizers.Encoding-like objects and parameter registry accepts text parameters."""
+    from app.attack_engine.attacks.text._text_utils import prepare_text_inputs
+    from app.attack_engine.parameter_registry import prepare_attack_config
+    from app.attack_engine.config import AttackConfig
+
+    class MockEncoding:
+        def __init__(self, ids, mask):
+            self.ids = ids
+            self.attention_mask = mask
+
+    encodings = [
+        MockEncoding([101, 7592, 2088, 102], [1, 1, 1, 1]),
+        MockEncoding([101, 3231, 2048, 102], [1, 1, 1, 1]),
+    ]
+
+    input_ids, attention_mask, input_type, texts = prepare_text_inputs(encodings)
+    assert input_ids.shape == (2, 4)
+    assert attention_mask.shape == (2, 4)
+    assert input_type == "tensor"
+
+    # Test hotflip parameter validation
+    cfg_hotflip = prepare_attack_config(
+        domain="text",
+        attack_name="hotflip",
+        config=AttackConfig(params={"max_modifications": 3, "candidate_vocab_size": 25}),
+    )
+    assert cfg_hotflip.params["max_modifications"] == 3
+    assert cfg_hotflip.params["candidate_vocab_size"] == 25
+
+    # Test textbugger_wb parameter validation
+    cfg_bugger = prepare_attack_config(
+        domain="text",
+        attack_name="textbugger_wb",
+        config=AttackConfig(params={"max_modifications": 4, "bug_types": ["sub_w"]}),
+    )
+    assert cfg_bugger.params["max_modifications"] == 4
+
+    # Test gradient_substitution parameter validation
+    cfg_grad = prepare_attack_config(
+        domain="text",
+        attack_name="gradient_substitution",
+        config=AttackConfig(params={"max_modifications": 2, "num_candidates": 8, "similarity_threshold": 0.5}),
+    )
+    assert cfg_grad.params["max_modifications"] == 2
+    assert cfg_grad.params["num_candidates"] == 8
+
+    # Also test that if num_steps is passed to text token attacks, it is mapped to max_modifications
+    cfg_step_map = prepare_attack_config(
+        domain="text",
+        attack_name="hotflip",
+        config=AttackConfig(params={"num_steps": 5}),
+    )
+    assert cfg_step_map.params["max_modifications"] == 5
 
 
 
