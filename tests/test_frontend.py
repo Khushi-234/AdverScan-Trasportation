@@ -924,6 +924,71 @@ def test_text_tokenizers_encoding_normalization_and_parameters():
     assert cfg_step_map.params["max_modifications"] == 5
 
 
+def test_vulnerability_assessment_handles_empty_predictions_safely():
+    """Verify that assess_and_score_vulnerability does not crash with zero-size array reduction errors."""
+    from frontend.services.vulnerability_service import assess_and_score_vulnerability
+
+    class SimpleMockModel:
+        def __init__(self):
+            self.model_name = "MockModel"
+
+    model = SimpleMockModel()
+    attack_result = {
+        "attack_name": "embedding_pgd",
+        "attack_class": "EmbeddingPGD",
+        "clean_accuracy": 100.0,
+        "adversarial_accuracy": 0.0,
+        "clean_confidence": 95.0,
+        "adversarial_confidence": 40.0,
+        "original_predictions": None,  # Simulates missing predictions
+        "adversarial_predictions": None,
+        "epsilon_used": 0.5,
+    }
+    inputs = {"input_ids": torch.tensor([[101, 102], [101, 103]]), "attention_mask": torch.tensor([[1, 1], [1, 1]])}
+    labels = torch.tensor([0, 1])
+
+    res = assess_and_score_vulnerability(
+        model=model,
+        attack_result=attack_result,
+        inputs=inputs,
+        labels=labels,
+        domain="text",
+    )
+    assert res is not None
+    assert "vulnerability_score" in res
+    assert "risk_level" in res
+
+
+def test_vae_attack_auto_equips_fallback_vae():
+    """Verify that execute_configured_attack automatically attaches SimpleTabularVAE when running VAEAttack."""
+    from frontend.services.attack_service import execute_configured_attack
+
+    class DummyTabularModel(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.fc = nn.Linear(14, 2)
+
+        def forward(self, x):
+            return self.fc(x)
+
+    model = DummyTabularModel()
+    inputs = torch.randn(5, 14)
+    labels = torch.tensor([0, 1, 0, 1, 0])
+
+    res = execute_configured_attack(
+        model=model,
+        attack_name="vae_attack",
+        inputs=inputs,
+        labels=labels,
+        epsilon=0.5,
+    )
+    assert res is not None
+    assert res["attack_name"] == "VAE_ATTACK"
+    assert "asr_percentage" in res
+
+
+
+
 
 
 

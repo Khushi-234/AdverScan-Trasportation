@@ -640,12 +640,30 @@ def execute_configured_attack(
             f"Attack '{attack_name}' is not registered: {str(exc)}"
         ) from exc
 
-    # 2. Build backend AttackConfig
+    # 2. Auto-equip lightweight tabular VAE if running VAEAttack without model.vae
+    clean_params = dict(params or {})
+    canon_atk = str(attack_name).lower().strip()
+    if canon_atk in ("vae_attack", "tabular_vae", "vae") and "vae" not in clean_params:
+        raw_m = getattr(model, "get_model", lambda: model)()
+        if not hasattr(model, "vae") and not hasattr(raw_m, "vae"):
+            in_f = 14
+            if hasattr(inputs, "shape") and len(inputs.shape) >= 2:
+                in_f = int(inputs.shape[-1])
+            try:
+                device = (
+                    getattr(inputs, "device", None)
+                    or (next(raw_m.parameters()).device if hasattr(raw_m, "parameters") and list(raw_m.parameters()) else torch.device("cpu"))
+                )
+            except Exception:
+                device = torch.device("cpu")
+            clean_params["vae"] = SimpleTabularVAE(in_features=in_f).to(device)
+
+    # Build backend AttackConfig
     config = AttackConfig(
         epsilon=float(epsilon),
         clip_min=float(clip_min) if clip_min is not None else None,
         clip_max=float(clip_max) if clip_max is not None else None,
-        params=params or {},
+        params=clean_params,
     )
 
     # Clean cache before launching attack
@@ -687,40 +705,59 @@ def execute_configured_attack(
     # Compute confidences using safe inference batches under torch.no_grad()
     clean_confs = None
     adv_confs = None
-    if isinstance(inputs, torch.Tensor) and hasattr(raw_model, "eval"):
+    if hasattr(raw_model, "eval"):
         try:
             device = (
                 next(raw_model.parameters()).device
                 if list(raw_model.parameters())
                 else torch.device("cpu")
             )
-            eval_bs = 32 if inputs.dim() >= 4 else 64
             with torch.no_grad():
                 raw_model.eval()
 
-                # Clean confidences in safe chunks
-                conf_c_list = []
-                for b_i in range(0, inputs.size(0), eval_bs):
-                    b_in = inputs[b_i : b_i + eval_bs].to(device)
-                    out_c = raw_model(b_in)
+                # Clean confidences
+                if isinstance(inputs, dict) or hasattr(inputs, "items"):
+                    batch_in = {k: (v.to(device) if isinstance(v, torch.Tensor) else v) for k, v in inputs.items()}
+                    out_c = raw_model(**batch_in)
                     if hasattr(out_c, "logits"):
                         out_c = out_c.logits
-                    conf_c_list.append(F.softmax(out_c, dim=-1).max(dim=-1).values.cpu())
-                if conf_c_list:
-                    clean_confs = torch.cat(conf_c_list, dim=0)
+                    clean_confs = F.softmax(out_c, dim=-1).max(dim=-1).values.cpu()
+                    if orig_preds is None:
+                        orig_preds = out_c.argmax(dim=-1).cpu()
+                elif isinstance(inputs, torch.Tensor):
+                    eval_bs = 32 if inputs.dim() >= 4 else 64
+                    conf_c_list = []
+                    for b_i in range(0, inputs.size(0), eval_bs):
+                        b_in = inputs[b_i : b_i + eval_bs].to(device)
+                        out_c = raw_model(b_in)
+                        if hasattr(out_c, "logits"):
+                            out_c = out_c.logits
+                        conf_c_list.append(F.softmax(out_c, dim=-1).max(dim=-1).values.cpu())
+                    if conf_c_list:
+                        clean_confs = torch.cat(conf_c_list, dim=0)
 
-                # Adversarial confidences in safe chunks
+                # Adversarial confidences
                 if attack_res.adversarial_examples is not None:
                     adv_tensor_all = attack_res.adversarial_examples
-                    conf_a_list = []
-                    for b_i in range(0, adv_tensor_all.size(0), eval_bs):
-                        b_in = adv_tensor_all[b_i : b_i + eval_bs].to(device)
-                        out_a = raw_model(b_in)
+                    if isinstance(adv_tensor_all, dict) or hasattr(adv_tensor_all, "items"):
+                        batch_adv = {k: (v.to(device) if isinstance(v, torch.Tensor) else v) for k, v in adv_tensor_all.items()}
+                        out_a = raw_model(**batch_adv)
                         if hasattr(out_a, "logits"):
                             out_a = out_a.logits
-                        conf_a_list.append(F.softmax(out_a, dim=-1).max(dim=-1).values.cpu())
-                    if conf_a_list:
-                        adv_confs = torch.cat(conf_a_list, dim=0)
+                        adv_confs = F.softmax(out_a, dim=-1).max(dim=-1).values.cpu()
+                        if adv_preds is None:
+                            adv_preds = out_a.argmax(dim=-1).cpu()
+                    elif isinstance(adv_tensor_all, torch.Tensor):
+                        eval_bs = 32 if adv_tensor_all.dim() >= 4 else 64
+                        conf_a_list = []
+                        for b_i in range(0, adv_tensor_all.size(0), eval_bs):
+                            b_in = adv_tensor_all[b_i : b_i + eval_bs].to(device)
+                            out_a = raw_model(b_in)
+                            if hasattr(out_a, "logits"):
+                                out_a = out_a.logits
+                            conf_a_list.append(F.softmax(out_a, dim=-1).max(dim=-1).values.cpu())
+                        if conf_a_list:
+                            adv_confs = torch.cat(conf_a_list, dim=0)
         except Exception:
             pass
         finally:

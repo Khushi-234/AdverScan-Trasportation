@@ -72,16 +72,24 @@ def execute_attack(
         adv_preds = None
         success = None
 
-        if isinstance(inputs, torch.Tensor) and isinstance(adv_inputs, torch.Tensor):
+        if (isinstance(inputs, (torch.Tensor, dict))) and (isinstance(adv_inputs, (torch.Tensor, dict))):
             try:
                 raw_model = attack_instance._get_raw_model()
                 with torch.no_grad():
                     device = next(raw_model.parameters()).device if list(raw_model.parameters()) else torch.device("cpu")
-                    out_orig = raw_model(inputs.to(device))
+                    if isinstance(inputs, dict):
+                        batch_in = {k: (v.to(device) if isinstance(v, torch.Tensor) else v) for k, v in inputs.items()}
+                        out_orig = raw_model(**batch_in)
+                    else:
+                        out_orig = raw_model(inputs.to(device))
                     logits_orig = attack_instance._extract_logits(out_orig)
                     orig_preds = logits_orig.argmax(dim=-1).cpu()
 
-                    out_adv = raw_model(adv_inputs.to(device))
+                    if isinstance(adv_inputs, dict):
+                        batch_adv = {k: (v.to(device) if isinstance(v, torch.Tensor) else v) for k, v in adv_inputs.items()}
+                        out_adv = raw_model(**batch_adv)
+                    else:
+                        out_adv = raw_model(adv_inputs.to(device))
                     logits_adv = attack_instance._extract_logits(out_adv)
                     adv_preds = logits_adv.argmax(dim=-1).cpu()
 
