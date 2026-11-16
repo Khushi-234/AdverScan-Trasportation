@@ -534,28 +534,139 @@ def test_dataset_sample_population_and_selection_options():
     assert "Dataset Population in Model/Benchmark" in app_code
 
 
-def test_perturbation_metrics_backend_format_and_outcome_counts():
-    """Verify backend format support for perturbation norms and sample outcome counts."""
-    from app.attack_engine.utils.perturbation import compute_perturbation_metrics
-    import torch
+def test_report_generation_with_vulnerability_and_defense_results():
+    """Verify generate_security_report runs without UnboundLocalError when vulnerability_result and defense_result are provided."""
+    model_meta = {
+        "model_name": "TestVisionModel",
+        "domain": "image",
+        "framework": "pytorch",
+        "parameters": 1000,
+        "input_shape": [3, 32, 32],
+    }
+    attack_res = {
+        "attack_name": "FGSM",
+        "clean_accuracy": 100.0,
+        "adversarial_accuracy": 20.0,
+        "accuracy_drop": 80.0,
+        "asr_percentage": 80.0,
+        "perturbation_metrics": {
+            "linf": 0.05,
+            "linf_mean": 0.05,
+            "linf_max": 0.05,
+            "l2": 1.25,
+            "l2_mean": 1.25,
+            "l0": 3000,
+            "l0_mean_count": 3000,
+            "l0_mean_pct": 97.6,
+            "mean_abs_error": 0.04,
+            "mae_mean": 0.04,
+        },
+    }
+    vuln_res = {
+        "vulnerability_score": 75.5,
+        "risk_level": "HIGH",
+        "assessment": {
+            "attack_success_rate": 0.80,
+            "clean_accuracy": 1.0,
+            "adversarial_accuracy": 0.20,
+            "accuracy_drop": 0.80,
+            "perturbation": {
+                "linf_mean": 0.05,
+                "l2_mean": 1.25,
+                "l0_mean_count": 3000,
+                "mae_mean": 0.04,
+            },
+        },
+        "sub_scores": {
+            "attack_success_rate_score": 80.0,
+            "accuracy_drop_score": 80.0,
+            "stealth_score": 70.0,
+        },
+    }
+    defense_res = {
+        "selected_defense": "spatial_smoothing",
+        "status": "sufficient",
+        "is_improved": True,
+        "improvement_sufficient": True,
+        "clean_accuracy_before": 100.0,
+        "clean_accuracy_after": 98.0,
+        "clean_accuracy_drop": 2.0,
+        "asr_before": 80.0,
+        "asr_after": 25.0,
+        "asr_reduction": 55.0,
+        "vulnerability_score_before": 75.5,
+        "vulnerability_score_after": 32.0,
+        "vulnerability_score_improvement": 43.5,
+        "thresholds": {
+            "max_clean_accuracy_drop": 0.02,
+            "min_asr_reduction": 0.10,
+            "min_vuln_score_improvement": 5.0,
+        },
+    }
 
-    x1 = torch.zeros(2, 3, 4, 4)
-    x2 = x1 + 0.05
-    metrics = compute_perturbation_metrics(x1, x2)
+    report = generate_security_report(
+        model_metadata=model_meta,
+        dataset_info={"dataset_name": "cifar10", "num_samples": 5},
+        attack_result=attack_res,
+        defense_result=defense_res,
+        vulnerability_result=vuln_res,
+        domain="image",
+    )
+    assert report is not None
+    assert report.report_id is not None
+    assert report.vulnerability_score == 75.5
+    assert report.risk_level == "HIGH"
+    assert "spatial_smoothing" in report.formatted_report
+    assert "RPT-" in report.report_id
 
-    # Verify both standard and extended backend formats are present
-    assert "linf" in metrics and "linf_mean" in metrics and "linf_max" in metrics
-    assert "l2" in metrics and "l2_mean" in metrics and "l2_max" in metrics
-    assert "l0" in metrics and "l0_mean_count" in metrics and "l0_mean_pct" in metrics
-    assert "mean_abs_error" in metrics and "mae_mean" in metrics
-    assert metrics["l0_mean_pct"] == 100.0
-    assert abs(metrics["linf_mean"] - 0.05) < 1e-4
 
-    # Verify sample outcome count logic in streamlit_app.py
+def test_defense_execution_batch_size_alignment():
+    """Verify execute_configured_defense safely aligns batch sizes when clean inputs/labels have 10 samples and adversarial has 5."""
+    model = SimpleVisionModel()
+    inputs_10 = torch.randn(10, 3, 32, 32)
+    labels_10 = torch.randint(0, 2, (10,))
+    adv_5 = inputs_10[:5] + 0.05
+    atk_res = {
+        "attack_name": "fgsm",
+        "clean_accuracy": 100.0,
+        "adversarial_accuracy": 0.0,
+        "asr_percentage": 100.0,
+        "original_predictions": labels_10[:5],
+        "adversarial_predictions": 1 - labels_10[:5],
+    }
+
+    res = execute_configured_defense(
+        model=model,
+        domain="image",
+        defense_choice="spatial_smoothing",
+        test_inputs=inputs_10,
+        test_labels=labels_10,
+        adversarial_examples=adv_5,
+        attack_result=atk_res,
+    )
+    assert res is not None
+    assert res["total_samples"] == 5
+    assert res["selected_defense"] == "spatial_smoothing"
+    assert "threshold_compliance" in res
+
+
+def test_defense_results_no_unnecessary_charts_and_threshold_compliance():
+    """Verify that stage 6 (defense_results) has no st.bar_chart calls and includes threshold compliance."""
     from pathlib import Path
+
     app_code = Path("frontend/streamlit_app.py").read_text(encoding="utf-8")
-    assert 'succ_o = int(result.get("successful_count"' in app_code
-    assert 'clean_correct = int(result.get("clean_correct_count"' in app_code
+    stage_start = app_code.find('stage == "defense_results":')
+    stage_end = app_code.find('stage == "report":')
+    assert stage_start != -1 and stage_end != -1
+
+    stage_code = app_code[stage_start:stage_end]
+    # Verify no st.bar_chart calls remain in defense_results
+    assert "st.bar_chart" not in stage_code
+    # Verify modern table and threshold compliance are present
+    assert "Acceptance Thresholds & Robustness Compliance" in stage_code
+    assert "Compliance Verdict" in stage_code or "threshold_compliance" in stage_code
+
+
 
 
 

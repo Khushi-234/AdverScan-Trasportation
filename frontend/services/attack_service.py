@@ -582,6 +582,8 @@ def execute_configured_attack(
         "adversarial_predictions": adv_preds.tolist() if isinstance(adv_preds, torch.Tensor) else adv_preds,
         "has_adversarial_tensor": attack_res.adversarial_examples is not None,
         "_adversarial_examples": attack_res.adversarial_examples,
+        "_clean_inputs": inputs,
+        "_clean_labels": labels,
         "epsilon_used": epsilon,
         "parameters": params or {},
         "parameters_used": {

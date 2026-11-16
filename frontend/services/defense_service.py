@@ -292,6 +292,16 @@ def execute_configured_defense(
         )
     adv_tensor = adversarial_examples
 
+    # Ensure consistent batch dimensions across clean inputs, labels, and adversarial examples
+    min_samples = min(adv_tensor.size(0), len(labels_tensor))
+    if isinstance(test_inputs, torch.Tensor):
+        min_samples = min(min_samples, test_inputs.size(0))
+    adv_tensor = adv_tensor[:min_samples]
+    labels_tensor = labels_tensor[:min_samples]
+    if isinstance(test_inputs, torch.Tensor):
+        test_inputs = test_inputs[:min_samples]
+    total_samples = min_samples
+
     params = attack_result.get("parameters") or attack_result.get("parameters_used") or {}
     is_targeted = bool(params.get("targeted", False) or attack_result.get("is_targeted", False))
     target_label = params.get("target_label", attack_result.get("target_label"))
@@ -507,6 +517,43 @@ def execute_configured_defense(
     selected_defense_name = hard_res.selected_defense or defense_choice
     defense_meta = hard_res.metadata
 
+    # Threshold compliance breakdown
+    thresh_dict = hard_res.thresholds or {}
+    max_clean_drop = float(thresh_dict.get("max_clean_accuracy_drop", 0.02)) * 100.0
+    min_asr_red = float(thresh_dict.get("min_asr_reduction", 0.10)) * 100.0
+    min_vuln_imp = float(thresh_dict.get("min_vuln_score_improvement", 5.0))
+
+    clean_drop_passed = clean_acc_drop <= max_clean_drop
+    asr_red_passed = asr_reduction_pct >= min_asr_red
+    vuln_imp_passed = vuln_improvement_pts >= min_vuln_imp
+
+    threshold_compliance = [
+        {
+            "Criterion": "Clean Accuracy Preservation",
+            "Baseline (Before)": f"{base_clean_acc * 100.0:.1f}%",
+            "Hardened (Re-Test)": f"{post_clean_acc:.1f}%",
+            "Observed Change": f"-{clean_acc_drop:.1f}% drop",
+            "Acceptance Bound": f"Drop ≤ {max_clean_drop:.1f}%",
+            "Compliance Verdict": "PASSED (Within Threshold)" if clean_drop_passed else "BEYOND THRESHOLD (Exceeded Drop)",
+        },
+        {
+            "Criterion": "Attack Success Rate (ASR) Reduction",
+            "Baseline (Before)": f"{base_asr * 100.0:.1f}%",
+            "Hardened (Re-Test)": f"{post_asr:.1f}%",
+            "Observed Change": f"-{asr_reduction_pct:.1f}% drop",
+            "Acceptance Bound": f"Reduction ≥ {min_asr_red:.1f}%",
+            "Compliance Verdict": "PASSED (Within Threshold)" if asr_red_passed else "BEYOND THRESHOLD (Insufficient Reduction)",
+        },
+        {
+            "Criterion": "Vulnerability Score Improvement",
+            "Baseline (Before)": f"{base_vuln:.1f} / 100",
+            "Hardened (Re-Test)": f"{post_vuln:.1f} / 100",
+            "Observed Change": f"+{vuln_improvement_pts:.1f} pts gain",
+            "Acceptance Bound": f"Gain ≥ {min_vuln_imp:.1f} pts",
+            "Compliance Verdict": "PASSED (Within Threshold)" if vuln_imp_passed else "BEYOND THRESHOLD (Insufficient Gain)",
+        },
+    ]
+
     return {
         "status": hard_res.status,
         "selected_defense": selected_defense_name,
@@ -514,6 +561,8 @@ def execute_configured_defense(
         "is_improved": hard_res.is_improved,
         "improvement_sufficient": hard_res.improvement_sufficient,
         "fallback_used": (not hard_res.improvement_sufficient) and (hard_res.selected_defense is not None),
+        "thresholds": thresh_dict,
+        "threshold_compliance": threshold_compliance,
         "execution_time_seconds": total_exec_time,
         "total_samples": total_samples,
         # Before metrics

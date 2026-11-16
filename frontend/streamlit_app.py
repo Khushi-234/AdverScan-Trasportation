@@ -11,6 +11,7 @@ import sys
 import time
 from datetime import datetime
 from pathlib import Path
+import torch
 
 # Ensure repository root is on sys.path for clean imports
 ROOT_DIR = Path(__file__).resolve().parent.parent
@@ -1629,9 +1630,21 @@ elif stage == "defense_config":
     model_name = active_data.get("metadata_dict", {}).get("Model Name") or "Active Model"
     domain = active_data.get("domain", "image")
     adapter = active_data.get("adapter")
-    test_inputs = active_data.get("test_inputs")
-    test_labels = active_data.get("test_labels")
     adv_inputs = attack_res.get("_adversarial_examples")
+    test_inputs = attack_res.get("_clean_inputs")
+    if test_inputs is None:
+        test_inputs = active_data.get("test_inputs")
+    test_labels = attack_res.get("_clean_labels")
+    if test_labels is None:
+        test_labels = active_data.get("test_labels")
+
+    # Guard: Align tensor batch sizes to adversarial examples evaluated in M3
+    if adv_inputs is not None and isinstance(adv_inputs, torch.Tensor):
+        target_n = adv_inputs.size(0)
+        if test_inputs is not None and hasattr(test_inputs, "size") and test_inputs.size(0) > target_n:
+            test_inputs = test_inputs[:target_n]
+        if test_labels is not None and hasattr(test_labels, "size") and test_labels.size(0) > target_n:
+            test_labels = test_labels[:target_n]
 
     atk_name = attack_res.get("attack_name", "Adversarial Attack")
     asr_pct = attack_res.get("asr_percentage", 0.0)
@@ -1853,31 +1866,35 @@ elif stage == "defense_results":
     imp_suff = def_result.get("improvement_sufficient", False)
     fallback_used = def_result.get("fallback_used", False)
     exec_sec = def_result.get("execution_time_seconds", 0.0)
+    def_type = def_result.get("defense_type", "Preprocessing")
 
-    # 1. Top Status Banner
+    # 1. Top Status Banner & Active Defense
     if imp_suff:
-        status_badge = '<span class="risk-badge risk-low" style="font-size: 0.9rem;">ACCEPTED — Met Acceptance Thresholds</span>'
-        status_note = "All acceptance thresholds for ASR reduction, vulnerability improvement, and clean accuracy preservation were met."
+        status_badge = '<span class="badge-status badge-emerald" style="font-size: 0.88rem;">✅ ACCEPTED — Met Acceptance Thresholds</span>'
+        status_note = "All acceptance criteria for ASR reduction, vulnerability improvement, and clean accuracy preservation were met during re-testing."
+        card_accent = "card-accent-emerald"
     elif fallback_used:
-        status_badge = '<span class="risk-badge risk-medium" style="font-size: 0.9rem;">MOST EFFECTIVE CANDIDATE SELECTED</span>'
-        status_note = "None of the candidates satisfied strict ASR reduction ratio thresholds; automatically selected the most effective candidate achieving maximum vulnerability reduction."
+        status_badge = '<span class="badge-status badge-amber" style="font-size: 0.88rem;">⚠️ BEYOND STRICT THRESHOLD — Best Candidate Fallback</span>'
+        status_note = "Candidates did not meet strict ASR reduction criteria; automatically selected the most effective candidate achieving maximum vulnerability reduction."
+        card_accent = "card-accent-amber"
     else:
-        status_badge = '<span class="risk-badge risk-high" style="font-size: 0.9rem;">EVALUATED</span>'
-        status_note = "Defense evaluation completed."
+        status_badge = '<span class="badge-status badge-rose" style="font-size: 0.88rem;">❌ INSUFFICIENT IMPROVEMENT / BEYOND THRESHOLD</span>'
+        status_note = "Defense evaluation completed. The defense did not satisfy configured acceptance criteria."
+        card_accent = "card-accent-rose"
 
     st.markdown(
         f"""
-        <div class="modern-card card-accent-cyan" style="margin-bottom: 1.5rem;">
+        <div class="modern-card {card_accent}" style="margin-bottom: 1.25rem;">
             <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 0.5rem;">
                 <div>
-                    <div class="stat-label">Active Hardened Defense</div>
+                    <div class="stat-label">Active Hardened Defense & Mechanism</div>
                     <div style="font-size: 1.35rem; font-weight: 800; color: var(--text-primary); margin-top: 0.15rem;">
-                        🏆 {sel_def_disp}
+                        🛡️ {sel_def_disp} <span style="font-size: 0.85rem; font-weight: 500; color: var(--text-secondary);">({def_type})</span>
                     </div>
                 </div>
                 <div>{status_badge}</div>
             </div>
-            <div style="font-size: 0.88rem; color: var(--text-secondary); margin-top: 0.6rem;">
+            <div style="font-size: 0.88rem; color: var(--text-secondary); margin-top: 0.6rem; line-height: 1.5;">
                 {status_note}
             </div>
         </div>
@@ -1910,7 +1927,10 @@ elif stage == "defense_results":
             <div class="modern-card card-accent-emerald">
                 <div class="stat-label">Attack Success Rate (ASR)</div>
                 <div class="stat-value" style="color: var(--stat-val-emerald);">{b_asr:.1f}% → {a_asr:.1f}%</div>
-                <div class="stat-subtext">ASR Reduction: <strong style="color: var(--stat-val-emerald);">-{asr_red:.1f}%</strong></div>
+                <div style="background: rgba(128, 128, 128, 0.2); border-radius: 9999px; height: 5px; width: 100%; margin: 6px 0; overflow: hidden;">
+                    <div style="background: #10b981; width: {max(0.0, min(100.0, 100.0 - a_asr)):.1f}%; height: 100%; border-radius: 9999px;"></div>
+                </div>
+                <div class="stat-subtext">Net Reduction: <strong style="color: var(--stat-val-emerald);">-{asr_red:.1f}%</strong> (Suppression)</div>
             </div>
             """,
             unsafe_allow_html=True,
@@ -1922,6 +1942,9 @@ elif stage == "defense_results":
             <div class="modern-card card-accent-cyan">
                 <div class="stat-label">Defended Accuracy Under Attack</div>
                 <div class="stat-value" style="color: var(--stat-val-cyan);">{b_adv:.1f}% → {a_adv:.1f}%</div>
+                <div style="background: rgba(128, 128, 128, 0.2); border-radius: 9999px; height: 5px; width: 100%; margin: 6px 0; overflow: hidden;">
+                    <div style="background: #06b6d4; width: {max(0.0, min(100.0, a_adv)):.1f}%; height: 100%; border-radius: 9999px;"></div>
+                </div>
                 <div class="stat-subtext">Robustness Recovery: <strong style="color: var(--stat-val-cyan);">+{adv_gain:.1f}%</strong></div>
             </div>
             """,
@@ -1932,9 +1955,12 @@ elif stage == "defense_results":
         st.markdown(
             f"""
             <div class="modern-card card-accent-amber">
-                <div class="stat-label">Clean Accuracy Preservation</div>
+                <div class="stat-label">Clean Accuracy Retention</div>
                 <div class="stat-value" style="color: var(--stat-val-amber);">{b_clean:.1f}% → {a_clean:.1f}%</div>
-                <div class="stat-subtext">Utility Drop: <strong style="color: var(--text-secondary);">{clean_drop:.1f}%</strong></div>
+                <div style="background: rgba(128, 128, 128, 0.2); border-radius: 9999px; height: 5px; width: 100%; margin: 6px 0; overflow: hidden;">
+                    <div style="background: #f59e0b; width: {max(0.0, min(100.0, a_clean)):.1f}%; height: 100%; border-radius: 9999px;"></div>
+                </div>
+                <div class="stat-subtext">Clean Utility Drop: <strong>-{clean_drop:.1f}%</strong></div>
             </div>
             """,
             unsafe_allow_html=True,
@@ -1944,123 +1970,147 @@ elif stage == "defense_results":
         st.markdown(
             f"""
             <div class="modern-card card-accent-violet">
-                <div class="stat-label">Vulnerability Score</div>
+                <div class="stat-label">Vulnerability Score (M5)</div>
                 <div class="stat-value" style="color: var(--stat-val-violet);">{b_vuln:.1f} → {a_vuln:.1f}</div>
-                <div class="stat-subtext">Improvement: <strong style="color: var(--stat-val-emerald);">+{vuln_imp:.1f} pts</strong></div>
+                <div style="background: rgba(128, 128, 128, 0.2); border-radius: 9999px; height: 5px; width: 100%; margin: 6px 0; overflow: hidden;">
+                    <div style="background: #8b5cf6; width: {max(0.0, min(100.0, 100.0 - a_vuln)):.1f}%; height: 100%; border-radius: 9999px;"></div>
+                </div>
+                <div class="stat-subtext">Empirical Improvement: <strong style="color: var(--stat-val-emerald);">+{vuln_imp:.1f} pts</strong></div>
             </div>
             """,
             unsafe_allow_html=True,
         )
 
-    # 3. Comparative Telemetry & Visual Comparison
-    st.markdown("<div style='height: 12px;'></div>", unsafe_allow_html=True)
+    # 3. Acceptance Thresholds & Robustness Compliance Table
+    st.markdown("<div style='height: 10px;'></div>", unsafe_allow_html=True)
     st.markdown(
         """
         <div class="section-banner">
-            <h3>📊 Hardening Robustness Metrics & Visual Comparison</h3>
-            <p>Empirical before vs. after comparison of accuracy recovery, ASR suppression, and restoration distributions</p>
+            <h3>⚖️ Acceptance Thresholds & Robustness Compliance</h3>
+            <p>Verification against configured acceptance criteria to determine if the defense is within bounds or beyond threshold</p>
         </div>
         """,
         unsafe_allow_html=True,
     )
 
-    col_chart1, col_chart2 = st.columns(2)
+    threshold_compliance = def_result.get("threshold_compliance")
+    if not threshold_compliance:
+        thresh_dict = def_result.get("thresholds", {})
+        max_clean_drop = float(thresh_dict.get("max_clean_accuracy_drop", 0.02)) * 100.0
+        min_asr_red = float(thresh_dict.get("min_asr_reduction", 0.10)) * 100.0
+        min_vuln_imp = float(thresh_dict.get("min_vuln_score_improvement", 5.0))
 
-    with col_chart1:
-        st.markdown("##### 🎯 Classification Accuracy Under Adversarial Stress")
-        chart_data_acc = pd.DataFrame(
+        clean_drop_passed = clean_drop <= max_clean_drop
+        asr_red_passed = asr_red >= min_asr_red
+        vuln_imp_passed = vuln_imp >= min_vuln_imp
+
+        threshold_compliance = [
             {
-                "Stage": ["1. Clean Baseline", "2. Under Attack", "3. Defended (Hardened)"],
-                "Accuracy (%)": [b_clean, b_adv, a_adv],
-            }
-        ).set_index("Stage")
-        st.bar_chart(chart_data_acc)
-
-    with col_chart2:
-        st.markdown("##### 📉 Attack Success Rate (ASR) Suppression")
-        chart_data_asr = pd.DataFrame(
+                "Criterion": "Clean Accuracy Preservation",
+                "Baseline (Before)": f"{b_clean:.1f}%",
+                "Hardened (Re-Test)": f"{a_clean:.1f}%",
+                "Observed Change": f"-{clean_drop:.1f}% drop",
+                "Acceptance Bound": f"Drop ≤ {max_clean_drop:.1f}%",
+                "Compliance Verdict": "PASSED (Within Threshold)" if clean_drop_passed else "BEYOND THRESHOLD (Exceeded Drop)",
+            },
             {
-                "Assessment Stage": ["Original Attack", "Post-Defense Retest"],
-                "ASR (%)": [b_asr, a_asr],
-            }
-        ).set_index("Assessment Stage")
-        st.bar_chart(chart_data_asr)
+                "Criterion": "Attack Success Rate (ASR) Reduction",
+                "Baseline (Before)": f"{b_asr:.1f}%",
+                "Hardened (Re-Test)": f"{a_asr:.1f}%",
+                "Observed Change": f"-{asr_red:.1f}% drop",
+                "Acceptance Bound": f"Reduction ≥ {min_asr_red:.1f}%",
+                "Compliance Verdict": "PASSED (Within Threshold)" if asr_red_passed else "BEYOND THRESHOLD (Insufficient Reduction)",
+            },
+            {
+                "Criterion": "Vulnerability Score Improvement",
+                "Baseline (Before)": f"{b_vuln:.1f} / 100",
+                "Hardened (Re-Test)": f"{a_vuln:.1f} / 100",
+                "Observed Change": f"+{vuln_imp:.1f} pts gain",
+                "Acceptance Bound": f"Gain ≥ {min_vuln_imp:.1f} pts",
+                "Compliance Verdict": "PASSED (Within Threshold)" if vuln_imp_passed else "BEYOND THRESHOLD (Insufficient Gain)",
+            },
+        ]
+    st.table(pd.DataFrame(threshold_compliance))
 
-    # Outcome distribution chart
+    # 4. Sample-by-Sample Restored Prediction Table & Outcome Breakdown
     sample_restorations = def_result.get("sample_restorations", [])
     if sample_restorations:
-        outcomes = [s.get("Outcome", "Unknown") for s in sample_restorations]
-        from collections import Counter
-        outcome_counts = Counter(outcomes)
-        df_outcome_chart = pd.DataFrame(
-            {
-                "Restoration Outcome": list(outcome_counts.keys()),
-                "Number of Samples": list(outcome_counts.values()),
-            }
-        ).set_index("Restoration Outcome")
-        st.markdown("##### 📈 Sample Label Recovery Outcome Distribution")
-        st.bar_chart(df_outcome_chart)
+        st.markdown("<div style='height: 10px;'></div>", unsafe_allow_html=True)
+        st.markdown(
+            """
+            <div class="section-banner">
+                <h3>🔬 Empirical Re-Test & Label Restoration Analysis</h3>
+                <p>Sample-level verification showing how adversarial misclassifications were restored by the defended model</p>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
 
-    # 4. Candidate Defense Attempts Breakdown & Chart
+        outcomes = [str(s.get("Outcome", "")) for s in sample_restorations]
+        tot_eval = len(sample_restorations)
+        restored_cnt = sum(1 for o in outcomes if "Restored" in o)
+        robust_cnt = sum(1 for o in outcomes if "Robust" in o or "Defended" in o)
+        remains_cnt = sum(1 for o in outcomes if "Flipped" in o or "Remains" in o or "Error" in o)
+
+        col_s1, col_s2, col_s3 = st.columns(3)
+        with col_s1:
+            st.markdown(
+                f"""
+                <div class="modern-card card-accent-emerald" style="padding: 10px 14px;">
+                    <div class="stat-label">Restored to Correct Label</div>
+                    <div style="font-size: 1.25rem; font-weight: 700; color: var(--stat-val-emerald);">{restored_cnt} / {tot_eval} samples</div>
+                    <div class="stat-subtext">Successfully recovered by defense</div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+        with col_s2:
+            st.markdown(
+                f"""
+                <div class="modern-card card-accent-cyan" style="padding: 10px 14px;">
+                    <div class="stat-label">Invariant / Resistant Baseline</div>
+                    <div style="font-size: 1.25rem; font-weight: 700; color: var(--stat-val-cyan);">{robust_cnt} / {tot_eval} samples</div>
+                    <div class="stat-subtext">Remained correct throughout</div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+        with col_s3:
+            st.markdown(
+                f"""
+                <div class="modern-card card-accent-rose" style="padding: 10px 14px;">
+                    <div class="stat-label">Remains Adversarially Flipped</div>
+                    <div style="font-size: 1.25rem; font-weight: 700; color: var(--stat-val-rose);">{remains_cnt} / {tot_eval} samples</div>
+                    <div class="stat-subtext">Residual vulnerability</div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+
+        st.markdown("<div style='height: 8px;'></div>", unsafe_allow_html=True)
+        df_restored = pd.DataFrame(sample_restorations)
+        st.table(df_restored)
+
+    # 5. Candidate Defense Attempts Breakdown (if Iterative/Auto mode)
     candidate_attempts = def_result.get("candidate_attempts", [])
-    if candidate_attempts:
-        st.markdown("<div style='height: 12px;'></div>", unsafe_allow_html=True)
+    if candidate_attempts and len(candidate_attempts) > 1:
+        st.markdown("<div style='height: 10px;'></div>", unsafe_allow_html=True)
         st.markdown(
             """
             <div class="section-banner">
                 <h3>🔍 Iterative Candidate Defense Evaluation Log</h3>
-                <p>Telemetry, charts, and status across all evaluated candidate algorithms</p>
+                <p>Audit trail of candidate defense algorithms evaluated against acceptance thresholds</p>
             </div>
             """,
             unsafe_allow_html=True,
         )
-
-        # Candidate comparison chart if candidates exist
-        chart_candidates = []
-        for att in candidate_attempts:
-            try:
-                asr_val = float(str(att.get("ASR Reduction", "0")).replace("%", "").strip())
-            except Exception:
-                asr_val = 0.0
-            try:
-                drop_val = float(str(att.get("Clean Acc Drop", "0")).replace("%", "").strip())
-            except Exception:
-                drop_val = 0.0
-            chart_candidates.append(
-                {
-                    "Defense Candidate": str(att.get("Defense", "Unknown")),
-                    "ASR Reduction (%)": asr_val,
-                    "Clean Acc Drop (%)": drop_val,
-                }
-            )
-
-        if chart_candidates:
-            df_cand_chart = pd.DataFrame(chart_candidates).set_index("Defense Candidate")
-            st.markdown("##### 📊 Candidate Defense Performance Comparison")
-            st.bar_chart(df_cand_chart)
-
         df_attempts = pd.DataFrame(candidate_attempts)
         st.table(df_attempts)
-
-    # 5. Sample-by-Sample Restored Prediction Table
-    if sample_restorations:
-        st.markdown("<div style='height: 12px;'></div>", unsafe_allow_html=True)
-        st.markdown(
-            """
-            <div class="section-banner">
-                <h3>🔬 Sample-by-Sample Prediction Restoration</h3>
-                <p>Tracking label recovery from adversarial perturbation to hardened output</p>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-        df_restored = pd.DataFrame(sample_restorations)
-        st.table(df_restored)
 
     # 6. Hardening Recommendations
     recs = def_result.get("recommendations", [])
     if recs:
-        st.markdown("<div style='height: 12px;'></div>", unsafe_allow_html=True)
+        st.markdown("<div style='height: 10px;'></div>", unsafe_allow_html=True)
         st.markdown("##### 💡 Strategic Hardening Recommendations")
         for r in recs:
             st.markdown(f"• {r}")

@@ -97,6 +97,8 @@ def generate_security_report(
     v_res = vulnerability_result or attack_result.get("vulnerability_assessment")
     adv_acc_pct = attack_result.get("adversarial_accuracy", 0.0)
     adv_acc_frac = adv_acc_pct / 100.0 if adv_acc_pct > 1.0 else adv_acc_pct
+    asr_pct = attack_result.get("asr_percentage", 0.0)
+    asr_frac = asr_pct / 100.0 if asr_pct > 1.0 else asr_pct
 
     if v_res and isinstance(v_res, dict):
         vuln_score = float(v_res.get("vulnerability_score", 0.0))
@@ -105,9 +107,11 @@ def generate_security_report(
         if "stealth_score" not in sub_scores:
             sub_scores["stealth_score"] = float(v_res.get("stealth_score", 0.0))
         assess_dict = v_res.get("assessment", {})
+        if assess_dict and isinstance(assess_dict, dict) and "attack_success_rate" in assess_dict:
+            asr_val = assess_dict["attack_success_rate"]
+            if asr_val is not None:
+                asr_frac = float(asr_val)
         if not assess_dict:
-            asr_pct = attack_result.get("asr_percentage", 0.0)
-            asr_frac = asr_pct / 100.0 if asr_pct > 1.0 else asr_pct
             assess_dict = {
                 "attack_success_rate": asr_frac,
                 "clean_accuracy": clean_acc_frac,
@@ -117,8 +121,6 @@ def generate_security_report(
                 "perturbation": attack_result.get("perturbation_metrics", {}),
             }
     else:
-        asr_pct = attack_result.get("asr_percentage", 0.0)
-        asr_frac = asr_pct / 100.0 if asr_pct > 1.0 else asr_pct
         deg_pts = max(0.0, (clean_acc_pct - adv_acc_pct))
         pert_dict = attack_result.get("perturbation_metrics", {})
         measured_linf = pert_dict.get("linf") if pert_dict else None
