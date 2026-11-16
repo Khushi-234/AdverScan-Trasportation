@@ -319,6 +319,73 @@ def get_compatible_attacks(
     return compatible_attacks
 
 
+def get_class_labels_mapping(
+    model: Any = None,
+    dataset_name: Optional[str] = None,
+    num_classes: Optional[int] = None,
+) -> Dict[int, str]:
+    """
+    Resolve semantic human-readable class names for target classification and outcome reporting.
+    Inspects model config id2label, dataset identifier mappings, and fallbacks.
+    """
+    mapping: Dict[int, str] = {}
+
+    # 1. Inspect model architecture / HuggingFace config id2label
+    if model is not None:
+        raw = getattr(model, "get_model", lambda: model)()
+        if hasattr(raw, "config") and getattr(raw.config, "id2label", None):
+            id2l = raw.config.id2label
+            if isinstance(id2l, dict):
+                for k, v in id2l.items():
+                    try:
+                        mapping[int(k)] = str(v)
+                    except (ValueError, TypeError):
+                        pass
+
+    if mapping:
+        return mapping
+
+    # 2. Known benchmark dataset name matching
+    ds = str(dataset_name or "").lower().strip()
+    if any(k in ds for k in ("census", "adult")):
+        return {0: "<=50K (Low Income)", 1: ">50K (High Income)"}
+    if any(k in ds for k in ("fraud", "credit")):
+        return {0: "Legitimate Transaction", 1: "Fraudulent Transaction"}
+    if "cifar" in ds:
+        return {
+            0: "Airplane", 1: "Automobile", 2: "Bird", 3: "Cat", 4: "Deer",
+            5: "Dog", 6: "Frog", 7: "Horse", 8: "Ship", 9: "Truck",
+        }
+    if any(k in ds for k in ("intel", "scenery")):
+        return {0: "Buildings", 1: "Forest", 2: "Glacier", 3: "Mountain", 4: "Sea", 5: "Street"}
+    if any(k in ds for k in ("sst", "imdb")):
+        return {0: "Negative Sentiment", 1: "Positive Sentiment"}
+    if "twitter" in ds:
+        return {0: "Negative", 1: "Neutral", 2: "Positive"}
+    if any(k in ds for k in ("ag_news", "ag-news", "news")):
+        return {0: "World", 1: "Sports", 2: "Business", 3: "Sci/Tech"}
+    if "ecg" in ds:
+        return {0: "Normal Sinus Rhythm", 1: "Arrhythmia / Abnormal"}
+    if "gtsrb" in ds:
+        return {
+            0: "Speed 20km/h", 1: "Speed 30km/h", 2: "Speed 50km/h", 3: "Speed 60km/h",
+            4: "Speed 70km/h", 5: "Speed 80km/h", 6: "End Speed 80km/h", 7: "Speed 100km/h",
+            8: "Speed 120km/h", 9: "No passing", 10: "No passing >3.5t", 11: "Right-of-way",
+            12: "Priority road", 13: "Yield", 14: "Stop", 15: "No vehicles",
+            16: "Veh >3.5t prohibited", 17: "No entry", 18: "General caution", 19: "Dangerous curve left",
+            20: "Dangerous curve right", 21: "Double curve", 22: "Bumpy road", 23: "Slippery road",
+            24: "Road narrows right", 25: "Road work", 26: "Traffic signals", 27: "Pedestrians",
+            28: "Children crossing", 29: "Bicycles crossing", 30: "Ice/snow", 31: "Wild animals",
+            32: "End speed/passing limits", 33: "Turn right", 34: "Turn left", 35: "Ahead only",
+            36: "Straight or right", 37: "Straight or left", 38: "Keep right", 39: "Keep left",
+            40: "Roundabout", 41: "End no passing", 42: "End no passing >3.5t",
+        }
+
+    # 3. Numeric generic fallback
+    n = max(2, num_classes or 2)
+    return {i: f"Class {i}" for i in range(n)}
+
+
 def execute_configured_attack(
     model: Any,
     attack_name: str,
@@ -328,6 +395,8 @@ def execute_configured_attack(
     clip_min: Optional[float] = 0.0,
     clip_max: Optional[float] = 1.0,
     params: Optional[Dict[str, Any]] = None,
+    dataset_name: Optional[str] = None,
+    class_names: Optional[Dict[int, str]] = None,
 ) -> Dict[str, Any]:
     """
     Execute selected attack on the model using the backend execution interface
@@ -493,6 +562,19 @@ def execute_configured_attack(
         adv_confs.tolist() if adv_confs is not None else [None] * total_samples
     )
 
+    # Resolve class name mapping for clear label semantics
+    class_map = class_names or get_class_labels_mapping(
+        model=model,
+        dataset_name=dataset_name,
+        num_classes=max(
+            int(labels_tensor.max().item() + 1) if labels_tensor.numel() > 0 else 2,
+            int(target_label + 1) if target_label is not None else 2,
+        ),
+    )
+    tgt_name = class_map.get(target_label, f"Class {target_label}") if (is_targeted and target_label is not None) else None
+    targeted_hit_count = 0
+    collateral_flip_count = 0
+
     for idx in range(total_samples):
         y_true = labels_list[idx] if idx < len(labels_list) else "N/A"
         y_orig = clean_list[idx] if idx < len(clean_list) else "N/A"
@@ -512,13 +594,23 @@ def execute_configured_attack(
             (y_orig == y_true) if (y_orig != "N/A" and y_true != "N/A") else False
         )
 
+        true_name = class_map.get(int(y_true), "") if (isinstance(y_true, (int, torch.Tensor)) or str(y_true).isdigit()) else ""
+        orig_name = class_map.get(int(y_orig), "") if (isinstance(y_orig, (int, torch.Tensor)) or str(y_orig).isdigit()) else ""
+        adv_name = class_map.get(int(y_adv), "") if (isinstance(y_adv, (int, torch.Tensor)) or str(y_adv).isdigit()) else ""
+
+        true_str = f"{y_true} ({true_name})" if true_name else str(y_true)
+        clean_str = f"{y_orig} ({orig_name}) [{c_conf}]" if orig_name else f"{y_orig} ({c_conf})"
+        adv_str = f"{y_adv} ({adv_name}) [{a_conf}]" if adv_name else f"{y_adv} ({a_conf})"
+
         if is_targeted and target_label is not None:
             if not clean_right:
                 outcome_str = "Initial Clean Error ❌"
             elif y_adv == target_label:
-                outcome_str = f"Targeted Hit (→ {target_label}) 🎯"
+                outcome_str = f"Targeted Hit (→ {target_label}: {tgt_name}) 🎯"
+                targeted_hit_count += 1
             elif y_adv != y_true:
-                outcome_str = "Untargeted Flip ⚠️"
+                outcome_str = f"Collateral Flip (→ {y_adv}: {adv_name}) ⚠️" if adv_name else f"Collateral Flip (→ {y_adv}) ⚠️"
+                collateral_flip_count += 1
             else:
                 outcome_str = "Preserved Correct ✅"
         else:
@@ -532,9 +624,9 @@ def execute_configured_attack(
         sample_comparisons.append(
             {
                 "Sample": f"#{idx + 1}",
-                "Ground Truth": str(y_true),
-                "Clean Prediction": f"{y_orig} ({c_conf})",
-                "Adversarial Prediction": f"{y_adv} ({a_conf})",
+                "Ground Truth": true_str,
+                "Clean Prediction": clean_str,
+                "Adversarial Prediction": adv_str,
                 "Outcome": outcome_str,
             }
         )
@@ -565,6 +657,10 @@ def execute_configured_attack(
         "asr_undefined": asr_undefined,
         "is_targeted": is_targeted,
         "target_label": target_label,
+        "target_label_name": tgt_name,
+        "targeted_hit_count": targeted_hit_count,
+        "collateral_flip_count": collateral_flip_count,
+        "class_names": class_map,
         "clean_accuracy": clean_acc,
         "adversarial_accuracy": adv_acc,
         "accuracy_drop": acc_drop,

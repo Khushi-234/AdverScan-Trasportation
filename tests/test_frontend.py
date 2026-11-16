@@ -667,6 +667,67 @@ def test_defense_results_no_unnecessary_charts_and_threshold_compliance():
     assert "Compliance Verdict" in stage_code or "threshold_compliance" in stage_code
 
 
+def test_class_labels_mapping_and_targeted_attack_telemetry():
+    """Verify class semantic mappings and targeted attack metadata."""
+    from frontend.services.attack_service import (
+        get_class_labels_mapping,
+        execute_configured_attack,
+    )
+
+    # 1. Test class label mappings for known benchmarks
+    census_map = get_class_labels_mapping(dataset_name="adult_census")
+    assert 0 in census_map and 1 in census_map
+    assert "<=50K" in census_map[0]
+    assert ">50K" in census_map[1]
+
+    cifar_map = get_class_labels_mapping(dataset_name="uoft-cs/cifar10")
+    assert len(cifar_map) == 10
+    assert cifar_map[0] == "Airplane"
+    assert cifar_map[3] == "Cat"
+
+    # 2. Test targeted attack telemetry execution
+    model = SimpleVisionModel()
+    inputs = torch.randn(4, 3, 32, 32)
+    labels = torch.zeros(4, dtype=torch.long)  # All ground truth = 0
+
+    res = execute_configured_attack(
+        model=model,
+        attack_name="fgsm",
+        inputs=inputs,
+        labels=labels,
+        epsilon=0.05,
+        params={"targeted": True, "target_label": 1},
+        dataset_name="adult_census",
+    )
+    assert res is not None
+    assert res["is_targeted"] is True
+    assert res["target_label"] == 1
+    assert ">50K" in res["target_label_name"]
+    assert "targeted_hit_count" in res
+    assert "collateral_flip_count" in res
+    assert len(res["sample_comparisons"]) == 4
+
+
+def test_sample_table_pagination_and_filter_controls():
+    """Verify pagination and outcome filter controls exist in both attack_results and defense_results stages."""
+    from pathlib import Path
+
+    app_code = Path("frontend/streamlit_app.py").read_text(encoding="utf-8")
+
+    # In attack_results stage
+    assert "atk_sample_filter" in app_code
+    assert "atk_page_size" in app_code
+    assert "atk_prev_page" in app_code
+    assert "atk_next_page" in app_code
+
+    # In defense_results stage
+    assert "def_sample_filter" in app_code
+    assert "def_page_size" in app_code
+    assert "def_prev_page" in app_code
+    assert "def_next_page" in app_code
+
+
+
 
 
 

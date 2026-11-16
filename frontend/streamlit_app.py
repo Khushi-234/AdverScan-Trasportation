@@ -7,6 +7,7 @@ Dashboard → Model Ingestion → Attack Configuration → Attack Execution
 from __future__ import annotations
 
 import json
+import math
 import sys
 import time
 from datetime import datetime
@@ -36,6 +37,7 @@ from frontend.components.sidebar import (
 )
 from frontend.services.attack_service import (
     execute_configured_attack,
+    get_class_labels_mapping,
     get_compatible_attacks,
 )
 from frontend.services.defense_service import (
@@ -843,17 +845,55 @@ elif stage == "attack_config":
                     num_classes_val = int(raw_num_classes)
                     max_class_idx = max(1, num_classes_val - 1)
                 except (ValueError, TypeError):
-                    max_class_idx = 9999
+                    num_classes_val = 2
+                    max_class_idx = 1
 
-                target_class_choice = st.number_input(
-                    "Target Class Label / Index",
-                    min_value=0,
-                    max_value=max_class_idx,
-                    value=1 if max_class_idx >= 1 else 0,
-                    step=1,
-                    help="Specific class label index that the attack should force the model to predict",
+                class_map = get_class_labels_mapping(
+                    model=model_adapter,
+                    dataset_name=active_data.get("dataset_name"),
+                    num_classes=num_classes_val,
                 )
+
+                col_tc1, col_tc2 = st.columns([2, 1])
+                with col_tc1:
+                    target_options = list(range(num_classes_val))
+                    default_idx = 1 if num_classes_val > 1 else 0
+                    target_class_choice = st.selectbox(
+                        "🎯 Target Malicious Class",
+                        options=target_options,
+                        index=default_idx,
+                        format_func=lambda idx: f"Class {idx} — {class_map.get(idx, f'Class {idx}')}",
+                        help="Specific class label that the attack optimization should force the model to predict",
+                    )
+                with col_tc2:
+                    st.text_input(
+                        "Resolved Class Label",
+                        value=class_map.get(int(target_class_choice), f"Class {target_class_choice}"),
+                        disabled=True,
+                        help="Semantic class meaning for target index",
+                    )
+
                 params_dict["target_label"] = int(target_class_choice)
+                tgt_name = class_map.get(int(target_class_choice), f"Class {target_class_choice}")
+
+                st.markdown(
+                    f"""
+                    <div class="modern-card card-accent-violet" style="padding: 10px 14px; margin-top: 6px;">
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
+                            <span style="font-weight: 700; font-size: 0.92rem; color: #8b5cf6;">
+                                🎯 Target Objective: Class {target_class_choice} ({tgt_name})
+                            </span>
+                            <span class="badge-status badge-violet">TARGETED CONSTRAINED</span>
+                        </div>
+                        <div style="font-size: 0.83rem; line-height: 1.45; color: var(--text-secondary);">
+                            • <strong>Adversarial Objective:</strong> The attack optimizes gradients to minimize cross-entropy loss specifically toward <strong>Class {target_class_choice} ({tgt_name})</strong> rather than maximizing distance from the clean label.<br>
+                            • <strong>Strict Evaluation Metric:</strong> Targeted ASR counts only samples that land precisely on <strong>Class {target_class_choice}</strong>. Flips to other wrong classes are tracked separately as collateral misclassifications.<br>
+                            • <strong>Threat Context:</strong> High-severity attack designed to evade security filters or spoof specific authorized identities.
+                        </div>
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
             else:
                 params_dict.pop("target_label", None)
                 params_dict.pop("target", None)
@@ -935,6 +975,7 @@ elif stage == "attack_config":
                 clip_min=clip_min,
                 clip_max=clip_max,
                 params=params_dict,
+                dataset_name=active_data.get("dataset_name"),
             )
 
             atk_prog.progress(
@@ -1053,7 +1094,8 @@ elif stage == "attack_results":
             asr_val_str = "N/A"
             asr_bar_pct = 0.0
         elif is_targeted_run:
-            asr_subtext = f"<strong>{succ_cnt}</strong> of <strong>{clean_correct_cnt}</strong> initially correct reached target {target_label_val}"
+            tgt_name_disp = result.get("target_label_name") or f"Class {target_label_val}"
+            asr_subtext = f"<strong>{succ_cnt}</strong> of <strong>{clean_correct_cnt}</strong> reached Target: {tgt_name_disp}"
             asr_val_str = f"{asr:.1f}%"
             asr_bar_pct = min(100.0, max(0.0, asr))
         else:
@@ -1064,7 +1106,7 @@ elif stage == "attack_results":
         st.markdown(
             f"""
             <div class="modern-card card-accent-rose">
-                <div class="stat-label">{'Targeted Success Rate' if is_targeted_run else 'Attack Success Rate (ASR)'}</div>
+                <div class="stat-label">{'Targeted Success Rate (ASR)' if is_targeted_run else 'Attack Success Rate (ASR)'}</div>
                 <div class="stat-value" style="color: var(--stat-val-rose);">{asr_val_str}</div>
                 <div style="background: rgba(128, 128, 128, 0.2); border-radius: 9999px; height: 5px; width: 100%; margin: 6px 0; overflow: hidden;">
                     <div style="background: #f43f5e; width: {asr_bar_pct:.1f}%; height: 100%; border-radius: 9999px;"></div>
@@ -1117,6 +1159,55 @@ elif stage == "attack_results":
                     <div style="background: #06b6d4; width: 100%; height: 100%; border-radius: 9999px;"></div>
                 </div>
                 <div class="stat-subtext">Throughput: <strong>{ms_sample:.1f} ms/sample</strong> ({tot_samples} samples)</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+    # Dedicated Targeted Attack Execution Profile Banner
+    if is_targeted_run:
+        tgt_name_disp = result.get("target_label_name") or f"Class {target_label_val}"
+        tgt_hits = int(result.get("targeted_hit_count", succ_cnt))
+        collat_flips = int(result.get("collateral_flip_count", max(0, tot_samples - clean_correct_cnt - succ_cnt)))
+        tgt_pct = (tgt_hits / clean_correct_cnt * 100.0) if clean_correct_cnt > 0 else 0.0
+        collat_pct = (collat_flips / clean_correct_cnt * 100.0) if clean_correct_cnt > 0 else 0.0
+        resistant_cnt = max(0, clean_correct_cnt - tgt_hits - collat_flips)
+
+        st.markdown("<div style='height: 8px;'></div>", unsafe_allow_html=True)
+        st.markdown(
+            f"""
+            <div class="modern-card card-accent-violet" style="padding: 12px 16px;">
+                <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; margin-bottom: 6px;">
+                    <div>
+                        <span style="font-size: 0.8rem; font-weight: 700; color: #8b5cf6; text-transform: uppercase;">
+                            🎯 Targeted Attack Vector Execution Profile
+                        </span>
+                        <div style="font-size: 1.15rem; font-weight: 700; color: var(--text-primary); margin-top: 2px;">
+                            Target Class: <span style="color: #8b5cf6;">Class {target_label_val} — {tgt_name_disp}</span>
+                        </div>
+                    </div>
+                    <div style="display: flex; gap: 8px;">
+                        <span class="badge-status badge-violet">TARGETED CONSTRAINED</span>
+                        <span class="badge-status badge-rose">{tgt_hits} / {clean_correct_cnt} TARGET HITS</span>
+                    </div>
+                </div>
+                <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 10px; margin-top: 8px;">
+                    <div style="background: rgba(139, 92, 246, 0.08); border-radius: 6px; padding: 8px 12px; border: 1px solid rgba(139, 92, 246, 0.2);">
+                        <div style="font-size: 0.76rem; color: var(--text-secondary); text-transform: uppercase; font-weight: 600;">Primary Objective (Target Hits)</div>
+                        <div style="font-size: 1.2rem; font-weight: 700; color: #8b5cf6;">{tgt_hits} samples ({tgt_pct:.1f}%)</div>
+                        <div style="font-size: 0.74rem; color: var(--text-secondary);">Predicted strictly as {tgt_name_disp}</div>
+                    </div>
+                    <div style="background: rgba(245, 158, 11, 0.08); border-radius: 6px; padding: 8px 12px; border: 1px solid rgba(245, 158, 11, 0.2);">
+                        <div style="font-size: 0.76rem; color: var(--text-secondary); text-transform: uppercase; font-weight: 600;">Collateral Flips (Off-Target)</div>
+                        <div style="font-size: 1.2rem; font-weight: 700; color: #f59e0b;">{collat_flips} samples ({collat_pct:.1f}%)</div>
+                        <div style="font-size: 0.74rem; color: var(--text-secondary);">Misclassified, but missed target class</div>
+                    </div>
+                    <div style="background: rgba(16, 185, 129, 0.08); border-radius: 6px; padding: 8px 12px; border: 1px solid rgba(16, 185, 129, 0.2);">
+                        <div style="font-size: 0.76rem; color: var(--text-secondary); text-transform: uppercase; font-weight: 600;">Resistant (Maintained Label)</div>
+                        <div style="font-size: 1.2rem; font-weight: 700; color: #10b981;">{resistant_cnt} samples</div>
+                        <div style="font-size: 0.74rem; color: var(--text-secondary);">Remained robust against target coercion</div>
+                    </div>
+                </div>
             </div>
             """,
             unsafe_allow_html=True,
@@ -1580,7 +1671,110 @@ elif stage == "attack_results":
             "outcome": "Assessment Outcome",
         }
         df_comp = df_comp.rename(columns=display_cols)
-        st.table(df_comp)
+
+        # -------------------------------------------------------------
+        # Outcome Filter & Pagination Controls
+        # -------------------------------------------------------------
+        tot_eval_rows = len(df_comp)
+        outcome_col = "Assessment Outcome" if "Assessment Outcome" in df_comp.columns else ("Outcome" if "Outcome" in df_comp.columns else None)
+
+        col_ctrl1, col_ctrl2 = st.columns([2, 1])
+
+        with col_ctrl1:
+            filter_options = ["All Samples"]
+            if is_targeted_run:
+                filter_options.extend([
+                    "Targeted Hits 🎯",
+                    "Collateral Flips ⚠️",
+                    "Clean Invariant (Resistant) ✅",
+                    "Initial Clean Errors ❌",
+                ])
+            else:
+                filter_options.extend([
+                    "Adversarial Flips ⚠️",
+                    "Clean Invariant (Resistant) ✅",
+                    "Initial Clean Errors ❌",
+                ])
+
+            selected_filter = st.selectbox(
+                "🔍 Filter Samples by Outcome",
+                filter_options,
+                index=0,
+                key="atk_sample_filter",
+            )
+
+        with col_ctrl2:
+            page_size_options = [5, 10, 20, 50, "All"]
+            default_page_size_idx = 1 if tot_eval_rows > 10 else 0
+            selected_page_size = st.selectbox(
+                "📄 Rows per Page",
+                page_size_options,
+                index=default_page_size_idx,
+                key="atk_page_size",
+            )
+
+        # Apply Outcome Filter
+        df_filtered = df_comp.copy()
+        if outcome_col:
+            if selected_filter.startswith("Targeted Hits"):
+                df_filtered = df_filtered[df_filtered[outcome_col].astype(str).str.contains("Targeted Hit", na=False)]
+            elif selected_filter.startswith("Collateral Flips"):
+                df_filtered = df_filtered[df_filtered[outcome_col].astype(str).str.contains("Collateral|Untargeted", na=False)]
+            elif selected_filter.startswith("Adversarial Flips"):
+                df_filtered = df_filtered[df_filtered[outcome_col].astype(str).str.contains("Flip|Targeted Hit", na=False)]
+            elif selected_filter.startswith("Clean Invariant"):
+                df_filtered = df_filtered[df_filtered[outcome_col].astype(str).str.contains("Preserved|Invariant", na=False)]
+            elif selected_filter.startswith("Initial Clean Errors"):
+                df_filtered = df_filtered[df_filtered[outcome_col].astype(str).str.contains("Initial|Error", na=False)]
+
+        filtered_count = len(df_filtered)
+
+        # Pagination calculations
+        if selected_page_size == "All" or filtered_count <= 5:
+            page_size = max(1, filtered_count)
+            total_pages = 1
+            current_page = 1
+        else:
+            page_size = int(selected_page_size)
+            total_pages = max(1, math.ceil(filtered_count / page_size))
+            if "atk_page_idx" not in st.session_state:
+                st.session_state["atk_page_idx"] = 1
+            if st.session_state["atk_page_idx"] > total_pages:
+                st.session_state["atk_page_idx"] = total_pages
+            current_page = st.session_state["atk_page_idx"]
+
+        # Render Table Page Slice
+        if filtered_count > 0:
+            start_row = (current_page - 1) * page_size
+            end_row = min(start_row + page_size, filtered_count)
+            df_page = df_filtered.iloc[start_row:end_row]
+
+            st.table(df_page)
+
+            # Pagination Bar
+            if total_pages > 1:
+                col_p1, col_p2, col_p3 = st.columns([1, 2, 1])
+                with col_p1:
+                    if st.button("⬅️ Previous", disabled=(current_page <= 1), key="atk_prev_page", use_container_width=True):
+                        st.session_state["atk_page_idx"] = max(1, current_page - 1)
+                        st.rerun()
+                with col_p2:
+                    st.markdown(
+                        f"""
+                        <div style="text-align: center; padding: 6px 0; font-size: 0.88rem; color: var(--text-secondary);">
+                            Page <strong>{current_page}</strong> of <strong>{total_pages}</strong> • Showing samples <strong>{start_row + 1}–{end_row}</strong> of <strong>{filtered_count}</strong>
+                        </div>
+                        """,
+                        unsafe_allow_html=True,
+                    )
+                with col_p3:
+                    if st.button("Next ➡️", disabled=(current_page >= total_pages), key="atk_next_page", use_container_width=True):
+                        st.session_state["atk_page_idx"] = min(total_pages, current_page + 1)
+                        st.rerun()
+            else:
+                st.caption(f"Showing all {filtered_count} matching samples (of {tot_eval_rows} total evaluated).")
+        else:
+            st.info(f"No samples match the filter '{selected_filter}'.")
     else:
         st.info("No per-sample prediction comparisons available.")
 
@@ -2089,7 +2283,76 @@ elif stage == "defense_results":
 
         st.markdown("<div style='height: 8px;'></div>", unsafe_allow_html=True)
         df_restored = pd.DataFrame(sample_restorations)
-        st.table(df_restored)
+        tot_rest_rows = len(df_restored)
+        outcome_def_col = "Outcome" if "Outcome" in df_restored.columns else None
+
+        col_dctrl1, col_dctrl2 = st.columns([2, 1])
+        with col_dctrl1:
+            def_filter = st.selectbox(
+                "🔍 Filter Hardened Sample Outcomes",
+                ["All Samples", "Restored to Correct Label ✅", "Invariant / Resistant 🛡️", "Remains Adversarially Flipped ❌"],
+                index=0,
+                key="def_sample_filter",
+            )
+        with col_dctrl2:
+            def_page_size = st.selectbox(
+                "📄 Rows per Page",
+                [5, 10, 20, 50, "All"],
+                index=1 if tot_rest_rows > 10 else 0,
+                key="def_page_size",
+            )
+
+        df_def_filtered = df_restored.copy()
+        if outcome_def_col:
+            if def_filter.startswith("Restored"):
+                df_def_filtered = df_def_filtered[df_def_filtered[outcome_def_col].astype(str).str.contains("Restored", na=False)]
+            elif def_filter.startswith("Invariant"):
+                df_def_filtered = df_def_filtered[df_def_filtered[outcome_def_col].astype(str).str.contains("Robust|Defended|Invariant", na=False)]
+            elif def_filter.startswith("Remains"):
+                df_def_filtered = df_def_filtered[df_def_filtered[outcome_def_col].astype(str).str.contains("Flipped|Remains|Error", na=False)]
+
+        def_filt_cnt = len(df_def_filtered)
+        if def_page_size == "All" or def_filt_cnt <= 5:
+            d_page_size = max(1, def_filt_cnt)
+            d_total_pages = 1
+            d_current_page = 1
+        else:
+            d_page_size = int(def_page_size)
+            d_total_pages = max(1, math.ceil(def_filt_cnt / d_page_size))
+            if "def_page_idx" not in st.session_state:
+                st.session_state["def_page_idx"] = 1
+            if st.session_state["def_page_idx"] > d_total_pages:
+                st.session_state["def_page_idx"] = d_total_pages
+            d_current_page = st.session_state["def_page_idx"]
+
+        if def_filt_cnt > 0:
+            d_start = (d_current_page - 1) * d_page_size
+            d_end = min(d_start + d_page_size, def_filt_cnt)
+            st.table(df_def_filtered.iloc[d_start:d_end])
+
+            if d_total_pages > 1:
+                col_dp1, col_dp2, col_dp3 = st.columns([1, 2, 1])
+                with col_dp1:
+                    if st.button("⬅️ Previous", disabled=(d_current_page <= 1), key="def_prev_page", use_container_width=True):
+                        st.session_state["def_page_idx"] = max(1, d_current_page - 1)
+                        st.rerun()
+                with col_dp2:
+                    st.markdown(
+                        f"""
+                        <div style="text-align: center; padding: 6px 0; font-size: 0.88rem; color: var(--text-secondary);">
+                            Page <strong>{d_current_page}</strong> of <strong>{d_total_pages}</strong> • Showing samples <strong>{d_start + 1}–{d_end}</strong> of <strong>{def_filt_cnt}</strong>
+                        </div>
+                        """,
+                        unsafe_allow_html=True,
+                    )
+                with col_dp3:
+                    if st.button("Next ➡️", disabled=(d_current_page >= d_total_pages), key="def_next_page", use_container_width=True):
+                        st.session_state["def_page_idx"] = min(d_total_pages, d_current_page + 1)
+                        st.rerun()
+            else:
+                st.caption(f"Showing all {def_filt_cnt} matching samples (of {tot_rest_rows} total evaluated).")
+        else:
+            st.info(f"No samples match the filter '{def_filter}'.")
 
     # 5. Candidate Defense Attempts Breakdown (if Iterative/Auto mode)
     candidate_attempts = def_result.get("candidate_attempts", [])
