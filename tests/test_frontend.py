@@ -262,3 +262,302 @@ def test_theme_manager_initialization(monkeypatch):
     load_theme("Dark")
     load_theme("Light")
 
+
+def test_targeted_attack_execution_and_propagation():
+    """Verify targeted attack configuration, parameter propagation, and outcome classification (A01, A02, A03, A04)."""
+    from frontend.services.attack_service import execute_configured_attack
+
+    model = SimpleVisionModel()
+    inputs = torch.rand(4, 3, 16, 16)
+    labels = torch.tensor([0, 0, 0, 0])
+
+    params = {
+        "targeted": True,
+        "target_label": 1,
+    }
+
+    result = execute_configured_attack(
+        model=model,
+        attack_name="fgsm",
+        inputs=inputs,
+        labels=labels,
+        epsilon=0.1,
+        clip_min=0.0,
+        clip_max=1.0,
+        params=params,
+    )
+
+    assert result is not None
+    assert result["is_targeted"] is True
+    assert result["target_label"] == 1
+    assert "parameters_used" in result
+    assert result["parameters_used"]["targeted"] is True
+    assert result["parameters_used"]["target_label"] == 1
+    assert "sample_comparisons" in result
+    assert len(result["sample_comparisons"]) == 4
+
+
+def test_asr_denominator_and_clean_misclassification_handling():
+    """Verify ASR excludes cleanly misclassified samples from denominator (A06, A07)."""
+    from frontend.services.attack_service import execute_configured_attack
+
+    model = SimpleVisionModel()
+    inputs = torch.rand(4, 3, 16, 16)
+    
+    # Get model's clean predictions and invert them so all samples are cleanly misclassified
+    with torch.no_grad():
+        preds = model(inputs).argmax(dim=-1)
+    labels = 1 - preds  # labels are valid (0 or 1) but opposite to clean predictions
+
+    result = execute_configured_attack(
+        model=model,
+        attack_name="fgsm",
+        inputs=inputs,
+        labels=labels,
+        epsilon=0.05,
+    )
+
+    assert result["clean_accuracy"] == 0.0
+    assert result["clean_correct_count"] == 0
+    # ASR is undefined and 0.0 when 0 clean samples are correct
+    assert result["asr_undefined"] is True
+    assert result["asr_percentage"] == 0.0
+
+
+def test_defense_service_rejects_missing_adversarial_tensor():
+    """Verify defense execution never substitutes clean inputs for missing adversarial examples (A08)."""
+    model = SimpleVisionModel()
+    inputs = torch.rand(4, 3, 16, 16)
+    labels = torch.tensor([0, 1, 0, 1])
+
+    attack_res = {
+        "attack_name": "fgsm",
+        "clean_accuracy": 100.0,
+        "adversarial_accuracy": 0.0,
+        "asr_percentage": 100.0,
+        "total_samples": 4,
+    }
+
+    with pytest.raises(ValueError, match="Adversarial examples tensor is missing"):
+        execute_configured_defense(
+            model=model,
+            domain="image",
+            defense_choice="spatial_smoothing",
+            test_inputs=inputs,
+            test_labels=labels,
+            adversarial_examples=None,
+            attack_result=attack_res,
+        )
+
+
+def test_vulnerability_service_authentic_scoring_and_explanations():
+    """Verify authentic M5 VulnerabilityEngine assessment and scoring (A11, A12, A13, A14)."""
+    from frontend.services.vulnerability_service import assess_and_score_vulnerability
+
+    model = SimpleVisionModel()
+    inputs = torch.rand(4, 3, 16, 16)
+    labels = torch.tensor([0, 1, 0, 1])
+    adv_inputs = inputs + 0.08 * torch.randn_like(inputs)
+
+    attack_result = {
+        "attack_name": "FGSM",
+        "attack_class": "FGSM",
+        "execution_time": 0.12,
+        "total_samples": 4,
+        "clean_accuracy": 100.0,
+        "adversarial_accuracy": 25.0,
+        "asr_percentage": 75.0,
+        "clean_confidence": 92.0,
+        "adversarial_confidence": 55.0,
+        "confidence_drop": 37.0,
+        "original_predictions": [0, 1, 0, 1],
+        "adversarial_predictions": [1, 1, 1, 1],
+        "perturbation_metrics": {"linf": 0.08, "l2": 0.25, "l0": 100},
+        "_adversarial_examples": adv_inputs,
+        "epsilon_used": 0.08,
+    }
+
+    vuln_res = assess_and_score_vulnerability(
+        model=model,
+        attack_result=attack_result,
+        inputs=inputs,
+        labels=labels,
+        domain="image",
+    )
+
+    assert vuln_res is not None
+    assert "vulnerability_score" in vuln_res
+    assert vuln_res["risk_level"] in ("LOW", "MEDIUM", "HIGH", "CRITICAL")
+    assert "sub_scores" in vuln_res
+    assert "asr_score" in vuln_res["sub_scores"]
+    assert "degradation_score" in vuln_res["sub_scores"]
+    assert "stealth_score" in vuln_res["sub_scores"]
+    assert "metric_explanations" in vuln_res
+    assert "summary" in vuln_res["metric_explanations"]
+    assert "asr_component" in vuln_res["metric_explanations"]
+    assert "degradation_component" in vuln_res["metric_explanations"]
+    assert "stealth_component" in vuln_res["metric_explanations"]
+    assert "risk_rationale" in vuln_res["metric_explanations"]
+
+
+def test_synthetic_dataset_fallback_flagging():
+    """Verify synthetic fallback clearly marks dataset as synthetic (A05)."""
+    from frontend.services.ingestion_service import load_model_and_dataset
+
+    model = SimpleVisionModel()
+    # Attempting to load non-existent dataset will trigger synthetic fallback
+    res = load_model_and_dataset(
+        model_identifier=model,
+        dataset_name="non_existent_dataset_abc_123",
+        data_domain="image",
+        sample_size=4,
+    )
+
+    assert res["is_synthetic_dataset"] is True
+    assert "Synthetic Fallback" in res["dataset_name"]
+    assert res["telemetry"]["is_synthetic_dataset"] is True
+    assert res["telemetry"]["dataset_source"] == "synthetic_fallback"
+
+
+def test_report_service_no_fabricated_values():
+    """Verify reports use measured values and do not fabricate loss or stealth metrics (A15)."""
+    model_meta = {"Model Name": "M", "Architecture": "A", "Framework": "PyTorch"}
+    dataset_info = {"dataset_name": "D", "total_samples": 4}
+    attack_result = {
+        "attack_name": "FGSM",
+        "clean_accuracy": 100.0,
+        "adversarial_accuracy": 0.0,
+        "asr_percentage": 100.0,
+        "perturbation_metrics": {"linf": 0.05},
+        "total_samples": 4,
+    }
+
+    report = generate_security_report(
+        model_metadata=model_meta,
+        dataset_info=dataset_info,
+        attack_result=attack_result,
+        domain="image",
+    )
+
+    # Verify baseline performance loss is "Not Measured" when not provided, not 0.25
+    assert report.baseline_performance.get("loss") == "Not Measured"
+    # Verify report contains valid vulnerability score
+    assert report.vulnerability_score is not None
+
+
+def test_session_state_vulnerability_result():
+    """Verify session state holds and retrieves vulnerability results (A13)."""
+    from frontend.utils.session_state import (
+        get_vulnerability_result,
+        set_vulnerability_result,
+    )
+
+    mock_vuln = {"vulnerability_score": 72.5, "risk_level": "HIGH"}
+    set_vulnerability_result(mock_vuln)
+    assert get_vulnerability_result() == mock_vuln
+
+
+def test_vulnerability_recommendations_generation():
+    """Verify vulnerability recommendations are generated with proper metadata."""
+    from frontend.services.vulnerability_service import (
+        generate_vulnerability_recommendations,
+    )
+
+    # Test untargeted image domain
+    recs_img = generate_vulnerability_recommendations(
+        domain="image",
+        attack_name="FGSM",
+        vuln_score=85.0,
+        risk_level="CRITICAL",
+        asr=90.0,
+        is_targeted=False,
+    )
+    assert len(recs_img) >= 3
+    for r in recs_img:
+        assert "category" in r
+        assert "icon" in r
+        assert "title" in r
+        assert "priority" in r
+        assert "description" in r
+        assert len(r["description"]) > 10
+
+    # Test targeted tabular domain
+    recs_tab = generate_vulnerability_recommendations(
+        domain="tabular",
+        attack_name="HopSkipJump",
+        vuln_score=65.0,
+        risk_level="HIGH",
+        asr=75.0,
+        is_targeted=True,
+    )
+    assert len(recs_tab) >= 4
+    # Targeted recommendation should be first
+    assert recs_tab[0]["category"] == "Targeted Threat Defense"
+    assert recs_tab[0]["priority"] == "Urgent"
+
+
+def test_no_bar_charts_in_stage_4_attack_results():
+    """Verify that unnecessary bar charts have been removed from attack results stage."""
+    from pathlib import Path
+
+    app_code = Path("frontend/streamlit_app.py").read_text(encoding="utf-8")
+    # Find the attack_results stage block
+    stage_start = app_code.find('stage == "attack_results":')
+    stage_end = app_code.find('stage == "defense_config":')
+    assert stage_start != -1 and stage_end != -1
+
+    stage_code = app_code[stage_start:stage_end]
+    # Verify no st.bar_chart calls are present in stage 4
+    assert "st.bar_chart" not in stage_code
+    # Verify proper tables are used instead
+    assert "st.table" in stage_code
+    assert "Perturbation Norms & Geometric Bounds" in stage_code
+    assert "Actionable Security & Hardening Recommendations" in stage_code
+
+
+def test_dataset_sample_population_and_selection_options():
+    """Verify dataset total samples resolution and UI selection options (half, full, custom)."""
+    from frontend.services.ingestion_service import get_dataset_total_samples
+    from pathlib import Path
+
+    # Test preset & disk lookups
+    assert get_dataset_total_samples("adult_census", "tabular", "tabular-mlp-adult-census") == 250
+    assert get_dataset_total_samples("credit_fraud", "tabular", "tabular-mlp-credit-fraud") == 250
+    assert get_dataset_total_samples("bazyl/GTSRB", "image", "bazyl/gtsrb-model") == 12630
+    assert get_dataset_total_samples("time_series_ecg", "time-series", "time-series-ecg-classifier") == 200
+
+    # Verify frontend/streamlit_app.py contains half/full/custom selectors
+    app_code = Path("frontend/streamlit_app.py").read_text(encoding="utf-8")
+    assert "Half Dataset" in app_code
+    assert "Full Dataset" in app_code
+    assert "Custom Number of Samples" in app_code
+    assert "Dataset Population in Model/Benchmark" in app_code
+
+
+def test_perturbation_metrics_backend_format_and_outcome_counts():
+    """Verify backend format support for perturbation norms and sample outcome counts."""
+    from app.attack_engine.utils.perturbation import compute_perturbation_metrics
+    import torch
+
+    x1 = torch.zeros(2, 3, 4, 4)
+    x2 = x1 + 0.05
+    metrics = compute_perturbation_metrics(x1, x2)
+
+    # Verify both standard and extended backend formats are present
+    assert "linf" in metrics and "linf_mean" in metrics and "linf_max" in metrics
+    assert "l2" in metrics and "l2_mean" in metrics and "l2_max" in metrics
+    assert "l0" in metrics and "l0_mean_count" in metrics and "l0_mean_pct" in metrics
+    assert "mean_abs_error" in metrics and "mae_mean" in metrics
+    assert metrics["l0_mean_pct"] == 100.0
+    assert abs(metrics["linf_mean"] - 0.05) < 1e-4
+
+    # Verify sample outcome count logic in streamlit_app.py
+    from pathlib import Path
+    app_code = Path("frontend/streamlit_app.py").read_text(encoding="utf-8")
+    assert 'succ_o = int(result.get("successful_count"' in app_code
+    assert 'clean_correct = int(result.get("clean_correct_count"' in app_code
+
+
+
+
+

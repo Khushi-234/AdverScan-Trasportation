@@ -29,6 +29,7 @@ DEFAULT_SESSION_STATE: Dict[str, Any] = {
     "_test_inputs": None,
     "_test_labels": None,
     "_latest_attack_result": None,
+    "_latest_vulnerability_result": None,
     "_latest_defense_result": None,
     "_latest_report_result": None,
 }
@@ -141,6 +142,18 @@ def get_attack_result() -> Optional[Dict[str, Any]]:
     """Get latest attack execution result."""
     init_session_state()
     return st.session_state.get("_latest_attack_result")
+
+
+def set_vulnerability_result(result: Dict[str, Any]) -> None:
+    """Save latest M5 vulnerability assessment and scoring result."""
+    init_session_state()
+    st.session_state["_latest_vulnerability_result"] = result
+
+
+def get_vulnerability_result() -> Optional[Dict[str, Any]]:
+    """Get latest M5 vulnerability assessment and scoring result."""
+    init_session_state()
+    return st.session_state.get("_latest_vulnerability_result")
 
 
 def set_defense_result(result: Dict[str, Any]) -> None:

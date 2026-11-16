@@ -9,10 +9,15 @@ Extracts comprehensive telemetry matching scripts/run_pipeline_for_multimodel.py
 from __future__ import annotations
 
 import time
+from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
+import pandas as pd
 import torch
 
-from app.evaluation.dataset_loader.factory import get_dataset_loader
+from app.evaluation.dataset_loader.factory import (
+    get_dataset_loader,
+    resolve_dataset_file,
+)
 from app.ingestion.exceptions import (
     ConfigurationError,
     DatasetFormatError,
@@ -24,12 +29,86 @@ from app.ingestion.exceptions import (
     UnsupportedTaskError,
 )
 from app.ingestion.pipeline import IngestionResult, ingest_model
-from app.ingestion.presets import MODEL_PRESETS
+from app.ingestion.presets import KNOWN_DATASET_SAMPLE_COUNTS, MODEL_PRESETS
 
 
 def get_available_presets() -> Dict[str, Dict[str, Any]]:
     """Retrieve existing model presets configured in the backend."""
     return MODEL_PRESETS
+
+
+def get_dataset_total_samples(
+    dataset_name: Optional[str] = None,
+    data_domain: Optional[str] = "image",
+    model_identifier: Optional[str] = None,
+) -> int:
+    """
+    Resolve total sample count available for a given dataset or model benchmark.
+    Checks local files (CSV, PyTorch tensors), known benchmark datasets, and presets.
+    """
+    clean_ds = str(dataset_name or "").strip().lower()
+
+    # 1. Exact match in known dataset sample counts
+    if clean_ds and clean_ds in KNOWN_DATASET_SAMPLE_COUNTS:
+        return int(KNOWN_DATASET_SAMPLE_COUNTS[clean_ds])
+
+    # 2. Fuzzy or suffix match against known datasets (e.g. "gtsrb", "cifar10")
+    if clean_ds:
+        for k, v in KNOWN_DATASET_SAMPLE_COUNTS.items():
+            if k.lower() == clean_ds or k.lower().endswith("/" + clean_ds) or clean_ds.endswith("/" + k.lower()):
+                return int(v)
+
+    # 3. Model preset lookup
+    if model_identifier and model_identifier in MODEL_PRESETS:
+        preset_ds = str(MODEL_PRESETS[model_identifier].get("dataset_name", "")).strip().lower()
+        if preset_ds in KNOWN_DATASET_SAMPLE_COUNTS:
+            return int(KNOWN_DATASET_SAMPLE_COUNTS[preset_ds])
+        for k, v in KNOWN_DATASET_SAMPLE_COUNTS.items():
+            if k.lower() == preset_ds or k.lower().endswith("/" + preset_ds) or preset_ds.endswith("/" + k.lower()):
+                return int(v)
+
+    # 4. Check local disk files (CSV, PT, PTH, Parquet)
+    try:
+        resolved = resolve_dataset_file(
+            identifier=dataset_name,
+            candidate_extensions=[".csv", ".pt", ".pth", ".parquet", ".npy"],
+            model_identifier=model_identifier,
+        )
+        if resolved and Path(resolved).is_file():
+            p = Path(resolved)
+            if p.suffix == ".csv":
+                with open(p, "r", encoding="utf-8", errors="ignore") as f:
+                    lines = sum(1 for _ in f) - 1
+                if lines > 0:
+                    return lines
+            elif p.suffix in (".pt", ".pth"):
+                obj = torch.load(p, weights_only=False, map_location="cpu")
+                if isinstance(obj, dict):
+                    for key in ("inputs", "data", "x", "samples", "features"):
+                        if key in obj and hasattr(obj[key], "shape") and len(obj[key].shape) > 0:
+                            return int(obj[key].shape[0])
+                    for v in obj.values():
+                        if hasattr(v, "shape") and len(v.shape) > 0:
+                            return int(v.shape[0])
+                elif hasattr(obj, "shape") and len(obj.shape) > 0:
+                    return int(obj.shape[0])
+                elif hasattr(obj, "__len__"):
+                    return len(obj)
+            elif p.suffix == ".parquet":
+                df = pd.read_parquet(p)
+                return len(df)
+    except Exception:
+        pass
+
+    # 5. Fallback defaults by domain
+    clean_domain = str(data_domain or "").strip().lower()
+    if clean_domain in ("tabular", "csv"):
+        return 250
+    elif clean_domain in ("time-series", "timeseries"):
+        return 200
+    elif clean_domain in ("text", "nlp"):
+        return 872
+    return 1000
 
 
 def load_model_and_dataset(
@@ -198,6 +277,7 @@ def load_model_and_dataset(
     test_inputs: Optional[torch.Tensor] = None
     test_labels: Optional[torch.Tensor] = None
     is_synthetic_dataset = False
+    fallback_reason: Optional[str] = None
     resolved_dataset = dataset_name or metadata.dataset_name or clean_id
 
     try:
@@ -213,11 +293,14 @@ def load_model_and_dataset(
             test_inputs = batch[0]
             test_labels = batch[1]
             break
-    except Exception:
+    except Exception as exc:
+        fallback_reason = str(exc)
         test_inputs, test_labels = _generate_domain_sample_batch(metadata, sample_size)
         is_synthetic_dataset = True
 
     if test_inputs is None or test_labels is None:
+        if not fallback_reason:
+            fallback_reason = "Dataset loader returned empty batch"
         test_inputs, test_labels = _generate_domain_sample_batch(metadata, sample_size)
         is_synthetic_dataset = True
 
@@ -250,8 +333,8 @@ def load_model_and_dataset(
     )
 
     dataset_display_name = (
-        "In-memory dataset"
-        if is_synthetic_dataset and not dataset_name
+        f"Synthetic Fallback Data ({resolved_dataset} failed)"
+        if is_synthetic_dataset
         else resolved_dataset
     )
 
@@ -260,6 +343,12 @@ def load_model_and_dataset(
         list(test_inputs.shape[1:])
         if test_inputs is not None
         else (preset_info.get("input_resolution") or metadata.input_shape or None)
+    )
+
+    total_dataset_samples = get_dataset_total_samples(
+        dataset_name=resolved_dataset,
+        data_domain=resolved_domain,
+        model_identifier=clean_id,
     )
 
     # Build rich telemetry contract (aligned with run_pipeline_for_multimodel.py)
@@ -280,6 +369,10 @@ def load_model_and_dataset(
         "ingestion_time": ingestion_time,
         "device": device_name,
         "dataset_name": dataset_display_name,
+        "total_dataset_samples": total_dataset_samples,
+        "is_synthetic_dataset": is_synthetic_dataset,
+        "dataset_source": "synthetic_fallback" if is_synthetic_dataset else "real_dataset",
+        "dataset_fallback_reason": fallback_reason,
         "input_shape": (
             str(observed_input_shape)
             if observed_input_shape is not None
@@ -299,6 +392,8 @@ def load_model_and_dataset(
         "Domain": str(resolved_domain).capitalize(),
         "Framework": str(getattr(metadata, "framework", None) or "PyTorch").upper(),
         "Dataset": dataset_display_name,
+        "Total Dataset Samples": f"{total_dataset_samples:,}",
+        "Dataset Source": "Synthetic Fallback (Generated)" if is_synthetic_dataset else "Real Dataset",
         "Task Type": str(
             getattr(metadata, "task_type", None)
             or preset_info.get("task_type")
@@ -316,6 +411,9 @@ def load_model_and_dataset(
         "metadata": metadata,
         "metadata_dict": metadata_dict,
         "telemetry": telemetry,
+        "is_synthetic_dataset": is_synthetic_dataset,
+        "dataset_source": "synthetic_fallback" if is_synthetic_dataset else "real_dataset",
+        "dataset_fallback_reason": fallback_reason,
         "total_parameters": total_params,
         "trainable_parameters": trainable_params,
         "trainable_pct": trainable_pct,
@@ -329,6 +427,7 @@ def load_model_and_dataset(
             else f"({sample_size}, ...)"
         ),
         "sample_size": actual_evaluated_samples,
+        "total_dataset_samples": total_dataset_samples,
         "device": device_name,
         "test_inputs": test_inputs,
         "test_labels": test_labels,

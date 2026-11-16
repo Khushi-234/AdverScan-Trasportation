@@ -283,16 +283,36 @@ def execute_configured_defense(
     except Exception:
         device = torch.device("cpu")
 
-    # If adversarial examples were not preserved, fall back to clean inputs
+    # Never substitute clean inputs for adversarial examples (A08)
+    if adversarial_examples is None or not isinstance(adversarial_examples, torch.Tensor):
+        raise ValueError(
+            "Adversarial examples tensor is missing or invalid. "
+            "Cannot perform defense evaluation without genuine adversarial examples from M3. "
+            "Clean inputs must never be substituted for adversarial examples."
+        )
     adv_tensor = adversarial_examples
-    if adv_tensor is None or not isinstance(adv_tensor, torch.Tensor):
-        adv_tensor = test_inputs
+
+    params = attack_result.get("parameters") or attack_result.get("parameters_used") or {}
+    is_targeted = bool(params.get("targeted", False) or attack_result.get("is_targeted", False))
+    target_label = params.get("target_label", attack_result.get("target_label"))
+    if target_label is not None:
+        try:
+            target_label = int(target_label)
+        except (ValueError, TypeError):
+            pass
 
     attack_name = str(attack_result.get("attack_name", "fgsm")).lower()
     base_clean_acc = float(attack_result.get("clean_accuracy", 100.0)) / 100.0
     base_adv_acc = float(attack_result.get("adversarial_accuracy", 0.0)) / 100.0
     base_asr = float(attack_result.get("asr_percentage", 0.0)) / 100.0
-    base_vuln = round(base_asr * 100.0, 2)
+    
+    # Use authentic M5 vulnerability score if available (A11)
+    if attack_result.get("vulnerability_score") is not None:
+        base_vuln = float(attack_result["vulnerability_score"])
+    else:
+        deg_pts = max(0.0, (base_clean_acc - base_adv_acc) * 100.0)
+        base_vuln = round(0.50 * (base_asr * 100.0) + 0.35 * deg_pts, 2)
+
     base_risk = "HIGH" if base_asr >= 0.6 else ("MEDIUM" if base_asr >= 0.3 else "LOW")
 
     # Build evaluation closure for candidate models
@@ -318,9 +338,21 @@ def execute_configured_defense(
 
         latency_ms = (time.time() - t0) * 1000.0
 
-        # Attack Success Rate under defense: proportion of samples still misclassified or flipped
-        cand_asr = max(0.0, float(1.0 - cand_adv_acc))
-        cand_vuln = round(cand_asr * 100.0, 2)
+        # Attack Success Rate under defense: proportion of initially-correct samples still misclassified or targeted (A06, A07)
+        clean_right = (c_preds == labels_tensor.cpu())
+        num_clean_right = int(clean_right.sum().item())
+        if num_clean_right > 0:
+            if is_targeted and target_label is not None:
+                still_succ = clean_right & (a_preds == target_label)
+            else:
+                still_succ = clean_right & (a_preds != labels_tensor.cpu())
+            cand_asr = float(still_succ.sum().item() / num_clean_right)
+        else:
+            cand_asr = 0.0
+
+        # Candidate vulnerability score from M5 weighting
+        cand_deg = max(0.0, (cand_clean_acc - cand_adv_acc) * 100.0)
+        cand_vuln = round(0.50 * (cand_asr * 100.0) + 0.35 * cand_deg, 2)
 
         return {
             "clean_accuracy": cand_clean_acc,
@@ -390,8 +422,21 @@ def execute_configured_defense(
 
     post_clean_acc = (def_clean_correct / total_samples) * 100.0 if total_samples > 0 else 0.0
     post_adv_acc = (def_adv_correct / total_samples) * 100.0 if total_samples > 0 else 0.0
-    post_asr = max(0.0, 100.0 - post_adv_acc)
-    post_vuln = post_asr
+
+    # Calculate post_asr using clean_correct as denominator (A06, A07)
+    clean_right_post = (def_clean_preds == labels_tensor.cpu())
+    num_clean_right_post = int(clean_right_post.sum().item())
+    if num_clean_right_post > 0:
+        if is_targeted and target_label is not None:
+            post_still_succ = clean_right_post & (def_adv_preds == target_label)
+        else:
+            post_still_succ = clean_right_post & (def_adv_preds != labels_tensor.cpu())
+        post_asr = float(post_still_succ.sum().item() / num_clean_right_post) * 100.0
+    else:
+        post_asr = 0.0
+
+    post_deg = max(0.0, (post_clean_acc - post_adv_acc))
+    post_vuln = round(0.50 * post_asr + 0.35 * post_deg, 2)
 
     asr_reduction_pct = max(0.0, (base_asr * 100.0) - post_asr)
     vuln_improvement_pts = max(0.0, base_vuln - post_vuln)

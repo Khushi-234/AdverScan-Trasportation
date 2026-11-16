@@ -43,15 +43,21 @@ from frontend.services.defense_service import (
 )
 from frontend.services.ingestion_service import (
     get_available_presets,
+    get_dataset_total_samples,
     load_model_and_dataset,
 )
 from frontend.services.report_service import generate_security_report
+from frontend.services.vulnerability_service import (
+    assess_and_score_vulnerability,
+    generate_vulnerability_recommendations,
+)
 from frontend.utils.session_state import (
     get_active_assessment,
     get_attack_result,
     get_defense_result,
     get_report_result,
     get_state,
+    get_vulnerability_result,
     get_workflow_stage,
     init_session_state,
     reset_workflow_state,
@@ -60,6 +66,7 @@ from frontend.utils.session_state import (
     set_defense_result,
     set_report_result,
     set_state,
+    set_vulnerability_result,
     set_workflow_stage,
 )
 from frontend.utils.theme_manager import initialize_theme, load_theme
@@ -212,7 +219,7 @@ elif stage == "ingestion":
         )
         default_framework = st.selectbox("Framework", ["pytorch", "sklearn"], index=0)
 
-    col_data, col_sample = st.columns([3, 1])
+    col_data, col_sample = st.columns([1, 1])
 
     with col_data:
         dataset_input = st.text_input(
@@ -222,14 +229,94 @@ elif stage == "ingestion":
             help="Dataset name or path to load evaluation samples from",
         )
 
-    with col_sample:
-        sample_size = st.number_input(
-            "Evaluation Samples",
-            min_value=1,
-            max_value=100,
-            value=5,
-            help="Number of samples to load into memory for fast CPU / GPU evaluation",
+        effective_dataset = dataset_input.strip() if dataset_input.strip() else default_dataset
+        total_avail_samples = get_dataset_total_samples(
+            dataset_name=effective_dataset,
+            data_domain=default_domain,
+            model_identifier=model_identifier,
         )
+        half_samples = max(1, total_avail_samples // 2)
+        full_samples = total_avail_samples
+
+        st.markdown(
+            f"""
+            <div style="background: rgba(6, 182, 212, 0.08); border: 1px solid rgba(6, 182, 212, 0.25); border-radius: 8px; padding: 10px 14px; margin-top: 6px;">
+                <div style="display: flex; justify-content: space-between; align-items: center;">
+                    <span style="font-size: 0.84rem; font-weight: 600; color: var(--text-secondary); text-transform: uppercase;">
+                        📦 Dataset Population in Model/Benchmark
+                    </span>
+                    <span class="badge-status badge-cyan">{default_domain.upper()}</span>
+                </div>
+                <div style="font-size: 1.35rem; font-weight: 700; color: var(--stat-val-cyan); margin: 4px 0;">
+                    {total_avail_samples:,} <span style="font-size: 0.9rem; font-weight: 500; color: var(--text-secondary);">Total Samples Present</span>
+                </div>
+                <div style="font-size: 0.8rem; color: var(--text-secondary);">
+                    Resolved source: <code>{effective_dataset}</code> • Half split: <strong>{half_samples:,}</strong> • Full split: <strong>{full_samples:,}</strong>
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+    with col_sample:
+        sample_choice = st.radio(
+            "Evaluation Sample Population",
+            [
+                "Custom Number of Samples",
+                f"Half Dataset (50% • {half_samples:,} samples)",
+                f"Full Dataset (100% • {full_samples:,} samples)",
+            ],
+            index=0,
+            help="Select a custom sample batch, half (50%) of the benchmark, or the complete dataset (100%)",
+        )
+
+        if sample_choice.startswith("Half Dataset"):
+            sample_size = half_samples
+            st.markdown(
+                f"""
+                <div style="background: rgba(16, 185, 129, 0.08); border: 1px solid rgba(16, 185, 129, 0.25); border-radius: 8px; padding: 10px 14px; margin-top: 6px;">
+                    <div style="font-weight: 700; color: var(--stat-val-emerald); font-size: 0.95rem;">
+                        ⚡ Half Dataset Mode Selected
+                    </div>
+                    <div style="font-size: 0.85rem; color: var(--text-secondary); margin-top: 4px; line-height: 1.4;">
+                        Evaluating <strong>{sample_size:,}</strong> samples (50.0% coverage of {total_avail_samples:,} total samples).
+                    </div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+        elif sample_choice.startswith("Full Dataset"):
+            sample_size = full_samples
+            warning_msg = ""
+            if full_samples > 1000 and default_domain in ("image", "vision"):
+                warning_msg = f"<div style='font-size: 0.78rem; color: #f59e0b; margin-top: 4px;'>⚠️ Note: Ingesting {sample_size:,} vision tensors will run gradient backpropagation across all images.</div>"
+            st.markdown(
+                f"""
+                <div style="background: rgba(139, 92, 246, 0.08); border: 1px solid rgba(139, 92, 246, 0.25); border-radius: 8px; padding: 10px 14px; margin-top: 6px;">
+                    <div style="font-weight: 700; color: #8b5cf6; font-size: 0.95rem;">
+                        🚀 Full Dataset Mode Selected
+                    </div>
+                    <div style="font-size: 0.85rem; color: var(--text-secondary); margin-top: 4px; line-height: 1.4;">
+                        Evaluating all <strong>{sample_size:,}</strong> samples (100.0% full benchmark coverage).
+                        {warning_msg}
+                    </div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+        else:
+            sample_size = st.number_input(
+                "Evaluation Samples (Batch Size)",
+                min_value=1,
+                max_value=max(100, total_avail_samples),
+                value=min(5, total_avail_samples),
+                step=1,
+                help=f"Number of samples to load into memory for evaluation (1 to {total_avail_samples:,})",
+            )
+            pct_cov = (sample_size / max(1, total_avail_samples)) * 100.0
+            st.caption(
+                f"Selected: **{sample_size:,}** of **{total_avail_samples:,}** samples (**{pct_cov:.1f}%** dataset coverage)"
+            )
 
     st.markdown("<div style='height: 10px;'></div>", unsafe_allow_html=True)
 
@@ -428,6 +515,9 @@ elif stage == "ingestion":
             )
 
         with col_c3:
+            tot_ds_samples = active_data.get("total_dataset_samples") or meta.get("Total Dataset Samples") or meta.get("total_dataset_samples")
+            tot_samples_str = f"{tot_ds_samples:,} samples" if isinstance(tot_ds_samples, int) else (f"{tot_ds_samples}" if tot_ds_samples else "Available")
+            cov_pct_str = f"({(samples_eval / tot_ds_samples * 100):.1f}% coverage)" if isinstance(tot_ds_samples, int) and tot_ds_samples > 0 else ""
             st.markdown(
                 f"""
                 <div class="modern-card card-accent-violet">
@@ -437,13 +527,21 @@ elif stage == "ingestion":
                     </div>
                     <div style="font-size: 0.85rem; color: var(--text-secondary); line-height: 1.6; margin-top: 0.6rem;">
                         • <strong>Dataset Identifier:</strong> {dataset_ident}<br>
-                        • <strong>Evaluated Samples:</strong> {samples_eval} samples<br>
+                        • <strong>Dataset Population:</strong> {tot_samples_str}<br>
+                        • <strong>Evaluated Samples:</strong> {samples_eval} samples {cov_pct_str}<br>
                         • <strong>Batch Tensor Shape:</strong> {tensor_shape}<br>
                         • <strong>Ingestion Wall Time:</strong> {ingest_disp}
                     </div>
                 </div>
                 """,
                 unsafe_allow_html=True,
+            )
+
+        if active_data and active_data.get("is_synthetic_dataset"):
+            st.warning(
+                "⚠️ **Synthetic Fallback Data Active:** The requested dataset could not be loaded; "
+                "synthetic inputs were generated to allow functional inspection. "
+                "These results must **not** be presented as a real dataset robustness experiment."
             )
 
         st.markdown("<div style='height: 15px;'></div>", unsafe_allow_html=True)
@@ -476,6 +574,13 @@ elif stage == "attack_config":
             set_workflow_stage("ingestion")
             st.rerun()
         st.stop()
+
+    # Synthetic fallback alert (A05)
+    if active_data.get("is_synthetic_dataset"):
+        st.warning(
+            "⚠️ **Notice: Operating on Synthetic Fallback Data.** "
+            "Real evaluation dataset was unavailable. Generated samples are in use for demonstration."
+        )
 
     model_adapter = active_data["adapter"]
     domain = active_data.get("domain", "image")
@@ -727,6 +832,31 @@ elif stage == "attack_config":
                 help="Attempt to force a specific incorrect class rather than any misclassification",
             )
             params_dict["targeted"] = is_targeted
+            if is_targeted:
+                raw_num_classes = (
+                    active_data.get("num_classes")
+                    or meta_dict.get("Total Classes")
+                    or meta_dict.get("num_classes")
+                )
+                try:
+                    num_classes_val = int(raw_num_classes)
+                    max_class_idx = max(1, num_classes_val - 1)
+                except (ValueError, TypeError):
+                    max_class_idx = 9999
+
+                target_class_choice = st.number_input(
+                    "Target Class Label / Index",
+                    min_value=0,
+                    max_value=max_class_idx,
+                    value=1 if max_class_idx >= 1 else 0,
+                    step=1,
+                    help="Specific class label index that the attack should force the model to predict",
+                )
+                params_dict["target_label"] = int(target_class_choice)
+            else:
+                params_dict.pop("target_label", None)
+                params_dict.pop("target", None)
+
             st.markdown(
                 """
                 <div class="param-explainer">
@@ -807,10 +937,29 @@ elif stage == "attack_config":
             )
 
             atk_prog.progress(
-                85,
+                80,
                 text="Evaluating clean vs. adversarial predictions and classification confidences...",
             )
             time.sleep(0.08)
+
+            atk_prog.progress(
+                90,
+                text="Executing M5 Vulnerability Engine assessment & multi-vector scoring...",
+            )
+            time.sleep(0.08)
+
+            # Compute authentic M5 Vulnerability Assessment & Scoring (A11, A12, A13)
+            vuln_result = assess_and_score_vulnerability(
+                model=model_adapter,
+                attack_result=attack_result,
+                inputs=eval_inputs,
+                labels=eval_labels,
+                domain=domain,
+                dataset_name=active_data.get("dataset_name"),
+            )
+            attack_result["vulnerability_assessment"] = vuln_result
+            attack_result["vulnerability_score"] = vuln_result["vulnerability_score"]
+            attack_result["risk_level"] = vuln_result["risk_level"]
 
             atk_prog.progress(
                 100,
@@ -819,6 +968,7 @@ elif stage == "attack_config":
             time.sleep(0.1)
             atk_prog.empty()
 
+            set_vulnerability_result(vuln_result)
             set_attack_result(attack_result)
             set_workflow_stage("attack_results")
             st.rerun()
@@ -846,6 +996,14 @@ elif stage == "attack_results":
         st.stop()
 
     active_data = get_active_assessment() or {}
+
+    # Synthetic fallback alert (A05)
+    if active_data.get("is_synthetic_dataset"):
+        st.warning(
+            "⚠️ **Notice: Evaluation executed on Synthetic Fallback Data.** "
+            "This experiment reflects model behavior on generated synthetic samples, not a real dataset benchmark."
+        )
+
     asr = result.get("asr_percentage", 0.0)
     clean_acc = result.get("clean_accuracy", 0.0)
     adv_acc = result.get("adversarial_accuracy", 0.0)
@@ -859,8 +1017,6 @@ elif stage == "attack_results":
     def _to_pct_val(val: float | None) -> float:
         if val is None:
             return 0.0
-        # If val is between -1.0 and 1.0 (non-zero), it is a fraction; scale to percentage.
-        # If abs(val) > 1.0, it is already a percentage.
         if 0.0 < abs(val) <= 1.0:
             return val * 100.0
         return float(val)
@@ -877,41 +1033,74 @@ elif stage == "attack_results":
     ms_sample = result.get("ms_per_sample", 0.0)
     succ_cnt = result.get("successful_count", 0)
     tot_samples = result.get("total_samples", 0)
+    clean_correct_cnt = result.get("clean_correct_count", tot_samples)
+    is_targeted_run = bool(result.get("is_targeted", False))
+    target_label_val = result.get("target_label", None)
+    asr_undef = result.get("asr_undefined", False)
+
+    # Retrieve authentic M5 vulnerability assessment and scoring result (A11, A12, A13)
+    vuln_res = get_vulnerability_result() or result.get("vulnerability_assessment") or {}
+    vuln_score = float(vuln_res.get("vulnerability_score", result.get("vulnerability_score", 0.0)))
+    risk_level = str(vuln_res.get("risk_level", result.get("risk_level", "LOW"))).upper()
 
     # 1. 4 Primary Top-line Modern Stat Cards
     col_r1, col_r2, col_r3, col_r4 = st.columns(4)
 
     with col_r1:
+        if asr_undef:
+            asr_subtext = "0 clean samples correct (undefined)"
+            asr_val_str = "N/A"
+            asr_bar_pct = 0.0
+        elif is_targeted_run:
+            asr_subtext = f"<strong>{succ_cnt}</strong> of <strong>{clean_correct_cnt}</strong> initially correct reached target {target_label_val}"
+            asr_val_str = f"{asr:.1f}%"
+            asr_bar_pct = min(100.0, max(0.0, asr))
+        else:
+            asr_subtext = f"<strong>{succ_cnt}</strong> of <strong>{clean_correct_cnt}</strong> initially correct samples flipped"
+            asr_val_str = f"{asr:.1f}%"
+            asr_bar_pct = min(100.0, max(0.0, asr))
+
         st.markdown(
             f"""
             <div class="modern-card card-accent-rose">
-                <div class="stat-label">Attack Success Rate (ASR)</div>
-                <div class="stat-value" style="color: var(--stat-val-rose);">{asr:.1f}%</div>
-                <div class="stat-subtext"><strong>{succ_cnt}</strong> of <strong>{tot_samples}</strong> samples flipped</div>
+                <div class="stat-label">{'Targeted Success Rate' if is_targeted_run else 'Attack Success Rate (ASR)'}</div>
+                <div class="stat-value" style="color: var(--stat-val-rose);">{asr_val_str}</div>
+                <div style="background: rgba(128, 128, 128, 0.2); border-radius: 9999px; height: 5px; width: 100%; margin: 6px 0; overflow: hidden;">
+                    <div style="background: #f43f5e; width: {asr_bar_pct:.1f}%; height: 100%; border-radius: 9999px;"></div>
+                </div>
+                <div class="stat-subtext">{asr_subtext}</div>
             </div>
             """,
             unsafe_allow_html=True,
         )
 
     with col_r2:
+        vuln_color = "#f43f5e" if risk_level in ["CRITICAL", "HIGH"] else ("#f59e0b" if risk_level == "MEDIUM" else "#10b981")
         st.markdown(
             f"""
-            <div class="modern-card card-accent-amber">
-                <div class="stat-label">Accuracy Degradation</div>
-                <div class="stat-value" style="color: var(--stat-val-amber);">{clean_acc_disp:.1f}% → {adv_acc_disp:.1f}%</div>
-                <div class="stat-subtext">Accuracy Drop: <strong style="color: var(--stat-val-rose);">-{abs(acc_drop_disp):.1f}%</strong></div>
+            <div class="modern-card card-accent-rose">
+                <div class="stat-label">Vulnerability Score (M5)</div>
+                <div class="stat-value" style="color: {vuln_color};">{vuln_score:.1f}<span style="font-size: 1rem; color: var(--text-secondary);">/100</span></div>
+                <div style="background: rgba(128, 128, 128, 0.2); border-radius: 9999px; height: 5px; width: 100%; margin: 6px 0; overflow: hidden;">
+                    <div style="background: {vuln_color}; width: {min(100.0, max(0.0, vuln_score)):.1f}%; height: 100%; border-radius: 9999px;"></div>
+                </div>
+                <div class="stat-subtext">Risk Severity: <strong class="risk-badge risk-{risk_level.lower()}" style="font-size: 0.72rem; padding: 2px 6px;">{risk_level}</strong></div>
             </div>
             """,
             unsafe_allow_html=True,
         )
 
     with col_r3:
+        acc_drop_pct = min(100.0, max(0.0, abs(acc_drop_disp)))
         st.markdown(
             f"""
-            <div class="modern-card card-accent-violet">
-                <div class="stat-label">Confidence Impact</div>
-                <div class="stat-value" style="color: var(--stat-val-violet);">{clean_conf_disp:.1f}% → {adv_conf_disp:.1f}%</div>
-                <div class="stat-subtext">Confidence Drop: <strong style="color: var(--stat-val-rose);">-{abs(conf_drop_disp):.1f}%</strong></div>
+            <div class="modern-card card-accent-amber">
+                <div class="stat-label">Accuracy Degradation</div>
+                <div class="stat-value" style="color: var(--stat-val-amber);">{clean_acc_disp:.1f}% → {adv_acc_disp:.1f}%</div>
+                <div style="background: rgba(128, 128, 128, 0.2); border-radius: 9999px; height: 5px; width: 100%; margin: 6px 0; overflow: hidden;">
+                    <div style="background: #f59e0b; width: {acc_drop_pct:.1f}%; height: 100%; border-radius: 9999px;"></div>
+                </div>
+                <div class="stat-subtext">Accuracy Drop: <strong style="color: var(--stat-val-rose);">-{abs(acc_drop_disp):.1f}%</strong> (Conf: -{abs(conf_drop_disp):.1f}%)</div>
             </div>
             """,
             unsafe_allow_html=True,
@@ -923,7 +1112,10 @@ elif stage == "attack_results":
             <div class="modern-card card-accent-cyan">
                 <div class="stat-label">Execution Telemetry</div>
                 <div class="stat-value" style="color: var(--stat-val-cyan);">{exec_time:.3f}s</div>
-                <div class="stat-subtext">Throughput: <strong>{ms_sample:.1f} ms/sample</strong></div>
+                <div style="background: rgba(128, 128, 128, 0.2); border-radius: 9999px; height: 5px; width: 100%; margin: 6px 0; overflow: hidden;">
+                    <div style="background: #06b6d4; width: 100%; height: 100%; border-radius: 9999px;"></div>
+                </div>
+                <div class="stat-subtext">Throughput: <strong>{ms_sample:.1f} ms/sample</strong> ({tot_samples} samples)</div>
             </div>
             """,
             unsafe_allow_html=True,
@@ -931,48 +1123,192 @@ elif stage == "attack_results":
 
     st.markdown("<div style='height: 10px;'></div>", unsafe_allow_html=True)
 
+    # Dedicated M5 Vulnerability Analysis & Metric Breakdown Section (A11, A12, A13, A14)
+    st.markdown(
+        """
+        <div class="section-banner">
+            <h3>🛡️ Module 5 — Vulnerability Analysis & Multi-Vector Scoring</h3>
+            <p>Empirical multi-vector vulnerability scoring computed directly by the backend VulnerabilityEngine</p>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    col_v1, col_v2, col_v3 = st.columns(3)
+    sub_scores = vuln_res.get("sub_scores", {})
+    asr_sc = float(sub_scores.get("asr_score", vuln_res.get("asr_score", asr)))
+    deg_sc = float(sub_scores.get("degradation_score", vuln_res.get("degradation_score", 0.0)))
+    stl_sc = float(sub_scores.get("stealth_score", vuln_res.get("stealth_score", 0.0)))
+    weights = vuln_res.get("weights", {"weight_asr": 0.50, "weight_degradation": 0.35, "weight_stealth": 0.15})
+    w_asr = float(weights.get("weight_asr", 0.50))
+    w_deg = float(weights.get("weight_degradation", 0.35))
+    w_stl = float(weights.get("weight_stealth", 0.15))
+
+    with col_v1:
+        st.markdown(
+            f"""
+            <div class="modern-card card-accent-rose">
+                <div class="stat-label">ASR Sub-Score (Weight: {w_asr:.0%})</div>
+                <div style="font-size: 1.45rem; font-weight: 700; color: var(--text-primary);">{asr_sc:.1f} <span style="font-size: 0.95rem; color: var(--text-secondary);">/ 100</span></div>
+                <div style="background: rgba(128, 128, 128, 0.2); border-radius: 9999px; height: 6px; width: 100%; margin: 8px 0; overflow: hidden;">
+                    <div style="background: #f43f5e; width: {min(100.0, max(0.0, asr_sc)):.1f}%; height: 100%; border-radius: 9999px;"></div>
+                </div>
+                <div class="stat-subtext">Composite Contribution: <strong style="color: var(--stat-val-rose);">+{(asr_sc * w_asr):.1f} pts</strong></div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+    with col_v2:
+        st.markdown(
+            f"""
+            <div class="modern-card card-accent-amber">
+                <div class="stat-label">Degradation Sub-Score (Weight: {w_deg:.0%})</div>
+                <div style="font-size: 1.45rem; font-weight: 700; color: var(--text-primary);">{deg_sc:.1f} <span style="font-size: 0.95rem; color: var(--text-secondary);">/ 100</span></div>
+                <div style="background: rgba(128, 128, 128, 0.2); border-radius: 9999px; height: 6px; width: 100%; margin: 8px 0; overflow: hidden;">
+                    <div style="background: #f59e0b; width: {min(100.0, max(0.0, deg_sc)):.1f}%; height: 100%; border-radius: 9999px;"></div>
+                </div>
+                <div class="stat-subtext">Composite Contribution: <strong style="color: var(--stat-val-amber);">+{(deg_sc * w_deg):.1f} pts</strong></div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+    with col_v3:
+        st.markdown(
+            f"""
+            <div class="modern-card card-accent-violet">
+                <div class="stat-label">Stealthiness Sub-Score (Weight: {w_stl:.0%})</div>
+                <div style="font-size: 1.45rem; font-weight: 700; color: var(--text-primary);">{stl_sc:.1f} <span style="font-size: 0.95rem; color: var(--text-secondary);">/ 100</span></div>
+                <div style="background: rgba(128, 128, 128, 0.2); border-radius: 9999px; height: 6px; width: 100%; margin: 8px 0; overflow: hidden;">
+                    <div style="background: #8b5cf6; width: {min(100.0, max(0.0, stl_sc)):.1f}%; height: 100%; border-radius: 9999px;"></div>
+                </div>
+                <div class="stat-subtext">Composite Contribution: <strong style="color: #8b5cf6;">+{(stl_sc * w_stl):.1f} pts</strong></div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+    # Vulnerability Scoring Vectors & Empirical Telemetry Table
+    st.markdown("<div style='height: 8px;'></div>", unsafe_allow_html=True)
+    st.markdown("##### 📋 Vulnerability Score Vectors & Empirical Telemetry")
+
+    metrics = result.get("perturbation_metrics", {})
+    linf_val_prev = metrics.get("linf_mean") if metrics.get("linf_mean") is not None else metrics.get("linf", 0.0)
+    l2_val_prev = metrics.get("l2_mean") if metrics.get("l2_mean") is not None else metrics.get("l2", 0.0)
+    linf_str = f"{float(linf_val_prev):.4f}" if metrics else "N/A"
+    l2_str = f"{float(l2_val_prev):.3f}" if metrics else "N/A"
+
+    vuln_table_data = [
+        {
+            "Score Vector Component": "Attack Success Rate (ASR)",
+            "Empirical Metric Value": f"{asr:.1f}% flipped ({succ_cnt}/{clean_correct_cnt} clean-correct samples)",
+            "Sub-Score (/100)": f"{asr_sc:.1f}",
+            "Engine Weight": f"{w_asr:.0%}",
+            "Composite Contribution": f"+{(asr_sc * w_asr):.1f} pts",
+            "Measurement Basis": "Susceptibility of initially correct baseline inputs to adversarial manipulation",
+        },
+        {
+            "Score Vector Component": "Model Performance Degradation",
+            "Empirical Metric Value": f"Acc Drop: -{abs(acc_drop_disp):.1f}% | Conf Drop: -{abs(conf_drop_disp):.1f}%",
+            "Sub-Score (/100)": f"{deg_sc:.1f}",
+            "Engine Weight": f"{w_deg:.0%}",
+            "Composite Contribution": f"+{(deg_sc * w_deg):.1f} pts",
+            "Measurement Basis": "Empirical F1-score erosion and model confidence collapse under perturbation",
+        },
+        {
+            "Score Vector Component": "Adversarial Stealthiness",
+            "Empirical Metric Value": f"L_inf: {linf_str} | L2: {l2_str}",
+            "Sub-Score (/100)": f"{stl_sc:.1f}",
+            "Engine Weight": f"{w_stl:.0%}",
+            "Composite Contribution": f"+{(stl_sc * w_stl):.1f} pts",
+            "Measurement Basis": "Imperceptibility scaling (higher stealthiness with successful evasion amplifies threat severity)",
+        },
+        {
+            "Score Vector Component": "Composite Vulnerability Score",
+            "Empirical Metric Value": f"Risk Level: {risk_level}",
+            "Sub-Score (/100)": f"{vuln_score:.1f}",
+            "Engine Weight": "100%",
+            "Composite Contribution": f"{vuln_score:.1f} / 100",
+            "Measurement Basis": "Standardized multi-vector risk severity index evaluated by backend VulnerabilityEngine",
+        },
+    ]
+    st.table(pd.DataFrame(vuln_table_data))
+
+    # Metric Calculation Rationale & M5 Findings Box
+    explanations = vuln_res.get("metric_explanations") or {}
+    st.markdown("##### 📖 Metric Calculation & Severity Findings")
+    st.markdown(
+        f"""
+        <div class="param-explainer" style="line-height: 1.65; font-size: 0.9rem; padding: 16px; border-radius: 8px;">
+            <div style="margin-bottom: 8px;"><strong>Executive Summary:</strong> {explanations.get('summary', 'Standardized M5 Vulnerability Engine evaluation.')}</div>
+            <div style="margin-bottom: 4px;">• <strong>ASR Metric Component:</strong> {explanations.get('asr_component', f'ASR Score: {asr_sc:.1f}/100')}</div>
+            <div style="margin-bottom: 4px;">• <strong>Degradation Metric Component:</strong> {explanations.get('degradation_component', f'Degradation Score: {deg_sc:.1f}/100')}</div>
+            <div style="margin-bottom: 4px;">• <strong>Stealthiness Metric Component:</strong> {explanations.get('stealth_component', f'Stealthiness Score: {stl_sc:.1f}/100')}</div>
+            <div style="margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--border-color);">
+                <strong>Risk Severity Determination:</strong> {explanations.get('risk_rationale', f'Severity assigned as {risk_level} based on multi-vector empirical evaluation.')}
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    st.markdown("<div style='height: 10px;'></div>", unsafe_allow_html=True)
+
     # 2. Perturbation Distance Metrics (matching run_pipeline_for_multimodel.py)
     st.markdown(
         """
         <div class="section-banner">
-            <h3>📏 Perturbation Distortion Norms</h3>
+            <h3>📏 Perturbation Distortion Norms & Geometric Bounds</h3>
             <p>Mathematical distance between clean inputs and adversarial examples across Lp norms</p>
         </div>
         """,
         unsafe_allow_html=True,
     )
 
-    metrics = result.get("perturbation_metrics", {})
     if metrics:
         col_m1, col_m2, col_m3, col_m4 = st.columns(4)
 
         with col_m1:
+            eps_budget = float(result.get("epsilon_used", 0.05))
+            linf_val = float(metrics.get("linf_mean") if metrics.get("linf_mean") is not None else metrics.get("linf", 0.0))
+            linf_max_val = float(metrics.get("linf_max", linf_val))
+            linf_bar = min(100.0, max(0.0, (linf_val / max(1e-6, eps_budget)) * 100.0)) if eps_budget > 0 else 0.0
             st.markdown(
                 f"""
                 <div class="modern-card card-accent-cyan">
                     <div class="stat-label">L-infinity Distance (L_inf)</div>
-                    <div style="font-size: 1.4rem; font-weight: 700; color: var(--text-primary);">{metrics.get('linf', 0.0):.5f}</div>
-                    <div class="stat-subtext">Budget (ε): <strong>{result.get('epsilon_used', 0.0):.3f}</strong></div>
+                    <div style="font-size: 1.4rem; font-weight: 700; color: var(--text-primary);">{linf_val:.5f}</div>
+                    <div style="background: rgba(128, 128, 128, 0.2); border-radius: 9999px; height: 5px; width: 100%; margin: 6px 0; overflow: hidden;">
+                        <div style="background: #06b6d4; width: {linf_bar:.1f}%; height: 100%; border-radius: 9999px;"></div>
+                    </div>
+                    <div class="stat-subtext">Budget (ε): <strong>{eps_budget:.3f}</strong> • Max: <strong>{linf_max_val:.4f}</strong></div>
                 </div>
                 """,
                 unsafe_allow_html=True,
             )
 
         with col_m2:
+            l2_val = float(metrics.get("l2_mean") if metrics.get("l2_mean") is not None else metrics.get("l2", 0.0))
+            l2_max_val = float(metrics.get("l2_max", l2_val))
+            l2_bar = min(100.0, max(0.0, l2_val * 25.0))
             st.markdown(
                 f"""
                 <div class="modern-card card-accent-emerald">
                     <div class="stat-label">L2 Euclidean Distance</div>
-                    <div style="font-size: 1.4rem; font-weight: 700; color: var(--text-primary);">{metrics.get('l2', 0.0):.4f}</div>
-                    <div class="stat-subtext">Mean Euclidean displacement</div>
+                    <div style="font-size: 1.4rem; font-weight: 700; color: var(--text-primary);">{l2_val:.4f}</div>
+                    <div style="background: rgba(128, 128, 128, 0.2); border-radius: 9999px; height: 5px; width: 100%; margin: 6px 0; overflow: hidden;">
+                        <div style="background: #10b981; width: {l2_bar:.1f}%; height: 100%; border-radius: 9999px;"></div>
+                    </div>
+                    <div class="stat-subtext">Mean Euclidean • Max: <strong>{l2_max_val:.3f}</strong></div>
                 </div>
                 """,
                 unsafe_allow_html=True,
             )
 
         with col_m3:
-            l0_val = int(metrics.get("l0", 0))
-            l0_pct = metrics.get("l0_pct")
+            l0_val = int(metrics.get("l0_mean_count") if metrics.get("l0_mean_count") is not None else metrics.get("l0", 0))
+            l0_pct = metrics.get("l0_mean_pct") if metrics.get("l0_mean_pct") is not None else metrics.get("l0_pct")
             if l0_pct is None or l0_pct == 0.0:
                 test_inputs = active_data.get("test_inputs")
                 if (
@@ -994,6 +1330,9 @@ elif stage == "attack_results":
                 <div class="modern-card card-accent-violet">
                     <div class="stat-label">L0 Perturbed Elements</div>
                     <div style="font-size: 1.4rem; font-weight: 700; color: var(--text-primary);">{l0_val:,}</div>
+                    <div style="background: rgba(128, 128, 128, 0.2); border-radius: 9999px; height: 5px; width: 100%; margin: 6px 0; overflow: hidden;">
+                        <div style="background: #8b5cf6; width: {min(100.0, max(0.0, l0_pct)):.1f}%; height: 100%; border-radius: 9999px;"></div>
+                    </div>
                     <div class="stat-subtext"><strong>{l0_pct:.1f}%</strong> of total tensor elements changed</div>
                 </div>
                 """,
@@ -1001,65 +1340,119 @@ elif stage == "attack_results":
             )
 
         with col_m4:
+            mae_val = float(metrics.get("mae_mean") if metrics.get("mae_mean") is not None else metrics.get("mean_abs_error", 0.0))
+            mae_bar = min(100.0, max(0.0, mae_val * 50.0))
             st.markdown(
                 f"""
                 <div class="modern-card card-accent-amber">
                     <div class="stat-label">Mean Absolute Error (MAE)</div>
-                    <div style="font-size: 1.4rem; font-weight: 700; color: var(--text-primary);">{metrics.get('mean_abs_error', 0.0):.5f}</div>
+                    <div style="font-size: 1.4rem; font-weight: 700; color: var(--text-primary);">{mae_val:.5f}</div>
+                    <div style="background: rgba(128, 128, 128, 0.2); border-radius: 9999px; height: 5px; width: 100%; margin: 6px 0; overflow: hidden;">
+                        <div style="background: #f59e0b; width: {mae_bar:.1f}%; height: 100%; border-radius: 9999px;"></div>
+                    </div>
                     <div class="stat-subtext">Average absolute element change</div>
                 </div>
                 """,
                 unsafe_allow_html=True,
             )
+
+        # Perturbation Distortion Norms Table
+        st.markdown("<div style='height: 8px;'></div>", unsafe_allow_html=True)
+        st.markdown("##### 📐 Perturbation Norms & Geometric Bounds")
+        norms_table_data = [
+            {
+                "Norm Dimension": "L-infinity (Chebyshev Norm)",
+                "Empirical Value": f"{linf_val:.5f}",
+                "Reference Budget / Bound": f"ε = {eps_budget:.4f}",
+                "Modification Scope": "Maximum single-element displacement across all dimensions",
+                "Stealth & Physical Meaning": "Perceptibility ceiling; guarantees no individual pixel or feature shifts beyond this bound",
+            },
+            {
+                "Norm Dimension": "L2 (Euclidean Norm)",
+                "Empirical Value": f"{l2_val:.4f}",
+                "Reference Budget / Bound": "Global energy displacement",
+                "Modification Scope": "Root-mean-square displacement across the input tensor",
+                "Stealth & Physical Meaning": "Measures total physical perturbation energy; lower indicates more stealthy distribution",
+            },
+            {
+                "Norm Dimension": "L0 (Sparsity / Hamming Norm)",
+                "Empirical Value": f"{l0_val:,} elements",
+                "Reference Budget / Bound": f"{l0_pct:.1f}% of total tensor elements",
+                "Modification Scope": f"{l0_val} modified elements",
+                "Stealth & Physical Meaning": "Sparsity of the attack; shows whether modifications are localized or uniformly dispersed",
+            },
+            {
+                "Norm Dimension": "MAE (Mean Absolute Error)",
+                "Empirical Value": f"{mae_val:.5f}",
+                "Reference Budget / Bound": "Average absolute element shift",
+                "Modification Scope": "Element-wise average deviation",
+                "Stealth & Physical Meaning": "Direct measure of expected alteration per feature across the entire evaluated batch",
+            },
+        ]
+        st.table(pd.DataFrame(norms_table_data))
     else:
         st.info("Perturbation metrics not applicable for this data modality.")
 
-    # 3. Visual Charts for Attack Vulnerability & Impact
+    # 3. Actionable Security & Hardening Recommendations Section
     st.markdown("<div style='height: 10px;'></div>", unsafe_allow_html=True)
     st.markdown(
         """
         <div class="section-banner">
-            <h3>📊 Attack Vulnerability Impact Charts</h3>
-            <p>Visual breakdown of accuracy degradation, confidence drops, and sample outcomes</p>
+            <h3>💡 Actionable Security & Hardening Recommendations</h3>
+            <p>Domain-specific, prioritized mitigation strategies based on empirical attack susceptibility and vulnerability scoring</p>
         </div>
         """,
         unsafe_allow_html=True,
     )
 
-    col_atk_ch1, col_atk_ch2 = st.columns(2)
-    with col_atk_ch1:
-        st.markdown("##### 🎯 Classification Accuracy Impact")
-        df_atk_acc = pd.DataFrame(
-            {
-                "Evaluation Stage": ["Clean Accuracy", "Adversarial Accuracy", "Accuracy Drop"],
-                "Percentage (%)": [clean_acc_disp, adv_acc_disp, abs(acc_drop_disp)],
-            }
-        ).set_index("Evaluation Stage")
-        st.bar_chart(df_atk_acc)
+    domain = str(active_data.get("domain", "image")).lower()
+    recommendations = vuln_res.get("recommendations")
+    if not recommendations:
+        recommendations = generate_vulnerability_recommendations(
+            domain=domain,
+            attack_name=str(result.get("attack_name", "attack")),
+            vuln_score=vuln_score,
+            risk_level=risk_level,
+            asr=asr,
+            is_targeted=is_targeted_run,
+        )
 
-    with col_atk_ch2:
-        st.markdown("##### 📉 Prediction Confidence Degradation")
-        df_atk_conf = pd.DataFrame(
-            {
-                "Confidence Metric": ["Clean Confidence", "Adversarial Confidence", "Confidence Drop"],
-                "Percentage (%)": [clean_conf_disp, adv_conf_disp, abs(conf_drop_disp)],
-            }
-        ).set_index("Confidence Metric")
-        st.bar_chart(df_atk_conf)
+    rec_cols = st.columns(len(recommendations)) if 1 <= len(recommendations) <= 4 else st.columns(3)
+    for i, rec in enumerate(recommendations):
+        col_idx = i % len(rec_cols)
+        prio = str(rec.get("priority", "Recommended")).capitalize()
+        if prio.lower() == "urgent":
+            prio_badge = '<span class="badge-status badge-rose">🚨 URGENT</span>'
+            card_accent = "card-accent-rose"
+        elif prio.lower() == "high":
+            prio_badge = '<span class="badge-status badge-amber">⚠️ HIGH PRIORITY</span>'
+            card_accent = "card-accent-amber"
+        else:
+            prio_badge = '<span class="badge-status badge-emerald">🛡️ RECOMMENDED</span>'
+            card_accent = "card-accent-emerald"
 
-    comparisons = result.get("sample_comparisons", [])
-    if comparisons:
-        atk_outcomes = [c.get("Outcome", c.get("outcome", "Unknown")) for c in comparisons]
-        from collections import Counter
-        atk_counts = Counter(atk_outcomes)
-        df_atk_outcomes = pd.DataFrame(
-            {
-                "Sample Outcome": list(atk_counts.keys()),
-                "Number of Samples": list(atk_counts.values()),
-            }
-        ).set_index("Sample Outcome")
-        st.markdown("##### 🏷️ Sample Classification Outcome Distribution")
-        st.bar_chart(df_atk_outcomes)
+        with rec_cols[col_idx]:
+            st.markdown(
+                f"""
+                <div class="modern-card {card_accent}" style="height: 100%; display: flex; flex-direction: column; justify-content: space-between;">
+                    <div>
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                            <span style="font-size: 0.82rem; font-weight: 600; color: var(--text-secondary); text-transform: uppercase;">
+                                {rec.get('icon', '🛡️')} {rec.get('category', 'Hardening')}
+                            </span>
+                            {prio_badge}
+                        </div>
+                        <h4 style="margin: 0 0 8px 0; font-size: 1.05rem; font-weight: 700; color: var(--text-primary);">
+                            {rec.get('title', 'Hardening Recommendation')}
+                        </h4>
+                        <p style="margin: 0; font-size: 0.88rem; line-height: 1.5; color: var(--text-secondary);">
+                            {rec.get('description', '')}
+                        </p>
+                    </div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
 
     # 4. Hyperparameter Configuration & Execution Telemetry Table
     st.markdown("<div style='height: 10px;'></div>", unsafe_allow_html=True)
@@ -1073,11 +1466,18 @@ elif stage == "attack_results":
         unsafe_allow_html=True,
     )
 
-    params_used = result.get("parameters_used", {})
+    params_used = result.get("parameters_used") or result.get("parameters") or {}
+    is_targeted_run = bool(params_used.get("targeted", False) or result.get("is_targeted", False))
+    tgt_lbl = params_used.get("target_label", result.get("target_label"))
+    tgt_display = f"True (Target Class: {tgt_lbl})" if is_targeted_run and tgt_lbl is not None else ("True" if is_targeted_run else "False (Untargeted)")
     telemetry_rows = [
         {
             "Parameter": "Attack Algorithm",
             "Value": str(result.get("attack_name", "N/A")),
+        },
+        {
+            "Parameter": "Vulnerability Score (M5)",
+            "Value": f"{vuln_score:.2f} / 100 ({risk_level})",
         },
         {
             "Parameter": "Perturbation Budget (ε)",
@@ -1092,9 +1492,10 @@ elif stage == "attack_results":
         {"Parameter": "Step Size (α)", "Value": str(params_used.get("alpha", "N/A"))},
         {
             "Parameter": "Targeted Attack",
-            "Value": str(params_used.get("targeted", False)),
+            "Value": tgt_display,
         },
         {"Parameter": "Evaluated Batch Size", "Value": f"{tot_samples} samples"},
+        {"Parameter": "Clean Correct Baseline", "Value": f"{clean_correct_cnt} of {tot_samples} samples"},
         {
             "Parameter": "Execution Device",
             "Value": str(active_data.get("device", "CPU")),
@@ -1114,7 +1515,58 @@ elif stage == "attack_results":
         unsafe_allow_html=True,
     )
 
+    comparisons = result.get("sample_comparisons", [])
     if comparisons:
+        # 1. Primary: Use verified ground-truth counts directly from backend result
+        succ_o = int(result.get("successful_count", 0))
+        clean_correct = int(result.get("clean_correct_count", tot_samples))
+        inv_o = max(0, clean_correct - succ_o)
+        mis_o = max(0, tot_samples - clean_correct)
+
+        # 2. Secondary fallback verification from sample_comparisons rows if result counts missing
+        if succ_o == 0 and inv_o == 0 and mis_o == 0 and len(comparisons) > 0:
+            atk_outcomes = [str(c.get("Outcome", c.get("outcome", ""))) for c in comparisons]
+            succ_o = sum(1 for o in atk_outcomes if any(k in o for k in ("Flip", "Targeted Hit", "Successful")))
+            inv_o = sum(1 for o in atk_outcomes if any(k in o for k in ("Preserved", "Invariant", "Resistant", "Clean Invariant")))
+            mis_o = sum(1 for o in atk_outcomes if any(k in o for k in ("Initial Clean Error", "Misclassified", "Error")))
+
+        col_o1, col_o2, col_o3 = st.columns(3)
+
+        with col_o1:
+            st.markdown(
+                f"""
+                <div class="modern-card card-accent-rose" style="padding: 10px 14px;">
+                    <div class="stat-label">Successful Adversarial Flips</div>
+                    <div style="font-size: 1.25rem; font-weight: 700; color: var(--stat-val-rose);">{succ_o} / {tot_samples} samples</div>
+                    <div class="stat-subtext">Susceptible to perturbation</div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+        with col_o2:
+            st.markdown(
+                f"""
+                <div class="modern-card card-accent-emerald" style="padding: 10px 14px;">
+                    <div class="stat-label">Clean Invariant (Resistant)</div>
+                    <div style="font-size: 1.25rem; font-weight: 700; color: var(--stat-val-emerald);">{inv_o} / {tot_samples} samples</div>
+                    <div class="stat-subtext">Maintained correct prediction</div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+        with col_o3:
+            st.markdown(
+                f"""
+                <div class="modern-card card-accent-cyan" style="padding: 10px 14px;">
+                    <div class="stat-label">Initially Misclassified</div>
+                    <div style="font-size: 1.25rem; font-weight: 700; color: var(--stat-val-cyan);">{mis_o} / {tot_samples} samples</div>
+                    <div class="stat-subtext">Excluded from ASR denominator</div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+        st.markdown("<div style='height: 8px;'></div>", unsafe_allow_html=True)
+
         df_comp = pd.DataFrame(comparisons)
         # Rename columns for clean human presentation
         display_cols = {
@@ -1184,11 +1636,9 @@ elif stage == "defense_config":
     atk_name = attack_res.get("attack_name", "Adversarial Attack")
     asr_pct = attack_res.get("asr_percentage", 0.0)
     acc_drop = attack_res.get("accuracy_drop", 0.0)
-    risk_level = (
-        "CRITICAL"
-        if asr_pct >= 80.0
-        else ("HIGH" if asr_pct >= 60.0 else ("MEDIUM" if asr_pct >= 30.0 else "LOW"))
-    )
+    vuln_res = get_vulnerability_result() or attack_res.get("vulnerability_assessment") or {}
+    vuln_score = float(vuln_res.get("vulnerability_score", attack_res.get("vulnerability_score", asr_pct)))
+    risk_level = str(vuln_res.get("risk_level", attack_res.get("risk_level", "HIGH" if asr_pct >= 50.0 else "LOW"))).upper()
 
     # 1. Threat Context Banner
     st.markdown(
@@ -1196,13 +1646,14 @@ elif stage == "defense_config":
         <div class="modern-card card-accent-rose" style="margin-bottom: 1.5rem;">
             <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 0.5rem;">
                 <div>
-                    <div class="stat-label">Identified Vulnerability Context</div>
+                    <div class="stat-label">Identified Vulnerability Context (M5)</div>
                     <div style="font-size: 1.15rem; font-weight: 700; color: var(--text-primary); margin-top: 0.2rem;">
                         {model_name} • Attacked with {atk_name}
                     </div>
                 </div>
-                <div style="display: flex; gap: 0.75rem;">
+                <div style="display: flex; gap: 0.75rem; flex-wrap: wrap;">
                     <span class="risk-badge risk-{risk_level.lower()}">Risk Level: {risk_level}</span>
+                    <span class="info-badge">Vuln Score: {vuln_score:.1f}/100</span>
                     <span class="info-badge">ASR: {asr_pct:.1f}%</span>
                     <span class="info-badge">Accuracy Drop: -{abs(acc_drop):.1f}%</span>
                 </div>
@@ -1673,6 +2124,7 @@ elif stage == "report":
                 attack_result=attack_res,
                 defense_result=defense_res,
                 domain=active_data.get("domain", "image"),
+                vulnerability_result=get_vulnerability_result() or attack_res.get("vulnerability_assessment"),
             )
             set_report_result(report_res)
 

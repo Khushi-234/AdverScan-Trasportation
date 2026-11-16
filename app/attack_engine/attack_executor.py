@@ -85,7 +85,17 @@ def execute_attack(
                     logits_adv = attack_instance._extract_logits(out_adv)
                     adv_preds = logits_adv.argmax(dim=-1).cpu()
 
-                    success = (orig_preds != adv_preds)
+                    if labels is not None:
+                        labels_cpu = labels.cpu() if isinstance(labels, torch.Tensor) else torch.as_tensor(labels)
+                        is_targeted = bool(config.params.get("targeted", False)) if config and config.params else False
+                        target_label = config.params.get("target_label", config.params.get("target", None)) if config and config.params else None
+                        if is_targeted and target_label is not None:
+                            target_tensor = torch.full_like(orig_preds, int(target_label)) if isinstance(target_label, int) else torch.as_tensor(target_label)
+                            success = (orig_preds == labels_cpu) & (adv_preds == target_tensor)
+                        else:
+                            success = (orig_preds == labels_cpu) & (adv_preds != labels_cpu)
+                    else:
+                        success = (orig_preds != adv_preds)
             except Exception:
                 pass
 

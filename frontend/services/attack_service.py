@@ -441,19 +441,37 @@ def execute_configured_attack(
         else None
     )
 
-    # Calculate Attack Success Rate (ASR)
-    successful_count = 0
-    if success_mask is not None:
-        if isinstance(success_mask, torch.Tensor):
-            successful_count = int(success_mask.sum().item())
-        elif isinstance(success_mask, (list, tuple)):
-            successful_count = sum(1 for s in success_mask if s)
-        elif isinstance(success_mask, bool):
-            successful_count = 1 if success_mask else 0
-    elif orig_preds is not None and adv_preds is not None:
-        successful_count = int((orig_preds != adv_preds).sum().item())
+    # Calculate Attack Success Rate (ASR) strictly matching backend definition
+    # Denominator: initially correctly classified clean samples (num_clean_correct)
+    is_targeted = bool((params or {}).get("targeted", False))
+    target_label = (params or {}).get("target_label", (params or {}).get("target", None))
+    if target_label is not None:
+        try:
+            target_label = int(target_label)
+        except (ValueError, TypeError):
+            pass
 
-    asr_pct = (successful_count / total_samples) * 100.0 if total_samples > 0 else 0.0
+    successful_count = 0
+    asr_undefined = False
+    if clean_correct > 0:
+        if is_targeted and target_label is not None:
+            if orig_preds is not None and adv_preds is not None:
+                succ_mask = (orig_preds.cpu() == labels_tensor.cpu()) & (adv_preds.cpu() == target_label)
+                successful_count = int(succ_mask.sum().item())
+            elif success_mask is not None:
+                successful_count = int(success_mask.sum().item()) if isinstance(success_mask, torch.Tensor) else sum(1 for s in success_mask if s)
+            asr_pct = (successful_count / clean_correct) * 100.0
+        else:
+            if orig_preds is not None and adv_preds is not None:
+                succ_mask = (orig_preds.cpu() == labels_tensor.cpu()) & (adv_preds.cpu() != labels_tensor.cpu())
+                successful_count = int(succ_mask.sum().item())
+            elif success_mask is not None:
+                successful_count = int(success_mask.sum().item()) if isinstance(success_mask, torch.Tensor) else sum(1 for s in success_mask if s)
+            asr_pct = (successful_count / clean_correct) * 100.0
+    else:
+        successful_count = 0
+        asr_pct = 0.0
+        asr_undefined = True
 
     # Format predictions for UI table comparison
     sample_comparisons: List[Dict[str, Any]] = []
@@ -490,12 +508,26 @@ def execute_configured_attack(
             else "N/A"
         )
 
-        misclassified = (
-            (y_orig != y_adv) if (y_orig != "N/A" and y_adv != "N/A") else False
-        )
         clean_right = (
-            (y_orig == y_true) if (y_orig != "N/A" and y_true != "N/A") else True
+            (y_orig == y_true) if (y_orig != "N/A" and y_true != "N/A") else False
         )
+
+        if is_targeted and target_label is not None:
+            if not clean_right:
+                outcome_str = "Initial Clean Error ❌"
+            elif y_adv == target_label:
+                outcome_str = f"Targeted Hit (→ {target_label}) 🎯"
+            elif y_adv != y_true:
+                outcome_str = "Untargeted Flip ⚠️"
+            else:
+                outcome_str = "Preserved Correct ✅"
+        else:
+            if not clean_right:
+                outcome_str = "Initial Clean Error ❌"
+            elif y_adv != y_true:
+                outcome_str = "Adversarial Flip ⚠️"
+            else:
+                outcome_str = "Preserved Correct ✅"
 
         sample_comparisons.append(
             {
@@ -503,13 +535,7 @@ def execute_configured_attack(
                 "Ground Truth": str(y_true),
                 "Clean Prediction": f"{y_orig} ({c_conf})",
                 "Adversarial Prediction": f"{y_adv} ({a_conf})",
-                "Outcome": (
-                    "Adversarial Flip ⚠️"
-                    if misclassified
-                    else (
-                        "Preserved Correct ✅" if clean_right else "Preserved Error ❌"
-                    )
-                ),
+                "Outcome": outcome_str,
             }
         )
 
@@ -533,8 +559,12 @@ def execute_configured_attack(
         "attack_meta": meta_info,
         "execution_time": exec_time,
         "total_samples": total_samples,
+        "clean_correct_count": clean_correct,
         "successful_count": successful_count,
         "asr_percentage": asr_pct,
+        "asr_undefined": asr_undefined,
+        "is_targeted": is_targeted,
+        "target_label": target_label,
         "clean_accuracy": clean_acc,
         "adversarial_accuracy": adv_acc,
         "accuracy_drop": acc_drop,
@@ -554,5 +584,13 @@ def execute_configured_attack(
         "_adversarial_examples": attack_res.adversarial_examples,
         "epsilon_used": epsilon,
         "parameters": params or {},
+        "parameters_used": {
+            **(params or {}),
+            "epsilon": epsilon,
+            "clip_min": clip_min,
+            "clip_max": clip_max,
+            "targeted": is_targeted,
+            "target_label": target_label,
+        },
         "clip_bounds": f"[{clip_min}, {clip_max}]",
     }
