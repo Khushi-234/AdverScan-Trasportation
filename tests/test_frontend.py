@@ -727,6 +727,128 @@ def test_sample_table_pagination_and_filter_controls():
     assert "def_next_page" in app_code
 
 
+def test_stage3_sample_selection_defaults_to_all():
+    """Verify Stage 3 evaluation sample selection defaults to all ingested samples and supports half/custom."""
+    from pathlib import Path
+
+    app_code = Path("frontend/streamlit_app.py").read_text(encoding="utf-8")
+
+    # Verify sample population selection structure
+    assert "Evaluation Sample Population (Batch Slicing)" in app_code
+    assert 'f"All Ingested ({available_samples:,} samples • 100%)"' in app_code
+    assert 'f"Half Ingested ({half_avail:,} samples • 50%)"' in app_code
+    assert '"Custom Number of Samples"' in app_code
+    # Must default to index=0 (All Ingested)
+    assert "index=0" in app_code
+
+
+def test_cw_dynamic_attack_parameters_has_no_alpha():
+    """Verify Carlini & Wagner (CW) configuration never uses an alpha step size and exposes correct L2 parameters."""
+    from pathlib import Path
+    from frontend.services.attack_service import execute_configured_attack
+
+    app_code = Path("frontend/streamlit_app.py").read_text(encoding="utf-8")
+
+    # Verify CW dynamic block does not assign alpha to params_dict
+    cw_block_start = app_code.find("if is_cw:")
+    cw_block_end = app_code.find("elif is_deepfool:", cw_block_start)
+    assert cw_block_start != -1 and cw_block_end != -1
+    cw_code = app_code[cw_block_start:cw_block_end]
+
+    assert 'params_dict["alpha"]' not in cw_code
+    assert "Step Size (α)" not in cw_code
+    assert "initial_const" in cw_code
+    assert "confidence" in cw_code
+    assert "learning_rate" in cw_code
+    assert "max_iterations" in cw_code
+
+    # Test backend execution with CW parameters
+    model = SimpleVisionModel()
+    inputs = torch.rand(2, 3, 16, 16)
+    labels = torch.tensor([0, 1])
+    res = execute_configured_attack(
+        model=model,
+        attack_name="cw",
+        inputs=inputs,
+        labels=labels,
+        epsilon=0.0,
+        clip_min=0.0,
+        clip_max=1.0,
+        params={
+            "max_iterations": 5,
+            "learning_rate": 0.01,
+            "initial_const": 1.0,
+            "confidence": 0.0,
+            "binary_search_steps": 1,
+        },
+    )
+    assert res is not None
+    assert "alpha" not in res["parameters_used"]
+    assert res["parameters_used"]["max_iterations"] == 5
+
+
+def test_deepfool_and_jsma_dynamic_parameters():
+    """Verify DeepFool and JSMA configure algorithm-accurate parameters without alpha."""
+    from pathlib import Path
+    from frontend.services.attack_service import execute_configured_attack
+
+    app_code = Path("frontend/streamlit_app.py").read_text(encoding="utf-8")
+
+    # DeepFool
+    df_block_start = app_code.find("elif is_deepfool:")
+    df_block_end = app_code.find("elif is_jsma:", df_block_start)
+    assert df_block_start != -1 and df_block_end != -1
+    df_code = app_code[df_block_start:df_block_end]
+    assert 'params_dict["alpha"]' not in df_code
+    assert "overshoot" in df_code
+    assert "top_k" in df_code
+    assert "max_iter" in df_code
+
+    # JSMA
+    jsma_block_start = app_code.find("elif is_jsma:")
+    jsma_block_end = app_code.find("elif is_soft_dtw:", jsma_block_start)
+    assert jsma_block_start != -1 and jsma_block_end != -1
+    jsma_code = app_code[jsma_block_start:jsma_block_end]
+    assert 'params_dict["alpha"]' not in jsma_code
+    assert "max_features" in jsma_code
+    assert "step_size" in jsma_code
+
+    # FGSM
+    fgsm_block_start = app_code.find("elif is_fgsm:")
+    fgsm_block_end = app_code.find("elif is_fab:", fgsm_block_start)
+    assert fgsm_block_start != -1 and fgsm_block_end != -1
+    fgsm_code = app_code[fgsm_block_start:fgsm_block_end]
+    assert 'params_dict["alpha"]' not in fgsm_code
+    assert 'params_dict["num_steps"]' not in fgsm_code
+
+
+def test_batched_attack_execution_prevents_oom():
+    """Verify that execute_configured_attack processes batches exceeding single-chunk thresholds without failure."""
+    from frontend.services.attack_service import execute_configured_attack
+
+    model = SimpleVisionModel()
+    # 70 vision samples exceeds vision chunk size (32) to test multi-chunk execution & concatenation
+    inputs = torch.rand(70, 3, 16, 16)
+    labels = torch.randint(0, 2, (70,))
+
+    res = execute_configured_attack(
+        model=model,
+        attack_name="fgsm",
+        inputs=inputs,
+        labels=labels,
+        epsilon=0.05,
+    )
+
+    assert res is not None
+    assert len(res["sample_comparisons"]) == 70
+    assert res["_adversarial_examples"].size(0) == 70
+    assert "clean_accuracy" in res
+    assert "adversarial_accuracy" in res
+    assert "asr_percentage" in res
+
+
+
+
 
 
 
