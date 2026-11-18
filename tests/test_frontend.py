@@ -727,6 +727,270 @@ def test_sample_table_pagination_and_filter_controls():
     assert "def_next_page" in app_code
 
 
+def test_stage3_sample_selection_defaults_to_all():
+    """Verify Stage 3 evaluation sample selection defaults to all ingested samples and supports half/custom."""
+    from pathlib import Path
+
+    app_code = Path("frontend/streamlit_app.py").read_text(encoding="utf-8")
+
+    # Verify sample population selection structure
+    assert "Evaluation Sample Population (Batch Slicing)" in app_code
+    assert 'f"All Ingested ({available_samples:,} samples • 100%)"' in app_code
+    assert 'f"Half Ingested ({half_avail:,} samples • 50%)"' in app_code
+    assert '"Custom Number of Samples"' in app_code
+    # Must default to index=0 (All Ingested)
+    assert "index=0" in app_code
+
+
+def test_cw_dynamic_attack_parameters_has_no_alpha():
+    """Verify Carlini & Wagner (CW) configuration never uses an alpha step size and exposes correct L2 parameters."""
+    from pathlib import Path
+    from frontend.services.attack_service import execute_configured_attack
+
+    app_code = Path("frontend/streamlit_app.py").read_text(encoding="utf-8")
+
+    # Verify CW dynamic block does not assign alpha to params_dict
+    cw_block_start = app_code.find("if is_cw:")
+    cw_block_end = app_code.find("elif is_deepfool:", cw_block_start)
+    assert cw_block_start != -1 and cw_block_end != -1
+    cw_code = app_code[cw_block_start:cw_block_end]
+
+    assert 'params_dict["alpha"]' not in cw_code
+    assert "Step Size (α)" not in cw_code
+    assert "initial_const" in cw_code
+    assert "confidence" in cw_code
+    assert "learning_rate" in cw_code
+    assert "max_iterations" in cw_code
+
+    # Test backend execution with CW parameters
+    model = SimpleVisionModel()
+    inputs = torch.rand(2, 3, 16, 16)
+    labels = torch.tensor([0, 1])
+    res = execute_configured_attack(
+        model=model,
+        attack_name="cw",
+        inputs=inputs,
+        labels=labels,
+        epsilon=0.0,
+        clip_min=0.0,
+        clip_max=1.0,
+        params={
+            "max_iterations": 5,
+            "learning_rate": 0.01,
+            "initial_const": 1.0,
+            "confidence": 0.0,
+            "binary_search_steps": 1,
+        },
+    )
+    assert res is not None
+    assert "alpha" not in res["parameters_used"]
+    assert res["parameters_used"]["max_iterations"] == 5
+
+    # Test that passing c_penalty to image CW is accepted via alias mapping
+    res_c_pen = execute_configured_attack(
+        model=model,
+        attack_name="cw",
+        inputs=inputs,
+        labels=labels,
+        epsilon=0.0,
+        clip_min=0.0,
+        clip_max=1.0,
+        params={
+            "max_iterations": 5,
+            "learning_rate": 0.01,
+            "c_penalty": 1.5,
+            "confidence": 0.0,
+            "binary_search_steps": 1,
+        },
+    )
+    assert res_c_pen is not None
+    assert res_c_pen["parameters_used"]["c_penalty"] == 1.5
+    assert "asr_percentage" in res_c_pen
+
+
+def test_deepfool_and_jsma_dynamic_parameters():
+    """Verify DeepFool and JSMA configure algorithm-accurate parameters without alpha."""
+    from pathlib import Path
+    from frontend.services.attack_service import execute_configured_attack
+
+    app_code = Path("frontend/streamlit_app.py").read_text(encoding="utf-8")
+
+    # DeepFool
+    df_block_start = app_code.find("elif is_deepfool:")
+    df_block_end = app_code.find("elif is_jsma:", df_block_start)
+    assert df_block_start != -1 and df_block_end != -1
+    df_code = app_code[df_block_start:df_block_end]
+    assert 'params_dict["alpha"]' not in df_code
+    assert "overshoot" in df_code
+    assert "top_k" in df_code
+    assert "max_iter" in df_code
+
+    # JSMA
+    jsma_block_start = app_code.find("elif is_jsma:")
+    jsma_block_end = app_code.find("elif is_soft_dtw:", jsma_block_start)
+    assert jsma_block_start != -1 and jsma_block_end != -1
+    jsma_code = app_code[jsma_block_start:jsma_block_end]
+    assert 'params_dict["alpha"]' not in jsma_code
+    assert "max_features" in jsma_code
+    assert "step_size" in jsma_code
+
+    # FGSM
+    fgsm_block_start = app_code.find("elif is_fgsm:")
+    fgsm_block_end = app_code.find("elif is_fab:", fgsm_block_start)
+    assert fgsm_block_start != -1 and fgsm_block_end != -1
+    fgsm_code = app_code[fgsm_block_start:fgsm_block_end]
+    assert 'params_dict["alpha"]' not in fgsm_code
+    assert 'params_dict["num_steps"]' not in fgsm_code
+
+
+def test_batched_attack_execution_prevents_oom():
+    """Verify that execute_configured_attack processes batches exceeding single-chunk thresholds without failure."""
+    from frontend.services.attack_service import execute_configured_attack
+
+    model = SimpleVisionModel()
+    # 70 vision samples exceeds vision chunk size (32) to test multi-chunk execution & concatenation
+    inputs = torch.rand(70, 3, 16, 16)
+    labels = torch.randint(0, 2, (70,))
+
+    res = execute_configured_attack(
+        model=model,
+        attack_name="fgsm",
+        inputs=inputs,
+        labels=labels,
+        epsilon=0.05,
+    )
+
+    assert res is not None
+    assert len(res["sample_comparisons"]) == 70
+    assert res["_adversarial_examples"].size(0) == 70
+    assert "clean_accuracy" in res
+    assert "adversarial_accuracy" in res
+    assert "asr_percentage" in res
+
+
+def test_text_tokenizers_encoding_normalization_and_parameters():
+    """Verify that normalize_text_inputs supports tokenizers.Encoding-like objects and parameter registry accepts text parameters."""
+    from app.attack_engine.attacks.text._text_utils import prepare_text_inputs
+    from app.attack_engine.parameter_registry import prepare_attack_config
+    from app.attack_engine.config import AttackConfig
+
+    class MockEncoding:
+        def __init__(self, ids, mask):
+            self.ids = ids
+            self.attention_mask = mask
+
+    encodings = [
+        MockEncoding([101, 7592, 2088, 102], [1, 1, 1, 1]),
+        MockEncoding([101, 3231, 2048, 102], [1, 1, 1, 1]),
+    ]
+
+    input_ids, attention_mask, input_type, texts = prepare_text_inputs(encodings)
+    assert input_ids.shape == (2, 4)
+    assert attention_mask.shape == (2, 4)
+    assert input_type == "tensor"
+
+    # Test hotflip parameter validation
+    cfg_hotflip = prepare_attack_config(
+        domain="text",
+        attack_name="hotflip",
+        config=AttackConfig(params={"max_modifications": 3, "candidate_vocab_size": 25}),
+    )
+    assert cfg_hotflip.params["max_modifications"] == 3
+    assert cfg_hotflip.params["candidate_vocab_size"] == 25
+
+    # Test textbugger_wb parameter validation
+    cfg_bugger = prepare_attack_config(
+        domain="text",
+        attack_name="textbugger_wb",
+        config=AttackConfig(params={"max_modifications": 4, "bug_types": ["sub_w"]}),
+    )
+    assert cfg_bugger.params["max_modifications"] == 4
+
+    # Test gradient_substitution parameter validation
+    cfg_grad = prepare_attack_config(
+        domain="text",
+        attack_name="gradient_substitution",
+        config=AttackConfig(params={"max_modifications": 2, "num_candidates": 8, "similarity_threshold": 0.5}),
+    )
+    assert cfg_grad.params["max_modifications"] == 2
+    assert cfg_grad.params["num_candidates"] == 8
+
+    # Also test that if num_steps is passed to text token attacks, it is mapped to max_modifications
+    cfg_step_map = prepare_attack_config(
+        domain="text",
+        attack_name="hotflip",
+        config=AttackConfig(params={"num_steps": 5}),
+    )
+    assert cfg_step_map.params["max_modifications"] == 5
+
+
+def test_vulnerability_assessment_handles_empty_predictions_safely():
+    """Verify that assess_and_score_vulnerability does not crash with zero-size array reduction errors."""
+    from frontend.services.vulnerability_service import assess_and_score_vulnerability
+
+    class SimpleMockModel:
+        def __init__(self):
+            self.model_name = "MockModel"
+
+    model = SimpleMockModel()
+    attack_result = {
+        "attack_name": "embedding_pgd",
+        "attack_class": "EmbeddingPGD",
+        "clean_accuracy": 100.0,
+        "adversarial_accuracy": 0.0,
+        "clean_confidence": 95.0,
+        "adversarial_confidence": 40.0,
+        "original_predictions": None,  # Simulates missing predictions
+        "adversarial_predictions": None,
+        "epsilon_used": 0.5,
+    }
+    inputs = {"input_ids": torch.tensor([[101, 102], [101, 103]]), "attention_mask": torch.tensor([[1, 1], [1, 1]])}
+    labels = torch.tensor([0, 1])
+
+    res = assess_and_score_vulnerability(
+        model=model,
+        attack_result=attack_result,
+        inputs=inputs,
+        labels=labels,
+        domain="text",
+    )
+    assert res is not None
+    assert "vulnerability_score" in res
+    assert "risk_level" in res
+
+
+def test_vae_attack_auto_equips_fallback_vae():
+    """Verify that execute_configured_attack automatically attaches SimpleTabularVAE when running VAEAttack."""
+    from frontend.services.attack_service import execute_configured_attack
+
+    class DummyTabularModel(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.fc = nn.Linear(14, 2)
+
+        def forward(self, x):
+            return self.fc(x)
+
+    model = DummyTabularModel()
+    inputs = torch.randn(5, 14)
+    labels = torch.tensor([0, 1, 0, 1, 0])
+
+    res = execute_configured_attack(
+        model=model,
+        attack_name="vae_attack",
+        inputs=inputs,
+        labels=labels,
+        epsilon=0.5,
+    )
+    assert res is not None
+    assert res["attack_name"] == "VAE_ATTACK"
+    assert "asr_percentage" in res
+
+
+
+
+
+
 
 
 

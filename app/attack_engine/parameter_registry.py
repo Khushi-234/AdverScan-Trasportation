@@ -231,6 +231,10 @@ RUNTIME_CONTEXT_KEYS: Set[str] = {
     "max_delta",
     # Text tokenization constraints
     "max_length",
+    # Attack runtime return statistics and metrics
+    "perturbation_stats",
+    "weighted_distance",
+    "success_rate",
 }
 
 
@@ -476,7 +480,7 @@ _ATTACK_PARAM_REGISTRY: Dict[str, Dict[str, List[ParameterSpec]]] = {
                 exclusive_min=True,
                 description="Initial trade-off constant c for binary search",
                 required=False,
-                aliases=["c"],
+                aliases=["c", "c_penalty"],
                 ui_control="number_input",
             ),
             ParameterSpec(
@@ -1211,7 +1215,7 @@ _ATTACK_PARAM_REGISTRY: Dict[str, Dict[str, List[ParameterSpec]]] = {
                 exclusive_min=True,
                 description="Step size per iteration",
                 required=False,
-                aliases=["step_size", "lr"],
+                aliases=["step_size", "lr", "learning_rate"],
                 ui_control="number_input",
             ),
             ParameterSpec(
@@ -1324,7 +1328,7 @@ _ATTACK_PARAM_REGISTRY: Dict[str, Dict[str, List[ParameterSpec]]] = {
                 min_value=1,
                 description="Maximum saliency modification steps",
                 required=False,
-                aliases=["max_iterations", "max_locations", "max_steps", "num_steps", "steps", "iters"],
+                aliases=["max_iterations", "max_locations", "max_steps", "num_steps", "steps", "iters", "max_features", "max_modifications"],
                 ui_control="number_input",
             ),
             ParameterSpec(
@@ -1396,7 +1400,7 @@ _ATTACK_PARAM_REGISTRY: Dict[str, Dict[str, List[ParameterSpec]]] = {
                 min_value=1,
                 description="Maximum number of word/token flips allowed",
                 required=False,
-                aliases=["max_flips"],
+                aliases=["max_flips", "num_steps", "steps", "max_iterations", "iters"],
                 ui_control="number_input",
             ),
             ParameterSpec(
@@ -1514,6 +1518,7 @@ _ATTACK_PARAM_REGISTRY: Dict[str, Dict[str, List[ParameterSpec]]] = {
                 min_value=1,
                 description="Maximum number of words to bug/modify",
                 required=False,
+                aliases=["num_steps", "steps", "max_iterations", "iters"],
                 ui_control="number_input",
             ),
             ParameterSpec(
@@ -1618,6 +1623,7 @@ _ATTACK_PARAM_REGISTRY: Dict[str, Dict[str, List[ParameterSpec]]] = {
                 min_value=1,
                 description="Maximum number of words replaced",
                 required=False,
+                aliases=["num_steps", "steps", "max_iterations", "iters"],
                 ui_control="number_input",
             ),
             ParameterSpec(

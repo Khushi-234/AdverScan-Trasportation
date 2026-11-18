@@ -247,6 +247,55 @@ def prepare_text_inputs(
             attention_mask = torch.ones_like(input_ids)
             return input_ids, attention_mask, "tensor", None
 
+        elif all(hasattr(x, "ids") for x in inputs):
+            # Support list of tokenizers.Encoding objects
+            input_ids = torch.tensor([x.ids for x in inputs], dtype=torch.long, device=target_device)
+            if all(hasattr(x, "attention_mask") for x in inputs):
+                attention_mask = torch.tensor([x.attention_mask for x in inputs], dtype=torch.long, device=target_device)
+            else:
+                pad_id = getattr(tokenizer, "pad_token_id", 0) if tokenizer is not None else 0
+                attention_mask = (input_ids != pad_id).long().to(target_device)
+            if attention_mask.sum() == 0:
+                attention_mask = torch.ones_like(input_ids)
+            original_texts = None
+            if tokenizer is not None and hasattr(tokenizer, "batch_decode"):
+                try:
+                    original_texts = tokenizer.batch_decode(input_ids, skip_special_tokens=True)
+                except Exception:
+                    pass
+            return input_ids, attention_mask, "tensor", original_texts
+
+        elif all(isinstance(x, torch.Tensor) for x in inputs):
+            input_ids = torch.stack(inputs).to(dtype=torch.long, device=target_device)
+            pad_id = getattr(tokenizer, "pad_token_id", 0) if tokenizer is not None else 0
+            attention_mask = (input_ids != pad_id).long().to(target_device)
+            if attention_mask.sum() == 0:
+                attention_mask = torch.ones_like(input_ids)
+            original_texts = None
+            if tokenizer is not None and hasattr(tokenizer, "batch_decode"):
+                try:
+                    original_texts = tokenizer.batch_decode(input_ids, skip_special_tokens=True)
+                except Exception:
+                    pass
+            return input_ids, attention_mask, "tensor", original_texts
+
+        elif all(isinstance(x, dict) and "input_ids" in x for x in inputs):
+            input_ids = torch.stack([x["input_ids"] if isinstance(x["input_ids"], torch.Tensor) else torch.tensor(x["input_ids"]) for x in inputs]).to(dtype=torch.long, device=target_device)
+            if all("attention_mask" in x for x in inputs):
+                attention_mask = torch.stack([x["attention_mask"] if isinstance(x["attention_mask"], torch.Tensor) else torch.tensor(x["attention_mask"]) for x in inputs]).to(dtype=torch.long, device=target_device)
+            else:
+                pad_id = getattr(tokenizer, "pad_token_id", 0) if tokenizer is not None else 0
+                attention_mask = (input_ids != pad_id).long().to(target_device)
+            if attention_mask.sum() == 0:
+                attention_mask = torch.ones_like(input_ids)
+            original_texts = None
+            if tokenizer is not None and hasattr(tokenizer, "batch_decode"):
+                try:
+                    original_texts = tokenizer.batch_decode(input_ids, skip_special_tokens=True)
+                except Exception:
+                    pass
+            return input_ids, attention_mask, "tensor", original_texts
+
         else:
             raise AttackExecutionError(
                 f"Unsupported list item types in inputs: {[type(x) for x in inputs[:3]]}"

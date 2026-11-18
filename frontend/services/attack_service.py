@@ -25,6 +25,7 @@ from app.attack_engine.exceptions import (
     UnsupportedModelError,
 )
 from app.attack_engine.models import AttackMetadata, AttackResult
+from app.attack_engine.utils.perturbation import compute_perturbation_metrics
 from app.attack_engine.utils.validation import check_model_compatibility
 
 # Canonical catalog of attacks per domain with full descriptive metadata
@@ -386,6 +387,231 @@ def get_class_labels_mapping(
     return {i: f"Class {i}" for i in range(n)}
 
 
+class SimpleTabularVAE(torch.nn.Module):
+    """Automatic lightweight fallback VAE for tabular models when model.vae is not pre-packaged."""
+    def __init__(self, in_features: int = 14, latent_dim: int = 4):
+        super().__init__()
+        l_dim = min(latent_dim, max(1, in_features // 2))
+        self.encoder = torch.nn.Sequential(
+            torch.nn.Linear(in_features, max(8, in_features)),
+            torch.nn.ReLU(),
+            torch.nn.Linear(max(8, in_features), l_dim),
+        )
+        self.decoder = torch.nn.Sequential(
+            torch.nn.Linear(l_dim, max(8, in_features)),
+            torch.nn.ReLU(),
+            torch.nn.Linear(max(8, in_features), in_features),
+        )
+
+    def encode(self, x: torch.Tensor) -> torch.Tensor:
+        return self.encoder(x)
+
+    def decode(self, z: torch.Tensor) -> torch.Tensor:
+        return self.decoder(z)
+
+
+def _execute_attack_batched(
+    model: Any,
+    attack_cls: Any,
+    inputs: Any,
+    labels: Any,
+    config: AttackConfig,
+) -> AttackResult:
+    """
+    Execute attack with automatic VRAM-safe micro-batching and memory reclamation.
+    Prevents CUDA Out-Of-Memory (OOM) errors when evaluating large batches (e.g., 1,500 samples
+    on memory-intensive architectures like Vision Transformers or deep CNNs).
+    """
+    if not isinstance(inputs, torch.Tensor):
+        return execute_attack(
+            model=model,
+            attack_cls=attack_cls,
+            inputs=inputs,
+            labels=labels,
+            config=config,
+        )
+
+    total_samples = inputs.size(0)
+    raw_model = getattr(model, "get_model", lambda: model)()
+    is_cuda = False
+    try:
+        is_cuda = next(raw_model.parameters()).is_cuda
+    except Exception:
+        is_cuda = torch.cuda.is_available()
+
+    # Determine safe micro-batch chunk size based on input dimensions and accelerator
+    if inputs.dim() >= 4:
+        # Vision 4D tensor [N, C, H, W] - large intermediate backprop activation tensors
+        chunk_size = 16 if is_cuda else 32
+    elif inputs.dim() == 3:
+        # Time-series/Sequence 3D tensor [N, T, D]
+        chunk_size = 32 if is_cuda else 64
+    else:
+        # Tabular 2D tensor [N, D]
+        chunk_size = 64 if is_cuda else 128
+
+    # Filter out runtime return stats so they do not contaminate config.params
+    clean_params = {
+        k: v for k, v in (config.params or {}).items()
+        if k not in ("perturbation_stats", "weighted_distance", "success_rate")
+    }
+
+    # If the batch is already small, run directly with memory cleanup
+    if total_samples <= chunk_size:
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+        single_config = AttackConfig(
+            epsilon=config.epsilon,
+            clip_min=config.clip_min,
+            clip_max=config.clip_max,
+            loss_fn=config.loss_fn,
+            params=dict(clean_params),
+        )
+        return execute_attack(
+            model=model,
+            attack_cls=attack_cls,
+            inputs=inputs,
+            labels=labels,
+            config=single_config,
+        )
+
+    # Process in safe micro-batches to guarantee VRAM bounds
+    adv_chunks = []
+    orig_preds_chunks = []
+    adv_preds_chunks = []
+    success_chunks = []
+    labels_tensor = (
+        labels if isinstance(labels, torch.Tensor) else (torch.as_tensor(labels) if labels is not None else None)
+    )
+
+    start_time = time.time()
+
+    for start_idx in range(0, total_samples, chunk_size):
+        end_idx = min(start_idx + chunk_size, total_samples)
+        batch_inputs = inputs[start_idx:end_idx]
+        batch_labels = labels_tensor[start_idx:end_idx] if labels_tensor is not None else None
+
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
+        chunk_config = AttackConfig(
+            epsilon=config.epsilon,
+            clip_min=config.clip_min,
+            clip_max=config.clip_max,
+            loss_fn=config.loss_fn,
+            params=dict(clean_params),
+        )
+
+        try:
+            chunk_res = execute_attack(
+                model=model,
+                attack_cls=attack_cls,
+                inputs=batch_inputs,
+                labels=batch_labels,
+                config=chunk_config,
+            )
+        except Exception as oom_exc:
+            # Fallback if a very large model (e.g. ViT-Large) still OOMs on 16: retry with half batch size
+            if "out of memory" in str(oom_exc).lower() and chunk_size > 4:
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+                sub_chunk = max(2, chunk_size // 2)
+                sub_advs, sub_origs, sub_adv_p, sub_succs = [], [], [], []
+                for s_i in range(start_idx, end_idx, sub_chunk):
+                    e_i = min(s_i + sub_chunk, end_idx)
+                    s_in = inputs[s_i:e_i]
+                    s_lbl = labels_tensor[s_i:e_i] if labels_tensor is not None else None
+                    if torch.cuda.is_available():
+                        torch.cuda.empty_cache()
+                    sub_cfg = AttackConfig(
+                        epsilon=config.epsilon,
+                        clip_min=config.clip_min,
+                        clip_max=config.clip_max,
+                        loss_fn=config.loss_fn,
+                        params=dict(clean_params),
+                    )
+                    s_res = execute_attack(
+                        model=model,
+                        attack_cls=attack_cls,
+                        inputs=s_in,
+                        labels=s_lbl,
+                        config=sub_cfg,
+                    )
+                    if isinstance(s_res.adversarial_examples, torch.Tensor):
+                        sub_advs.append(s_res.adversarial_examples.detach().cpu())
+                    elif s_res.adversarial_examples is not None:
+                        sub_advs.append(s_res.adversarial_examples)
+                    if s_res.original_predictions is not None:
+                        sub_origs.append(s_res.original_predictions.detach().cpu())
+                    if s_res.adversarial_predictions is not None:
+                        sub_adv_p.append(s_res.adversarial_predictions.detach().cpu())
+                    if s_res.success is not None:
+                        sub_succs.append(s_res.success.detach().cpu())
+
+                adv_chunks.extend(sub_advs)
+                orig_preds_chunks.extend(sub_origs)
+                adv_preds_chunks.extend(sub_adv_p)
+                success_chunks.extend(sub_succs)
+                continue
+            else:
+                raise oom_exc
+
+        if isinstance(chunk_res.adversarial_examples, torch.Tensor):
+            adv_chunks.append(chunk_res.adversarial_examples.detach().cpu())
+        elif chunk_res.adversarial_examples is not None:
+            adv_chunks.append(chunk_res.adversarial_examples)
+
+        if chunk_res.original_predictions is not None:
+            orig_preds_chunks.append(chunk_res.original_predictions.detach().cpu())
+        if chunk_res.adversarial_predictions is not None:
+            adv_preds_chunks.append(chunk_res.adversarial_predictions.detach().cpu())
+        if chunk_res.success is not None:
+            success_chunks.append(chunk_res.success.detach().cpu())
+
+        del chunk_res
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
+    elapsed_time = time.time() - start_time
+
+    # Reconstruct aggregated full tensors on CPU
+    merged_adv = torch.cat(adv_chunks, dim=0) if adv_chunks and isinstance(adv_chunks[0], torch.Tensor) else None
+    merged_orig = torch.cat(orig_preds_chunks, dim=0) if orig_preds_chunks else None
+    merged_adv_preds = torch.cat(adv_preds_chunks, dim=0) if adv_preds_chunks else None
+    merged_success = torch.cat(success_chunks, dim=0) if success_chunks else None
+
+    # Compute global perturbation metrics on combined CPU tensors
+    metrics = {}
+    if merged_adv is not None and isinstance(inputs, torch.Tensor):
+        metrics = compute_perturbation_metrics(inputs.cpu(), merged_adv.cpu())
+
+    static_metadata = getattr(attack_cls, "metadata", None)
+    exec_meta = AttackMetadata(
+        name=getattr(static_metadata, "name", getattr(attack_cls, "__name__", "attack")),
+        domain=getattr(static_metadata, "domain", "image"),
+        category=getattr(static_metadata, "category", "gradient"),
+        attack_type=getattr(static_metadata, "attack_type", "white_box"),
+        epsilon=config.epsilon,
+        clip_min=config.clip_min,
+        clip_max=config.clip_max,
+        execution_time_seconds=elapsed_time,
+        parameters=config.params or {},
+    )
+    return AttackResult(
+        adversarial_examples=merged_adv,
+        metadata=exec_meta,
+        original_inputs=inputs,
+        labels=labels,
+        attack_name=getattr(static_metadata, "name", getattr(attack_cls, "__name__", "attack")),
+        success=merged_success,
+        original_predictions=merged_orig,
+        adversarial_predictions=merged_adv_preds,
+        perturbation_metrics=metrics,
+        execution_time=elapsed_time,
+        attack_metadata=static_metadata,
+    )
+
+
 def execute_configured_attack(
     model: Any,
     attack_name: str,
@@ -401,6 +627,7 @@ def execute_configured_attack(
     """
     Execute selected attack on the model using the backend execution interface
     and compute all telemetry matching run_pipeline_for_multimodel.py.
+    Equipped with automatic VRAM-safe micro-batching to handle 1,500+ samples.
 
     Returns:
         Structured result dictionary formatted for Streamlit UI display.
@@ -413,18 +640,40 @@ def execute_configured_attack(
             f"Attack '{attack_name}' is not registered: {str(exc)}"
         ) from exc
 
-    # 2. Build backend AttackConfig
+    # 2. Auto-equip lightweight tabular VAE if running VAEAttack without model.vae
+    clean_params = dict(params or {})
+    canon_atk = str(attack_name).lower().strip()
+    if canon_atk in ("vae_attack", "tabular_vae", "vae") and "vae" not in clean_params:
+        raw_m = getattr(model, "get_model", lambda: model)()
+        if not hasattr(model, "vae") and not hasattr(raw_m, "vae"):
+            in_f = 14
+            if hasattr(inputs, "shape") and len(inputs.shape) >= 2:
+                in_f = int(inputs.shape[-1])
+            try:
+                device = (
+                    getattr(inputs, "device", None)
+                    or (next(raw_m.parameters()).device if hasattr(raw_m, "parameters") and list(raw_m.parameters()) else torch.device("cpu"))
+                )
+            except Exception:
+                device = torch.device("cpu")
+            clean_params["vae"] = SimpleTabularVAE(in_features=in_f).to(device)
+
+    # Build backend AttackConfig
     config = AttackConfig(
         epsilon=float(epsilon),
         clip_min=float(clip_min) if clip_min is not None else None,
         clip_max=float(clip_max) if clip_max is not None else None,
-        params=params or {},
+        params=clean_params,
     )
 
-    # 3. Execute via existing backend attack executor
+    # Clean cache before launching attack
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+
+    # 3. Execute via VRAM-safe batched attack executor
     try:
         t0 = time.time()
-        attack_res: AttackResult = execute_attack(
+        attack_res: AttackResult = _execute_attack_batched(
             model=model,
             attack_cls=attack_cls,
             inputs=inputs,
@@ -453,10 +702,10 @@ def execute_configured_attack(
             )
     exec_time = attack_res.execution_time or wall_time
 
-    # Compute confidences if feasible
+    # Compute confidences using safe inference batches under torch.no_grad()
     clean_confs = None
     adv_confs = None
-    if isinstance(inputs, torch.Tensor) and hasattr(raw_model, "eval"):
+    if hasattr(raw_model, "eval"):
         try:
             device = (
                 next(raw_model.parameters()).device
@@ -465,20 +714,55 @@ def execute_configured_attack(
             )
             with torch.no_grad():
                 raw_model.eval()
-                logits_c = raw_model(inputs.to(device))
-                if hasattr(logits_c, "logits"):
-                    logits_c = logits_c.logits
-                probs_c = F.softmax(logits_c, dim=-1)
-                clean_confs = probs_c.max(dim=-1).values.cpu()
 
+                # Clean confidences
+                if isinstance(inputs, dict) or hasattr(inputs, "items"):
+                    batch_in = {k: (v.to(device) if isinstance(v, torch.Tensor) else v) for k, v in inputs.items()}
+                    out_c = raw_model(**batch_in)
+                    if hasattr(out_c, "logits"):
+                        out_c = out_c.logits
+                    clean_confs = F.softmax(out_c, dim=-1).max(dim=-1).values.cpu()
+                    if orig_preds is None:
+                        orig_preds = out_c.argmax(dim=-1).cpu()
+                elif isinstance(inputs, torch.Tensor):
+                    eval_bs = 32 if inputs.dim() >= 4 else 64
+                    conf_c_list = []
+                    for b_i in range(0, inputs.size(0), eval_bs):
+                        b_in = inputs[b_i : b_i + eval_bs].to(device)
+                        out_c = raw_model(b_in)
+                        if hasattr(out_c, "logits"):
+                            out_c = out_c.logits
+                        conf_c_list.append(F.softmax(out_c, dim=-1).max(dim=-1).values.cpu())
+                    if conf_c_list:
+                        clean_confs = torch.cat(conf_c_list, dim=0)
+
+                # Adversarial confidences
                 if attack_res.adversarial_examples is not None:
-                    logits_a = raw_model(attack_res.adversarial_examples.to(device))
-                    if hasattr(logits_a, "logits"):
-                        logits_a = logits_a.logits
-                    probs_a = F.softmax(logits_a, dim=-1)
-                    adv_confs = probs_a.max(dim=-1).values.cpu()
+                    adv_tensor_all = attack_res.adversarial_examples
+                    if isinstance(adv_tensor_all, dict) or hasattr(adv_tensor_all, "items"):
+                        batch_adv = {k: (v.to(device) if isinstance(v, torch.Tensor) else v) for k, v in adv_tensor_all.items()}
+                        out_a = raw_model(**batch_adv)
+                        if hasattr(out_a, "logits"):
+                            out_a = out_a.logits
+                        adv_confs = F.softmax(out_a, dim=-1).max(dim=-1).values.cpu()
+                        if adv_preds is None:
+                            adv_preds = out_a.argmax(dim=-1).cpu()
+                    elif isinstance(adv_tensor_all, torch.Tensor):
+                        eval_bs = 32 if adv_tensor_all.dim() >= 4 else 64
+                        conf_a_list = []
+                        for b_i in range(0, adv_tensor_all.size(0), eval_bs):
+                            b_in = adv_tensor_all[b_i : b_i + eval_bs].to(device)
+                            out_a = raw_model(b_in)
+                            if hasattr(out_a, "logits"):
+                                out_a = out_a.logits
+                            conf_a_list.append(F.softmax(out_a, dim=-1).max(dim=-1).values.cpu())
+                        if conf_a_list:
+                            adv_confs = torch.cat(conf_a_list, dim=0)
         except Exception:
             pass
+        finally:
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
 
     # Accuracy calculations
     total_samples = len(labels) if hasattr(labels, "__len__") else 1

@@ -77,7 +77,7 @@ class CW(BaseAttack):
                 raise AttackConfigurationError("max_iterations must be positive")
             if "binary_search_steps" in params and params["binary_search_steps"] < 1:
                 raise AttackConfigurationError("binary_search_steps must be at least 1")
-            init_c = params.get("initial_const", params.get("c"))
+            init_c = params.get("initial_const", params.get("c", params.get("c_penalty")))
             if init_c is not None and init_c <= 0:
                 raise AttackConfigurationError("initial_const must be positive")
             lr = params.get("learning_rate", params.get("lr"))
@@ -152,7 +152,7 @@ class CW(BaseAttack):
         lr = float(params.get("learning_rate", params.get("lr", 0.01)))
         confidence = float(params.get("confidence", params.get("kappa", 0.0)))
         binary_search_steps = int(params.get("binary_search_steps", 1))
-        initial_const = float(params.get("initial_const", params.get("c", 1.0)))
+        initial_const = float(params.get("initial_const", params.get("c", params.get("c_penalty", 1.0))))
         targeted = bool(params.get("targeted", False))
         target_label = params.get("target_label", params.get("target", None))
 

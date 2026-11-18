@@ -6,6 +6,11 @@ Dashboard → Model Ingestion → Attack Configuration → Attack Execution
 
 from __future__ import annotations
 
+import os
+
+# Prevent CUDA VRAM memory fragmentation
+os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
+
 import json
 import math
 import sys
@@ -276,16 +281,11 @@ elif stage == "ingestion":
         if sample_choice.startswith("Half Dataset"):
             sample_size = half_samples
             st.markdown(
-                f"""
-                <div style="background: rgba(16, 185, 129, 0.08); border: 1px solid rgba(16, 185, 129, 0.25); border-radius: 8px; padding: 10px 14px; margin-top: 6px;">
-                    <div style="font-weight: 700; color: var(--stat-val-emerald); font-size: 0.95rem;">
-                        ⚡ Half Dataset Mode Selected
-                    </div>
-                    <div style="font-size: 0.85rem; color: var(--text-secondary); margin-top: 4px; line-height: 1.4;">
-                        Evaluating <strong>{sample_size:,}</strong> samples (50.0% coverage of {total_avail_samples:,} total samples).
-                    </div>
-                </div>
-                """,
+                f'<div style="background: rgba(16, 185, 129, 0.08); border: 1px solid rgba(16, 185, 129, 0.25); border-radius: 8px; padding: 10px 14px; margin-top: 6px;">'
+                f'<div style="font-weight: 700; color: var(--stat-val-emerald); font-size: 0.95rem;">⚡ Half Dataset Mode Selected</div>'
+                f'<div style="font-size: 0.85rem; color: var(--text-secondary); margin-top: 4px; line-height: 1.4;">'
+                f'Evaluating <strong>{sample_size:,}</strong> samples (50.0% coverage of {total_avail_samples:,} total samples).'
+                f'</div></div>',
                 unsafe_allow_html=True,
             )
         elif sample_choice.startswith("Full Dataset"):
@@ -294,17 +294,11 @@ elif stage == "ingestion":
             if full_samples > 1000 and default_domain in ("image", "vision"):
                 warning_msg = f"<div style='font-size: 0.78rem; color: #f59e0b; margin-top: 4px;'>⚠️ Note: Ingesting {sample_size:,} vision tensors will run gradient backpropagation across all images.</div>"
             st.markdown(
-                f"""
-                <div style="background: rgba(139, 92, 246, 0.08); border: 1px solid rgba(139, 92, 246, 0.25); border-radius: 8px; padding: 10px 14px; margin-top: 6px;">
-                    <div style="font-weight: 700; color: #8b5cf6; font-size: 0.95rem;">
-                        🚀 Full Dataset Mode Selected
-                    </div>
-                    <div style="font-size: 0.85rem; color: var(--text-secondary); margin-top: 4px; line-height: 1.4;">
-                        Evaluating all <strong>{sample_size:,}</strong> samples (100.0% full benchmark coverage).
-                        {warning_msg}
-                    </div>
-                </div>
-                """,
+                f'<div style="background: rgba(139, 92, 246, 0.08); border: 1px solid rgba(139, 92, 246, 0.25); border-radius: 8px; padding: 10px 14px; margin-top: 6px;">'
+                f'<div style="font-weight: 700; color: #8b5cf6; font-size: 0.95rem;">🚀 Full Dataset Mode Selected</div>'
+                f'<div style="font-size: 0.85rem; color: var(--text-secondary); margin-top: 4px; line-height: 1.4;">'
+                f'Evaluating all <strong>{sample_size:,}</strong> samples (100.0% full benchmark coverage).'
+                f'{warning_msg}</div></div>',
                 unsafe_allow_html=True,
             )
         else:
@@ -588,11 +582,19 @@ elif stage == "attack_config":
     model_adapter = active_data["adapter"]
     domain = active_data.get("domain", "image")
     meta_dict = active_data.get("metadata_dict") or active_data.get("telemetry") or {}
-    available_samples = (
-        active_data.get("test_inputs").shape[0]
-        if active_data.get("test_inputs") is not None
-        else 1
-    )
+    raw_test_inputs = active_data.get("test_inputs")
+    if raw_test_inputs is not None:
+        if hasattr(raw_test_inputs, "shape") and len(raw_test_inputs.shape) > 0:
+            available_samples = int(raw_test_inputs.shape[0])
+        elif isinstance(raw_test_inputs, dict):
+            first_v = next(iter(raw_test_inputs.values()), None)
+            available_samples = len(first_v) if first_v is not None else 1
+        elif hasattr(raw_test_inputs, "__len__"):
+            available_samples = len(raw_test_inputs)
+        else:
+            available_samples = 1
+    else:
+        available_samples = 1
 
     # Target Model Banner
     model_name_disp = (
@@ -689,30 +691,48 @@ elif stage == "attack_config":
         selected_attack = compatible_attacks[selected_idx]
 
     with col_sample_sel:
-        # Prominent Sample Count Selection for CPU / GPU resource management
-        sample_choice = st.selectbox(
-            "Evaluation Sample Count (Batch Slicing)",
-            options=[
-                f"{min(2, available_samples)} samples (Ultra-Fast / CPU)",
-                f"{min(5, available_samples)} samples (Fast / Recommended for CPU)",
-                f"{min(10, available_samples)} samples (Standard)",
-                f"{min(20, available_samples)} samples (Thorough)",
-                f"All Ingested ({available_samples} samples)",
-            ],
-            index=1 if available_samples >= 5 else 0,
-            help="Allows users without high-end GPUs to evaluate attacks rapidly on smaller batches",
+        # Prominent Sample Count Selection: All Ingested (Default), Half Ingested, or Custom Number of Samples
+        half_avail = max(1, available_samples // 2)
+        total_ds_samples = (
+            active_data.get("total_dataset_samples")
+            or meta_dict.get("Total Dataset Samples")
+            or meta_dict.get("total_dataset_samples")
         )
-        # Parse selected sample count
-        if "All Ingested" in sample_choice:
+        tot_ds_info = (
+            f"{total_ds_samples:,} samples in benchmark dataset"
+            if isinstance(total_ds_samples, int)
+            else "Available in active dataset split"
+        )
+
+        sample_choice = st.selectbox(
+            "Evaluation Sample Population (Batch Slicing)",
+            options=[
+                f"All Ingested ({available_samples:,} samples • 100%)",
+                f"Half Ingested ({half_avail:,} samples • 50%)",
+                "Custom Number of Samples",
+            ],
+            index=0,
+            help=f"Select how many samples of the ingested batch to evaluate. Defaults to all {available_samples:,} loaded samples.",
+        )
+
+        if sample_choice.startswith("All Ingested"):
             eval_sample_count = available_samples
+        elif sample_choice.startswith("Half Ingested"):
+            eval_sample_count = half_avail
         else:
-            try:
-                eval_sample_count = int(sample_choice.split()[0])
-            except Exception:
-                eval_sample_count = min(5, available_samples)
-        eval_sample_count = min(max(1, eval_sample_count), available_samples)
+            eval_sample_count = st.number_input(
+                "Specify Custom Sample Count",
+                min_value=1,
+                max_value=available_samples,
+                value=min(available_samples, 10 if available_samples >= 10 else 5),
+                step=1,
+                help=f"Number of samples to evaluate (1 to {available_samples:,})",
+            )
+        eval_sample_count = min(max(1, int(eval_sample_count)), available_samples)
+        batch_pct = (eval_sample_count / max(1, available_samples)) * 100.0
         st.caption(
-            f"⚡ Evaluating **{eval_sample_count}** of **{available_samples}** loaded sample(s)"
+            f"⚡ Evaluating **{eval_sample_count:,}** of **{available_samples:,}** loaded sample(s) "
+            f"(**{batch_pct:.1f}%** batch coverage • Total: {tot_ds_info})"
         )
 
     # Display Attack Specifications & Characteristics
@@ -743,91 +763,519 @@ elif stage == "attack_config":
     st.markdown("---")
     st.subheader("Configure Attack Parameters & Telemetry")
 
+    # Dynamic Algorithm-Specific Attack Parameter Routing
+    atk_id = str(selected_attack.get("id", "fgsm")).lower().strip()
+    is_cw = atk_id in ("cw", "carlini_wagner", "tabular_cw", "carlini_wagner_tabular")
+    is_deepfool = atk_id == "deepfool"
+    is_jsma = atk_id in ("jsma", "tabular_jsma", "time_series_jsma")
+    is_soft_dtw = atk_id == "soft_dtw"
+    is_smooth_pgd = atk_id == "smooth_pgd"
+    is_wavelet = atk_id == "wavelet"
+    is_lowprofool = atk_id == "lowprofool"
+    is_fgsm = atk_id == "fgsm"
+    is_fab = atk_id == "fab"
+    is_text_tokens = atk_id in ("hotflip", "textbugger_wb", "gradient_substitution")
+    is_universal_trigger = atk_id == "universal_trigger"
+
     col_p1, col_p2 = st.columns(2)
+    params_dict: Dict[str, Any] = {}
 
-    with col_p1:
-        epsilon = st.slider(
-            "Perturbation Budget (ε)",
-            min_value=0.001,
-            max_value=0.5,
-            value=0.05,
-            step=0.005,
-            format="%.3f",
-            help="Maximum perturbation magnitude (L-infinity / L2 bound)",
-        )
-        st.markdown(
-            """
-            <div class="param-explainer">
-                <strong>Perturbation Budget (ε):</strong> Defines the maximum allowable distance between clean and adversarial inputs.
-                <span class="param-impact">• <em>Impact:</em> Higher ε increases Attack Success Rate (ASR) by allowing larger distortions, but makes noise more human-visible. Lower ε ensures imperceptibility but requires higher model vulnerability to succeed.</span>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-
-        col_clip_a, col_clip_b = st.columns(2)
-        with col_clip_a:
-            clip_min = st.number_input(
-                "Clip Min", value=0.0, step=0.1, help="Minimum valid tensor value"
+    if is_cw:
+        # --- CARLINI & WAGNER (C&W L2 Optimization) ---
+        # No alpha step size! Optimizes in tanh space using Adam.
+        with col_p1:
+            c_param = st.slider(
+                "Optimization Tradeoff Constant (c)",
+                min_value=0.01,
+                max_value=20.0,
+                value=1.0,
+                step=0.1,
+                help="Balances L2 perturbation magnitude ||x_adv - x||_2^2 against classification loss margin",
             )
-        with col_clip_b:
-            clip_max = st.number_input(
-                "Clip Max", value=1.0, step=0.1, help="Maximum valid tensor value"
-            )
-
-        st.markdown(
-            """
-            <div class="param-explainer">
-                <strong>Tensor Clip Bounds [min, max]:</strong> Constrains perturbed features within physically valid boundaries (e.g. [0.0, 1.0] for normalized pixels).
-                <span class="param-impact">• <em>Impact:</em> Prevents mathematical overflow/underflow artifacts that would be trivially caught by input sanitization filters.</span>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-
-    params_dict = {}
-
-    with col_p2:
-        if selected_attack.get("iterative", False):
-            num_steps = st.slider(
-                "Optimization Iterations (Steps)",
-                min_value=1,
-                max_value=50,
-                value=10,
-                step=1,
-                help="Number of iterative gradient ascent steps",
-            )
-            params_dict["num_steps"] = num_steps
             st.markdown(
                 """
                 <div class="param-explainer">
-                    <strong>Optimization Iterations:</strong> Number of gradient ascent steps taken along the loss surface.
-                    <span class="param-impact">• <em>Impact:</em> More steps increase attack efficacy and convergence against hardened models, but compute time scales linearly with step count.</span>
+                    <strong>Tradeoff Constant (c):</strong> Lagrangian multiplier in <em>||x_adv - x||_2^2 + c · f(x_adv)</em>.
+                    <span class="param-impact">• <em>Impact:</em> Higher <em>c</em> emphasizes misclassification over noise budget; lower <em>c</em> finds subtler minimal distortions.</span>
                 </div>
                 """,
                 unsafe_allow_html=True,
             )
 
-            alpha = st.slider(
-                "Step Size (α)",
+            col_clip_a, col_clip_b = st.columns(2)
+            with col_clip_a:
+                clip_min = st.number_input("Clip Min", value=0.0, step=0.1, help="Minimum valid tensor bound")
+            with col_clip_b:
+                clip_max = st.number_input("Clip Max", value=1.0, step=0.1, help="Maximum valid tensor bound")
+
+            st.markdown(
+                """
+                <div class="param-explainer">
+                    <strong>Tanh Space Box Constraints:</strong> C&W maps coordinates to <em>½(clip_min + clip_max) + ½(clip_max - clip_min)·tanh(w)</em>, guaranteeing physical boundary satisfaction.
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+
+        with col_p2:
+            confidence = st.slider(
+                "Confidence Margin (κ)",
+                min_value=0.0,
+                max_value=15.0,
+                value=0.0,
+                step=0.5,
+                help="Desired classification confidence margin between top logit and adversarial logit",
+            )
+            max_iter = st.slider(
+                "Optimization Steps (Iterations)",
+                min_value=10,
+                max_value=200,
+                value=50,
+                step=5,
+                help="Adam gradient steps executed in unconstrained tanh space",
+            )
+            lr = st.slider(
+                "Adam Learning Rate (lr)",
+                min_value=0.001,
+                max_value=0.2,
+                value=0.05 if "tabular" in atk_id else 0.01,
+                step=0.005,
+                format="%.3f",
+                help="Optimizer step size in tanh variable space (Note: C&W does not use an alpha step size)",
+            )
+            if "tabular" not in atk_id:
+                binary_search_steps = st.slider(
+                    "Binary Search Steps",
+                    min_value=1,
+                    max_value=9,
+                    value=3,
+                    step=1,
+                    help="Binary search iterations used to discover the minimal trade-off multiplier c",
+                )
+                params_dict["binary_search_steps"] = binary_search_steps
+
+            if "tabular" in atk_id or domain == "tabular":
+                params_dict["c_penalty"] = float(c_param)
+            else:
+                params_dict["initial_const"] = float(c_param)
+            params_dict["confidence"] = float(confidence)
+            params_dict["max_iterations"] = int(max_iter)
+            params_dict["learning_rate"] = float(lr)
+            epsilon = 1.0  # Nominal reference bound for unconstrained L2 C&W
+
+    elif is_deepfool:
+        # --- DEEPFOOL (Decision Boundary Hyperplane Projection) ---
+        # No alpha step size! Iteratively projects to nearest boundary hyperplane.
+        with col_p1:
+            max_iter = st.slider(
+                "Maximum Iterations (Steps)",
+                min_value=5,
+                max_value=100,
+                value=50,
+                step=5,
+                help="Maximum number of linearized boundary projection iterations",
+            )
+            overshoot = st.slider(
+                "Boundary Overshoot Factor (η)",
                 min_value=0.001,
                 max_value=0.1,
-                value=0.01,
+                value=0.02,
                 step=0.002,
                 format="%.3f",
-                help="Magnitude of perturbation added at each step before projection",
+                help="Fractional displacement beyond the decision hyperplane ensuring cross-boundary misclassification",
             )
-            params_dict["alpha"] = alpha
             st.markdown(
                 """
                 <div class="param-explainer">
-                    <strong>Step Size (α):</strong> Magnitude of perturbation added per iteration before projection back into the ε-ball.
-                    <span class="param-impact">• <em>Impact:</em> Typically set to ε/4 or ε/10. Large α causes optimization oscillation around boundaries; small α slows convergence.</span>
+                    <strong>Decision Boundary Linearization:</strong> DeepFool iteratively computes the distance to the closest affine hyperplane bounding the decision region and projects the input just past it.
+                    <span class="param-impact">• <em>Impact:</em> Generates minimal, imperceptible perturbations without requiring fixed step sizes (α).</span>
                 </div>
                 """,
                 unsafe_allow_html=True,
             )
 
+        with col_p2:
+            num_cls_raw = active_data.get("num_classes") or meta_dict.get("Total Classes") or 10
+            try:
+                max_k = min(20, max(2, int(num_cls_raw)))
+            except (ValueError, TypeError):
+                max_k = 10
+            top_k = st.slider(
+                "Candidate Classes (Top-k)",
+                min_value=2,
+                max_value=max_k,
+                value=min(5, max_k),
+                step=1,
+                help="Number of closest candidate classes evaluated for boundary proximity at each step",
+            )
+            col_clip_a, col_clip_b = st.columns(2)
+            with col_clip_a:
+                clip_min = st.number_input("Clip Min", value=0.0, step=0.1, help="Minimum valid tensor value")
+            with col_clip_b:
+                clip_max = st.number_input("Clip Max", value=1.0, step=0.1, help="Maximum valid tensor value")
+
+            params_dict["max_iter"] = max_iter
+            params_dict["overshoot"] = overshoot
+            params_dict["top_k"] = top_k
+            epsilon = 0.05
+
+    elif is_jsma:
+        # --- JSMA (Jacobian Saliency Map Attack) ---
+        # L0 sparsity attack; no alpha, no Linf epsilon slider.
+        with col_p1:
+            max_features = st.slider(
+                "Max Perturbed Elements (L0 Budget)",
+                min_value=1,
+                max_value=25,
+                value=5,
+                step=1,
+                help="Maximum number of features or timestamps permitted to be altered (L0 sparsity limit)",
+            )
+            step_size = st.slider(
+                "Perturbation Step (θ)",
+                min_value=0.01,
+                max_value=0.5,
+                value=0.1,
+                step=0.01,
+                format="%.2f",
+                help="Magnitude of modification applied to each selected salient element per step",
+            )
+            col_clip_a, col_clip_b = st.columns(2)
+            with col_clip_a:
+                clip_min = st.number_input("Clip Min", value=0.0, step=0.1, help="Minimum valid tensor value")
+            with col_clip_b:
+                clip_max = st.number_input("Clip Max", value=1.0, step=0.1, help="Maximum valid tensor value")
+
+            st.markdown(
+                """
+                <div class="param-explainer">
+                    <strong>Jacobian Saliency Mapping:</strong> Identifies high-leverage input dimensions using forward model gradients and greedily modifies them one-by-one.
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+
+        with col_p2:
+            params_dict["theta"] = step_size
+            if atk_id in ("time_series_jsma", "jsma") and domain in ("time-series", "timeseries"):
+                params_dict["max_iter"] = int(max_features)
+                params_dict["max_fraction"] = 1.0
+                params_dict["increase"] = True
+            else:
+                params_dict["max_features"] = int(max_features)
+                params_dict["max_modifications"] = int(max_features)
+            epsilon = float(step_size)
+
+    elif is_soft_dtw:
+        # --- SOFT-DTW ATTACK ---
+        with col_p1:
+            max_warp = st.slider(
+                "Max Temporal Warping (ε_warp)",
+                min_value=0.02,
+                max_value=0.5,
+                value=0.2,
+                step=0.02,
+                format="%.2f",
+                help="Maximum allowable temporal dilation/compression fraction",
+            )
+            gamma = st.slider(
+                "Soft-DTW Temperature (γ)",
+                min_value=0.05,
+                max_value=2.0,
+                value=0.5,
+                step=0.05,
+                format="%.2f",
+                help="Smoothing parameter for the differentiable soft-minimum operator",
+            )
+            lambda_dtw = st.slider(
+                "DTW Regularization Penalty (λ_dtw)",
+                min_value=0.005,
+                max_value=0.5,
+                value=0.05,
+                step=0.005,
+                format="%.3f",
+                help="Weight of temporal alignment preservation penalty in objective",
+            )
+            col_clip_a, col_clip_b = st.columns(2)
+            with col_clip_a:
+                clip_min = st.number_input("Clip Min", value=0.0, step=0.1, help="Minimum valid tensor value")
+            with col_clip_b:
+                clip_max = st.number_input("Clip Max", value=1.0, step=0.1, help="Maximum valid tensor value")
+
+        with col_p2:
+            num_steps = st.slider(
+                "Optimization Iterations", min_value=2, max_value=50, value=10, step=1,
+                help="Iterations of differentiable temporal warping optimization"
+            )
+            lr = st.slider(
+                "Optimizer Learning Rate", min_value=0.005, max_value=0.2, value=0.05, step=0.005, format="%.3f",
+                help="Learning rate for warping parameter optimization"
+            )
+            params_dict["max_warp"] = max_warp
+            params_dict["gamma"] = gamma
+            params_dict["lambda_dtw"] = lambda_dtw
+            params_dict["num_steps"] = num_steps
+            params_dict["alpha"] = lr
+            params_dict["lr"] = lr
+            epsilon = float(max_warp)
+
+    elif is_smooth_pgd:
+        # --- SMOOTH PGD ---
+        with col_p1:
+            epsilon = st.slider(
+                "Perturbation Budget (ε)", min_value=0.005, max_value=0.5, value=0.05, step=0.005, format="%.3f",
+                help="Maximum allowable perturbation magnitude"
+            )
+            tv_weight = st.slider(
+                "Total Variation Regularization (λ_tv)", min_value=0.01, max_value=1.0, value=0.1, step=0.01, format="%.2f",
+                help="Penalizes sharp inter-timestep gradient transitions to preserve smooth physical waveform continuity"
+            )
+            col_clip_a, col_clip_b = st.columns(2)
+            with col_clip_a:
+                clip_min = st.number_input("Clip Min", value=0.0, step=0.1, help="Minimum valid tensor value")
+            with col_clip_b:
+                clip_max = st.number_input("Clip Max", value=1.0, step=0.1, help="Maximum valid tensor value")
+
+        with col_p2:
+            num_steps = st.slider("Optimization Iterations (Steps)", min_value=1, max_value=50, value=10, step=1)
+            alpha = st.slider("Step Size (α)", min_value=0.001, max_value=0.1, value=0.01, step=0.002, format="%.3f")
+            params_dict["num_steps"] = num_steps
+            params_dict["alpha"] = alpha
+            params_dict["tv_weight"] = tv_weight
+            params_dict["lambda_tv"] = tv_weight
+
+    elif is_wavelet:
+        # --- WAVELET / SPECTRAL ATTACK ---
+        with col_p1:
+            epsilon = st.slider("Perturbation Budget (ε)", min_value=0.005, max_value=0.5, value=0.05, step=0.005, format="%.3f")
+            transform_type = st.selectbox(
+                "Spectral Transform Type",
+                options=["dwt", "fft"],
+                format_func=lambda x: "Discrete Wavelet Transform (Haar DWT)" if x == "dwt" else "Fast Fourier Transform (Real FFT)",
+            )
+            band = st.selectbox("Target Spectral Sub-band", options=["all", "low", "high", "detail", "approx"])
+            col_clip_a, col_clip_b = st.columns(2)
+            with col_clip_a:
+                clip_min = st.number_input("Clip Min", value=0.0, step=0.1, help="Minimum valid tensor value")
+            with col_clip_b:
+                clip_max = st.number_input("Clip Max", value=1.0, step=0.1, help="Maximum valid tensor value")
+
+        with col_p2:
+            num_steps = st.slider("Optimization Iterations", min_value=1, max_value=50, value=10, step=1)
+            alpha = st.slider("Step Size (α)", min_value=0.001, max_value=0.1, value=0.01, step=0.002, format="%.3f")
+            params_dict["num_steps"] = num_steps
+            params_dict["alpha"] = alpha
+            params_dict["transform_type"] = transform_type
+            params_dict["band"] = band
+
+    elif is_lowprofool:
+        # --- LOWPROFOOL ---
+        with col_p1:
+            epsilon = st.slider("Perturbation Budget (ε)", min_value=0.01, max_value=0.5, value=0.1, step=0.01, format="%.2f")
+            lambda_weight = st.slider(
+                "Feature Importance Penalty (λ_weight)", min_value=0.01, max_value=1.0, value=0.1, step=0.01, format="%.2f",
+                help="Penalizes modifications to critical or low-mutability tabular columns"
+            )
+            col_clip_a, col_clip_b = st.columns(2)
+            with col_clip_a:
+                clip_min = st.number_input("Clip Min", value=0.0, step=0.1, help="Minimum valid tensor value")
+            with col_clip_b:
+                clip_max = st.number_input("Clip Max", value=1.0, step=0.1, help="Maximum valid tensor value")
+
+        with col_p2:
+            num_steps = st.slider("Optimization Iterations", min_value=5, max_value=50, value=20, step=1)
+            alpha = st.slider("Step Size (α)", min_value=0.005, max_value=0.1, value=0.05, step=0.005, format="%.3f")
+            params_dict["num_steps"] = num_steps
+            params_dict["alpha"] = alpha
+            params_dict["lambda_weight"] = lambda_weight
+
+    elif is_fgsm:
+        # --- FGSM (Single-Step Closed Form) ---
+        # No alpha, no num_steps!
+        with col_p1:
+            epsilon = st.slider(
+                "Perturbation Budget (ε)",
+                min_value=0.001,
+                max_value=0.5,
+                value=0.05,
+                step=0.005,
+                format="%.3f",
+                help="Maximum perturbation magnitude (L-infinity bound)",
+            )
+            st.markdown(
+                """
+                <div class="param-explainer">
+                    <strong>Perturbation Budget (ε):</strong> Defines the maximum allowable distance between clean and adversarial inputs.
+                    <span class="param-impact">• <em>Impact:</em> Higher ε increases Attack Success Rate (ASR) by allowing larger distortions, but makes noise more human-visible.</span>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+
+            col_clip_a, col_clip_b = st.columns(2)
+            with col_clip_a:
+                clip_min = st.number_input("Clip Min", value=0.0, step=0.1, help="Minimum valid tensor value")
+            with col_clip_b:
+                clip_max = st.number_input("Clip Max", value=1.0, step=0.1, help="Maximum valid tensor value")
+
+        with col_p2:
+            st.markdown(
+                """
+                <div class="modern-card card-accent-emerald" style="padding: 12px 14px; margin-bottom: 12px;">
+                    <div style="font-weight: 700; font-size: 0.95rem; color: var(--stat-val-emerald); margin-bottom: 4px;">
+                        ⚡ Single-Step Closed-Form Optimization
+                    </div>
+                    <div style="font-size: 0.84rem; line-height: 1.45; color: var(--text-secondary);">
+                        FGSM perturbs clean inputs along the sign of the model's loss gradient in a single backward pass:
+                        <br><code>x_adv = x + ε · sign(∇_x Loss(model(x), y))</code><br>
+                        It computes perturbations directly without inner iteration loops or a step size (α).
+                    </div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+
+    elif is_fab:
+        # --- FAB (Fast Adaptive Boundary) ---
+        with col_p1:
+            epsilon = st.slider("Perturbation Budget (ε)", min_value=0.005, max_value=0.5, value=0.05, step=0.005, format="%.3f")
+            top_k = st.slider("Candidate Decision Boundaries (Top-k)", min_value=2, max_value=15, value=5, step=1)
+            col_clip_a, col_clip_b = st.columns(2)
+            with col_clip_a:
+                clip_min = st.number_input("Clip Min", value=0.0, step=0.1, help="Minimum valid tensor value")
+            with col_clip_b:
+                clip_max = st.number_input("Clip Max", value=1.0, step=0.1, help="Maximum valid tensor value")
+
+        with col_p2:
+            num_steps = st.slider("Maximum Iterations", min_value=5, max_value=50, value=15, step=1)
+            alpha_max = st.slider("Max Step Bound (α_max)", min_value=0.01, max_value=0.3, value=0.1, step=0.01, format="%.2f")
+            params_dict["num_steps"] = num_steps
+            params_dict["max_iter"] = num_steps
+            params_dict["top_k"] = top_k
+            params_dict["alpha_max"] = alpha_max
+
+    elif is_text_tokens:
+        # --- TEXT TOKEN ATTACKS (HotFlip, TextBugger, Gradient Substitution) ---
+        with col_p1:
+            max_mod = st.slider("Max Token Replacements", min_value=1, max_value=10, value=3, step=1, help="Maximum words or subwords to substitute")
+            clip_min = 0.0
+            clip_max = 1.0
+
+        with col_p2:
+            params_dict["max_modifications"] = int(max_mod)
+            if atk_id == "hotflip":
+                cand_size = st.slider(
+                    "Candidate Vocab Size (Top-k)",
+                    min_value=5,
+                    max_value=100,
+                    value=50,
+                    step=5,
+                    help="Top-k nearest gradient candidate vocabulary tokens to evaluate",
+                )
+                params_dict["candidate_vocab_size"] = int(cand_size)
+            elif atk_id == "textbugger_wb":
+                bug_types = st.multiselect(
+                    "Bug Transformation Types",
+                    options=["insert", "delete", "swap", "sub_c", "sub_w"],
+                    default=["insert", "delete", "swap", "sub_c", "sub_w"],
+                    help="Allowed character/word bug perturbation operators",
+                )
+                params_dict["bug_types"] = bug_types if bug_types else ["sub_w"]
+            elif atk_id == "gradient_substitution":
+                num_cand = st.slider(
+                    "Candidate Tokens (Top-k)",
+                    min_value=2,
+                    max_value=50,
+                    value=10,
+                    step=2,
+                    help="Top candidates filtered by gradient first-order Taylor approximation",
+                )
+                sim_thresh = st.slider(
+                    "Cosine Similarity Threshold",
+                    min_value=0.1,
+                    max_value=0.9,
+                    value=0.4,
+                    step=0.05,
+                    help="Minimum cosine similarity required with original embedding",
+                )
+                params_dict["num_candidates"] = int(num_cand)
+                params_dict["similarity_threshold"] = float(sim_thresh)
+            epsilon = 0.05
+
+    elif is_universal_trigger:
+        # --- UNIVERSAL ADVERSARIAL TRIGGER ---
+        with col_p1:
+            trigger_len = st.slider("Trigger Token Length", min_value=1, max_value=10, value=3, step=1, help="Length of static prefix sequence prepended to text")
+            num_steps = st.slider("Trigger Optimization Steps", min_value=5, max_value=50, value=20, step=1)
+            clip_min = 0.0
+            clip_max = 1.0
+
+        with col_p2:
+            params_dict["trigger_length"] = int(trigger_len)
+            params_dict["num_iterations"] = int(num_steps)
+            epsilon = 0.05
+
+    else:
+        # --- STANDARD ITERATIVE PGD & GENERAL GRADIENT-BASED ATTACKS ---
+        with col_p1:
+            epsilon = st.slider(
+                "Perturbation Budget (ε)",
+                min_value=0.001,
+                max_value=0.5,
+                value=0.05,
+                step=0.005,
+                format="%.3f",
+                help="Maximum perturbation magnitude (L-infinity / L2 bound)",
+            )
+            st.markdown(
+                """
+                <div class="param-explainer">
+                    <strong>Perturbation Budget (ε):</strong> Defines the maximum allowable distance between clean and adversarial inputs.
+                    <span class="param-impact">• <em>Impact:</em> Higher ε increases Attack Success Rate (ASR) by allowing larger distortions, but makes noise more human-visible.</span>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+
+            col_clip_a, col_clip_b = st.columns(2)
+            with col_clip_a:
+                clip_min = st.number_input("Clip Min", value=0.0, step=0.1, help="Minimum valid tensor value")
+            with col_clip_b:
+                clip_max = st.number_input("Clip Max", value=1.0, step=0.1, help="Maximum valid tensor value")
+
+            st.markdown(
+                """
+                <div class="param-explainer">
+                    <strong>Tensor Clip Bounds [min, max]:</strong> Constrains perturbed features within physically valid boundaries (e.g. [0.0, 1.0] for normalized pixels).
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+
+        with col_p2:
+            if selected_attack.get("iterative", False):
+                num_steps = st.slider(
+                    "Optimization Iterations (Steps)",
+                    min_value=1,
+                    max_value=50,
+                    value=10,
+                    step=1,
+                    help="Number of iterative gradient ascent steps",
+                )
+                params_dict["num_steps"] = num_steps
+                alpha = st.slider(
+                    "Step Size (α)",
+                    min_value=0.001,
+                    max_value=0.1,
+                    value=0.01,
+                    step=0.002,
+                    format="%.3f",
+                    help="Magnitude of perturbation added at each step before projection",
+                )
+                params_dict["alpha"] = alpha
+
+    # Targeted Attack Mode Controls (Rendered when supported by attack architecture)
+    with col_p2:
         if selected_attack.get("targeted_supported", False):
             is_targeted = st.checkbox(
                 "Targeted Attack Mode",
@@ -843,10 +1291,8 @@ elif stage == "attack_config":
                 )
                 try:
                     num_classes_val = int(raw_num_classes)
-                    max_class_idx = max(1, num_classes_val - 1)
                 except (ValueError, TypeError):
                     num_classes_val = 2
-                    max_class_idx = 1
 
                 class_map = get_class_labels_mapping(
                     model=model_adapter,
@@ -910,10 +1356,11 @@ elif stage == "attack_config":
 
     # Validation
     valid_params = True
-    if epsilon <= 0.0:
-        st.error("Epsilon must be greater than 0.")
+    requires_eps = not (is_cw or is_jsma or is_deepfool or is_text_tokens or is_universal_trigger)
+    if requires_eps and epsilon <= 0.0:
+        st.error("Perturbation budget (ε) must be strictly greater than 0.")
         valid_params = False
-    if clip_min >= clip_max:
+    if clip_min is not None and clip_max is not None and clip_min >= clip_max:
         st.error("Clip minimum must be strictly less than clip maximum.")
         valid_params = False
 
@@ -940,7 +1387,12 @@ elif stage == "attack_config":
 
         # Slice samples based on user selection
         if test_inputs is not None:
-            eval_inputs = test_inputs[:eval_sample_count]
+            if hasattr(test_inputs, "items"):
+                eval_inputs = {k: (v[:eval_sample_count] if hasattr(v, "__getitem__") else v) for k, v in test_inputs.items()}
+            elif hasattr(test_inputs, "__getitem__"):
+                eval_inputs = test_inputs[:eval_sample_count]
+            else:
+                eval_inputs = test_inputs
         else:
             eval_inputs = None
 
