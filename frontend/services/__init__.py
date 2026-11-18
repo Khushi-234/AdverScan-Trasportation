@@ -20,6 +20,10 @@ from frontend.services.vulnerability_service import (
     assess_and_score_vulnerability,
     generate_vulnerability_recommendations,
 )
+from frontend.services.xai_service import (
+    explain_assessment,
+    get_available_xai_techniques,
+)
 
 __all__ = [
     "load_model_and_dataset",
@@ -29,6 +33,8 @@ __all__ = [
     "execute_configured_attack",
     "assess_and_score_vulnerability",
     "generate_vulnerability_recommendations",
+    "explain_assessment",
+    "get_available_xai_techniques",
     "get_available_defenses_for_domain",
     "execute_configured_defense",
     "generate_security_report",
