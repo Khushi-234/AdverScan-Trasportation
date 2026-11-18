@@ -231,6 +231,10 @@ RUNTIME_CONTEXT_KEYS: Set[str] = {
     "max_delta",
     # Text tokenization constraints
     "max_length",
+    # Attack runtime return statistics and metrics
+    "perturbation_stats",
+    "weighted_distance",
+    "success_rate",
 }
 
 
@@ -476,7 +480,7 @@ _ATTACK_PARAM_REGISTRY: Dict[str, Dict[str, List[ParameterSpec]]] = {
                 exclusive_min=True,
                 description="Initial trade-off constant c for binary search",
                 required=False,
-                aliases=["c"],
+                aliases=["c", "c_penalty"],
                 ui_control="number_input",
             ),
             ParameterSpec(
@@ -608,7 +612,7 @@ _ATTACK_PARAM_REGISTRY: Dict[str, Dict[str, List[ParameterSpec]]] = {
                 description="Target class index for targeted attack",
                 required=False,
                 conditional_visibility={"targeted": True},
-                aliases=["target", "target_labels"],
+                aliases=["target", "target_labels", "targets"],
                 ui_control="number_input",
             ),
             ParameterSpec(
@@ -1211,7 +1215,7 @@ _ATTACK_PARAM_REGISTRY: Dict[str, Dict[str, List[ParameterSpec]]] = {
                 exclusive_min=True,
                 description="Step size per iteration",
                 required=False,
-                aliases=["step_size", "lr"],
+                aliases=["step_size", "lr", "learning_rate"],
                 ui_control="number_input",
             ),
             ParameterSpec(
@@ -1324,7 +1328,7 @@ _ATTACK_PARAM_REGISTRY: Dict[str, Dict[str, List[ParameterSpec]]] = {
                 min_value=1,
                 description="Maximum saliency modification steps",
                 required=False,
-                aliases=["max_iterations", "max_locations", "max_steps", "num_steps", "steps", "iters"],
+                aliases=["max_iterations", "max_locations", "max_steps", "num_steps", "steps", "iters", "max_features", "max_modifications"],
                 ui_control="number_input",
             ),
             ParameterSpec(
@@ -1396,7 +1400,7 @@ _ATTACK_PARAM_REGISTRY: Dict[str, Dict[str, List[ParameterSpec]]] = {
                 min_value=1,
                 description="Maximum number of word/token flips allowed",
                 required=False,
-                aliases=["max_flips"],
+                aliases=["max_flips", "num_steps", "steps", "max_iterations", "iters"],
                 ui_control="number_input",
             ),
             ParameterSpec(
@@ -1514,6 +1518,7 @@ _ATTACK_PARAM_REGISTRY: Dict[str, Dict[str, List[ParameterSpec]]] = {
                 min_value=1,
                 description="Maximum number of words to bug/modify",
                 required=False,
+                aliases=["num_steps", "steps", "max_iterations", "iters"],
                 ui_control="number_input",
             ),
             ParameterSpec(
@@ -1584,6 +1589,14 @@ _ATTACK_PARAM_REGISTRY: Dict[str, Dict[str, List[ParameterSpec]]] = {
                 ui_control="select",
             ),
             ParameterSpec(
+                name="initial_trigger",
+                data_type="str",
+                default=None,
+                description="Optional initial trigger token sequence as string or list of token IDs",
+                required=False,
+                ui_control="text_input",
+            ),
+            ParameterSpec(
                 name="targeted",
                 data_type="bool",
                 default=False,
@@ -1610,6 +1623,7 @@ _ATTACK_PARAM_REGISTRY: Dict[str, Dict[str, List[ParameterSpec]]] = {
                 min_value=1,
                 description="Maximum number of words replaced",
                 required=False,
+                aliases=["num_steps", "steps", "max_iterations", "iters"],
                 ui_control="number_input",
             ),
             ParameterSpec(
@@ -1950,7 +1964,18 @@ def validate_attack_params(
             validated_params[canonical_name] = raw_val
 
         elif spec.data_type == "str":
+            if canonical_name == "initial_trigger" and isinstance(raw_val, (list, tuple)):
+                if not all(isinstance(t, int) and not isinstance(t, bool) for t in raw_val):
+                    raise AttackConfigurationError(
+                        f"Parameter '{canonical_name}' list must contain integer token IDs, got {raw_val}."
+                    )
+                validated_params[canonical_name] = list(raw_val)
+                continue
             if not isinstance(raw_val, str):
+                if canonical_name == "initial_trigger":
+                    raise AttackConfigurationError(
+                        f"Parameter '{canonical_name}' must be a string or list of integer token IDs, got {type(raw_val).__name__} ({raw_val})."
+                    )
                 raise AttackConfigurationError(
                     f"Parameter '{canonical_name}' must be a string, got {type(raw_val).__name__} ({raw_val})."
                 )
