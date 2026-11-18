@@ -46,6 +46,12 @@ def validate_inputs(
                 f"{attack_name} input batch size ({inputs.size(0)}) does not match labels batch size ({labels.size(0)})."
             )
 
+    if torch.is_floating_point(inputs) or torch.is_complex(inputs):
+        if torch.isnan(inputs).any():
+            raise AttackExecutionError(f"{attack_name} inputs contain NaN values.")
+        if torch.isinf(inputs).any():
+            raise AttackExecutionError(f"{attack_name} inputs contain Inf values.")
+
 
 def validate_bounds(
     clip_min: Optional[float] = None, clip_max: Optional[float] = None

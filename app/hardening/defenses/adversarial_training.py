@@ -220,11 +220,15 @@ class AdversarialTrainingDefense(BaseDefense):
 
     def apply(
         self,
-        model: nn.Module,
+        model: Any,
         inputs: Optional[torch.Tensor] = None,
         labels: Optional[torch.Tensor] = None,
         **kwargs: Any,
     ) -> HardeningResult:
+        if not isinstance(model, nn.Module):
+            raise HardeningConfigurationError(
+                f"AdversarialTrainingDefense requires a differentiable PyTorch nn.Module with trainable parameters, got {type(model)}"
+            )
         start_time = time.time()
         try:
             if inputs is None or labels is None:

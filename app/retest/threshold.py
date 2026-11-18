@@ -109,6 +109,48 @@ class RetestThresholds:
         elif lat_after is not None:
             lat_overhead_ms = 0.0
 
+        # Check explicit failure or unsupported status
+        if after_metrics.get("status") == "unsupported":
+            return {
+                "status": "unsupported",
+                "is_improved": False,
+                "improvement_sufficient": False,
+                "vulnerability_score_before": vuln_before,
+                "vulnerability_score_after": vuln_after,
+                "vulnerability_score_improvement": None,
+                "asr_before": asr_before,
+                "asr_after": asr_after,
+                "asr_reduction": None,
+                "clean_accuracy_before": clean_before,
+                "clean_accuracy_after": clean_after,
+                "clean_accuracy_drop": clean_drop,
+                "clean_accuracy_drop_pct_points": clean_drop_pts,
+                "defended_latency_ms": lat_after,
+                "baseline_latency_ms": lat_before,
+                "latency_overhead_ms": lat_overhead_ms,
+                "reason": str(after_metrics.get("reason") or after_metrics.get("error") or "Configuration is unsupported on model modality."),
+            }
+        if after_metrics.get("status") in ("failed", "attack_failed"):
+            return {
+                "status": "failed",
+                "is_improved": False,
+                "improvement_sufficient": False,
+                "vulnerability_score_before": vuln_before,
+                "vulnerability_score_after": vuln_after,
+                "vulnerability_score_improvement": None,
+                "asr_before": asr_before,
+                "asr_after": asr_after,
+                "asr_reduction": None,
+                "clean_accuracy_before": clean_before,
+                "clean_accuracy_after": clean_after,
+                "clean_accuracy_drop": clean_drop,
+                "clean_accuracy_drop_pct_points": clean_drop_pts,
+                "defended_latency_ms": lat_after,
+                "baseline_latency_ms": lat_before,
+                "latency_overhead_ms": lat_overhead_ms,
+                "reason": str(after_metrics.get("error") or "Retest attack execution failed."),
+            }
+
         # Check 1: Any measurable improvement (is_improved)
         has_vuln_improvement = vuln_improvement is not None and vuln_improvement > 0.0
         has_asr_reduction = asr_reduction is not None and asr_reduction > 0.0

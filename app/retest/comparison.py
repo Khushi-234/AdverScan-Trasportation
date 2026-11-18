@@ -11,6 +11,7 @@ from typing import Any, Dict, List, Optional, Union
 from app.vulnerability_analysis.assessment_result import AssessmentResult
 from app.vulnerability_analysis.scoring_result import ScoringResult
 from app.retest.retest_result import ComparisonResult
+from app.retest.threshold import RetestThresholds
 
 
 class ComparisonEngine:
@@ -19,12 +20,18 @@ class ComparisonEngine:
     Does not perform attacks or hardening.
     """
 
+    def __init__(self, thresholds: Optional[RetestThresholds] = None) -> None:
+        """Initialize ComparisonEngine with optional acceptance thresholds."""
+        self.thresholds = thresholds or RetestThresholds()
+
     def compare_attack(
         self,
         before_assessment: Union[AssessmentResult, Dict[str, Any]],
         after_assessment: Union[AssessmentResult, Dict[str, Any]],
         before_scoring: Union[ScoringResult, Dict[str, Any]],
         after_scoring: Union[ScoringResult, Dict[str, Any]],
+        thresholds: Optional[RetestThresholds] = None,
+        latency_sensitive: bool = False,
     ) -> ComparisonResult:
         """
         Compare before and after results for a single attack.
@@ -53,13 +60,18 @@ class ComparisonEngine:
         attack_name = a_assess_dict.get("attack_name", b_assess_dict.get("attack_name", "unknown_attack"))
 
         # Extract metric values
-        b_asr = b_assess_dict.get("attack_success_rate")
-        a_asr = a_assess_dict.get("attack_success_rate")
+        b_asr_raw = b_assess_dict.get("attack_success_rate")
+        a_asr_raw = a_assess_dict.get("attack_success_rate")
+        b_asr: Optional[float] = float(b_asr_raw) if b_asr_raw is not None else None
+        a_asr: Optional[float] = float(a_asr_raw) if a_asr_raw is not None else None
+
         delta_asr: Optional[float] = None
+        asr_reduction: Optional[float] = None
         if a_asr is not None and b_asr is not None:
             delta_asr = round(float(a_asr) - float(b_asr), 4)
+            asr_reduction = round(float(b_asr) - float(a_asr), 4)
 
-        def _safe_float(val: Any, default: float = 0.0) -> float:
+        def _safe_float(val: Any, default: Optional[float] = 0.0) -> Optional[float]:
             if val is None:
                 return default
             try:
@@ -67,32 +79,35 @@ class ComparisonEngine:
             except (ValueError, TypeError):
                 return default
 
-        b_acc_drop = _safe_float(b_assess_dict.get("accuracy_drop"))
-        a_acc_drop = _safe_float(a_assess_dict.get("accuracy_drop"))
+        b_acc_drop = _safe_float(b_assess_dict.get("accuracy_drop")) or 0.0
+        a_acc_drop = _safe_float(a_assess_dict.get("accuracy_drop")) or 0.0
         delta_acc_drop = round(a_acc_drop - b_acc_drop, 4)
 
-        b_f1_drop = _safe_float(b_assess_dict.get("f1_drop"))
-        a_f1_drop = _safe_float(a_assess_dict.get("f1_drop"))
+        b_f1_drop = _safe_float(b_assess_dict.get("f1_drop")) or 0.0
+        a_f1_drop = _safe_float(a_assess_dict.get("f1_drop")) or 0.0
         delta_f1_drop = round(a_f1_drop - b_f1_drop, 4)
 
-        b_conf_drop = _safe_float(b_assess_dict.get("confidence_drop"))
-        a_conf_drop = _safe_float(a_assess_dict.get("confidence_drop"))
+        b_conf_drop = _safe_float(b_assess_dict.get("confidence_drop")) or 0.0
+        a_conf_drop = _safe_float(a_assess_dict.get("confidence_drop")) or 0.0
         delta_conf_drop = round(a_conf_drop - b_conf_drop, 4)
 
-        b_degrad = _safe_float(b_assess_dict.get("model_degradation"))
-        a_degrad = _safe_float(a_assess_dict.get("model_degradation"))
+        b_degrad = _safe_float(b_assess_dict.get("model_degradation")) or 0.0
+        a_degrad = _safe_float(a_assess_dict.get("model_degradation")) or 0.0
         delta_model_degrad = round(a_degrad - b_degrad, 4)
 
-        b_vuln_score = _safe_float(b_score_dict.get("vulnerability_score"))
-        a_vuln_score = _safe_float(a_score_dict.get("vulnerability_score"))
+        b_vuln_score = _safe_float(b_score_dict.get("vulnerability_score")) or 0.0
+        a_vuln_score = _safe_float(a_score_dict.get("vulnerability_score")) or 0.0
         delta_vuln_score = round(a_vuln_score - b_vuln_score, 4)
 
-        b_clean_acc = _safe_float(b_assess_dict.get("clean_accuracy"))
-        a_clean_acc = _safe_float(a_assess_dict.get("clean_accuracy"))
+        b_clean_raw = _safe_float(b_assess_dict.get("clean_accuracy"), default=None)
+        a_clean_raw = _safe_float(a_assess_dict.get("clean_accuracy"), default=None)
+        b_clean_acc = b_clean_raw if b_clean_raw is not None else 0.0
+        a_clean_acc = a_clean_raw if a_clean_raw is not None else 0.0
         delta_clean_acc = round(a_clean_acc - b_clean_acc, 4)
+        clean_acc_drop = round(b_clean_acc - a_clean_acc, 4) if (b_clean_raw is not None and a_clean_raw is not None) else None
 
-        b_adv_acc = _safe_float(b_assess_dict.get("adversarial_accuracy"))
-        a_adv_acc = _safe_float(a_assess_dict.get("adversarial_accuracy"))
+        b_adv_acc = _safe_float(b_assess_dict.get("adversarial_accuracy")) or 0.0
+        a_adv_acc = _safe_float(a_assess_dict.get("adversarial_accuracy")) or 0.0
         delta_adv_acc = round(a_adv_acc - b_adv_acc, 4)
 
         # Perturbation deltas if present
@@ -111,17 +126,63 @@ class ComparisonEngine:
         a_risk = str(a_score_dict.get("risk_level", "UNKNOWN"))
         risk_changed = (b_risk != a_risk)
 
-        # Robustness Improvement criteria:
-        # A decrease in vulnerability score, ASR, accuracy drop, or degradation indicates improvement.
-        improved_score = delta_vuln_score < 0
-        improved_asr = delta_asr < 0 if delta_asr is not None else False
-        improved_acc_drop = delta_acc_drop < 0
-        improved_adv_acc = delta_adv_acc > 0
-
-        is_improved = (improved_score or improved_asr or improved_acc_drop or improved_adv_acc)
-
-        # Construct summary notes
+        # Check explicit failure or unsupported status
+        a_status = a_assess_dict.get("status")
         summary_notes: List[str] = []
+
+        active_thresh = thresholds or self.thresholds or RetestThresholds()
+        b_metrics = {**b_assess_dict, **b_score_dict}
+        a_metrics = {**a_assess_dict, **a_score_dict}
+        thresh_eval = active_thresh.evaluate(
+            before_metrics=b_metrics,
+            after_metrics=a_metrics,
+            latency_sensitive=latency_sensitive,
+        )
+
+        if a_status == "unsupported":
+            status = "unsupported"
+            defense_eff = "unsupported"
+            is_improved = False
+            summary_notes.append(f"Attack '{attack_name}' is unsupported on the defended model.")
+        elif a_status in ("failed", "attack_failed"):
+            status = "attack_failed"
+            defense_eff = "inconclusive"
+            is_improved = False
+            summary_notes.append(
+                f"Attack '{attack_name}' execution failed during re-test: {a_assess_dict.get('error', 'Execution error')}"
+            )
+        elif b_asr is None or a_asr is None:
+            status = "inconclusive"
+            defense_eff = "inconclusive"
+            is_improved = False
+            summary_notes.append(f"Attack '{attack_name}' re-test is inconclusive: ASR is undefined.")
+        elif b_asr == 0.0:
+            summary_notes.append(
+                f"Baseline ASR for '{attack_name}' was 0.0 (zero-success attack); robustness improvement cannot be verified."
+            )
+            defense_eff = "inconclusive"
+            status = "inconclusive"
+            is_improved = False
+        else:
+            thresh_status = thresh_eval.get("status")
+            if thresh_status == "accepted":
+                status = "successful"
+                is_improved = True
+                defense_eff = "high" if (asr_reduction is not None and asr_reduction >= 0.50) else "moderate"
+            elif thresh_status == "harmful":
+                status = "failed_defense"
+                is_improved = False
+                defense_eff = "harmful"
+            elif thresh_status == "insufficient":
+                status = "failed_defense"
+                is_improved = bool(thresh_eval.get("is_improved", False))
+                defense_eff = "low" if is_improved else "ineffective"
+            else:
+                status = "inconclusive"
+                is_improved = False
+                defense_eff = "inconclusive"
+
+        # Summary notes for verified metrics
         if delta_vuln_score < 0:
             summary_notes.append(f"Vulnerability score decreased by {abs(delta_vuln_score):.2f} points.")
         elif delta_vuln_score > 0:
@@ -137,9 +198,17 @@ class ComparisonEngine:
 
         if delta_adv_acc > 0:
             summary_notes.append(f"Adversarial accuracy improved by {delta_adv_acc*100:.2f}%.")
+        elif delta_adv_acc < 0:
+            summary_notes.append(f"Adversarial accuracy degraded by {abs(delta_adv_acc)*100:.2f}%.")
+
+        if clean_acc_drop is not None and clean_acc_drop > 0:
+            summary_notes.append(f"Clean accuracy dropped by {clean_acc_drop*100:.2f}%.")
 
         if risk_changed:
             summary_notes.append(f"Risk level changed from {b_risk} to {a_risk}.")
+
+        if thresh_eval.get("reason"):
+            summary_notes.append(f"Threshold verdict: {str(thresh_eval.get('status')).upper()} ({thresh_eval.get('reason')})")
 
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
@@ -164,12 +233,19 @@ class ComparisonEngine:
             is_improved=is_improved,
             summary_notes=summary_notes,
             timestamp=timestamp,
+            status=status,
+            defense_effectiveness=defense_eff,
+            asr_reduction=asr_reduction,
+            clean_accuracy_drop=clean_acc_drop,
+            threshold_evaluation=thresh_eval,
         )
 
     def compare_pipeline(
         self,
         before_vulnerability_analysis: Dict[str, Dict[str, Any]],
         after_vulnerability_analysis: Dict[str, Dict[str, Any]],
+        thresholds: Optional[RetestThresholds] = None,
+        latency_sensitive: bool = False,
     ) -> Dict[str, ComparisonResult]:
         """
         Compare pipeline outputs across multiple attacks.
@@ -177,6 +253,8 @@ class ComparisonEngine:
         Args:
             before_vulnerability_analysis: Dict mapping attack_name -> {"assessment": ..., "scoring": ...}
             after_vulnerability_analysis: Dict mapping attack_name -> {"assessment": ..., "scoring": ...}
+            thresholds: Optional RetestThresholds acceptance configuration.
+            latency_sensitive: Whether operational context requires strict latency adherence.
 
         Returns:
             Dict[str, ComparisonResult]: Dict mapping attack_name -> ComparisonResult.
@@ -198,6 +276,8 @@ class ComparisonEngine:
                 after_assessment=a_assess,
                 before_scoring=b_score,
                 after_scoring=a_score,
+                thresholds=thresholds,
+                latency_sensitive=latency_sensitive,
             )
             comparisons[atk_name] = comparison
 
@@ -207,6 +287,8 @@ class ComparisonEngine:
 def compare_results(
     before_vulnerability_analysis: Dict[str, Dict[str, Any]],
     after_vulnerability_analysis: Dict[str, Dict[str, Any]],
+    thresholds: Optional[RetestThresholds] = None,
+    latency_sensitive: bool = False,
 ) -> Dict[str, ComparisonResult]:
     """
     Convenience function to compare before vs after vulnerability analysis.
@@ -214,9 +296,16 @@ def compare_results(
     Args:
         before_vulnerability_analysis: Dict mapping attack_name -> {"assessment": ..., "scoring": ...}
         after_vulnerability_analysis: Dict mapping attack_name -> {"assessment": ..., "scoring": ...}
+        thresholds: Optional RetestThresholds acceptance configuration.
+        latency_sensitive: Whether operational context requires strict latency adherence.
 
     Returns:
         Dict[str, ComparisonResult] mapping attack_name -> ComparisonResult.
     """
-    engine = ComparisonEngine()
-    return engine.compare_pipeline(before_vulnerability_analysis, after_vulnerability_analysis)
+    engine = ComparisonEngine(thresholds=thresholds)
+    return engine.compare_pipeline(
+        before_vulnerability_analysis,
+        after_vulnerability_analysis,
+        thresholds=thresholds,
+        latency_sensitive=latency_sensitive,
+    )

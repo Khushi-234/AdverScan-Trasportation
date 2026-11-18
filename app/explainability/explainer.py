@@ -591,6 +591,13 @@ class XAIExplainer:
             elif isinstance(assessment_result, dict):
                 meta["assessment_result"] = assessment_result
 
+        scoring_res = kwargs.get("scoring_result")
+        if scoring_res is not None:
+            if hasattr(scoring_res, "to_dict"):
+                meta["scoring_result"] = scoring_res.to_dict()
+            elif isinstance(scoring_res, dict):
+                meta["scoring_result"] = scoring_res
+
         feature_importance = {
             "clean_top_features": clean_top_features,
             "adversarial_top_features": adv_top_features,
@@ -776,16 +783,57 @@ class XAIExplainer:
         Returns:
             ExplanationResult (for single sample) or List[ExplanationResult] (for batches).
         """
-        clean_input = attack_result.original_inputs
-        adv_input = attack_result.adversarial_examples
-        labels = attack_result.labels
-        meta = getattr(attack_result, "metadata", None)
-        raw_attack_name = getattr(meta, "attack_name", None) if meta is not None else None
-        attack_name: str = raw_attack_name if raw_attack_name is not None else "unknown_attack"
+        if isinstance(attack_result, dict):
+            clean_input = attack_result.get("original_inputs") if attack_result.get("original_inputs") is not None else attack_result.get("_clean_inputs")
+            adv_input = attack_result.get("adversarial_examples") if attack_result.get("adversarial_examples") is not None else attack_result.get("_adversarial_examples")
+            labels = attack_result.get("labels") if attack_result.get("labels") is not None else attack_result.get("ground_truth_labels")
+            meta = attack_result.get("metadata")
+            raw_attack_name = attack_result.get("attack_name") or (getattr(meta, "attack_name", None) if meta else None)
+            attack_name = raw_attack_name if raw_attack_name is not None else "unknown_attack"
+        else:
+            clean_input = getattr(attack_result, "original_inputs", None)
+            if clean_input is None:
+                clean_input = getattr(attack_result, "_clean_inputs", None)
+            adv_input = getattr(attack_result, "adversarial_examples", None)
+            if adv_input is None:
+                adv_input = getattr(attack_result, "_adversarial_examples", None)
+            labels = getattr(attack_result, "labels", None)
+            meta = getattr(attack_result, "metadata", None)
+            raw_attack_name = getattr(meta, "attack_name", None) if meta is not None else getattr(attack_result, "attack_name", None)
+            attack_name = raw_attack_name if raw_attack_name is not None else "unknown_attack"
 
         if clean_input is None:
+            if not kwargs.get("raise_on_error", True):
+                return ExplanationResult(
+                    attack_name=attack_name,
+                    technique=technique or "unknown",
+                    clean_prediction=0,
+                    adversarial_prediction=0,
+                    clean_confidence=0.0,
+                    adversarial_confidence=0.0,
+                    prediction_changed=False,
+                    true_label=None,
+                    attack_caused_failure=False,
+                    attribution_status="error",
+                    metadata={"error": "AttackResult missing clean inputs for XAI explainability."},
+                )
             raise ValueError("AttackResult must contain 'original_inputs' for XAI explainability.")
+
         if adv_input is None:
+            if not kwargs.get("raise_on_error", True):
+                return ExplanationResult(
+                    attack_name=attack_name,
+                    technique=technique or "unknown",
+                    clean_prediction=0,
+                    adversarial_prediction=0,
+                    clean_confidence=0.0,
+                    adversarial_confidence=0.0,
+                    prediction_changed=False,
+                    true_label=None,
+                    attack_caused_failure=False,
+                    attribution_status="error",
+                    metadata={"error": "AttackResult contains no adversarial examples for XAI explainability."},
+                )
             raise ValueError("AttackResult contains no 'adversarial_examples' for XAI explainability.")
 
         shape = get_shape(clean_input)

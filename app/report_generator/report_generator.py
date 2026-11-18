@@ -9,6 +9,7 @@ The actual file I/O is delegated to ReportWriter.
 from __future__ import annotations
 
 from datetime import datetime
+import math
 import random
 from typing import Any, Dict, List, Optional, Union
 import uuid
@@ -20,12 +21,23 @@ from .execution_summary import ExecutionSummary
 
 # ── MITRE ATLAS AML Tactic / Technique lookup ─────────────────────────────────
 _MITRE_ATLAS: Dict[str, Dict[str, str]] = {
+    # ── Vision / Image Domain ──────────────────────────────────────────────────
     "fgsm": {
         "tactic": "AML.TA0000 — ML Attack Staging",
         "technique": "AML.T0043 — Craft Adversarial Data (FGSM)",
-        "mitigation": "AML.M0003 — Adversarial Input Detection",
+        "mitigation": "AML.M0003 — Adversarial Input Detection + AML.M0002 — Model Hardening",
+    },
+    "fast_gradient_sign_method": {
+        "tactic": "AML.TA0000 — ML Attack Staging",
+        "technique": "AML.T0043 — Craft Adversarial Data (FGSM)",
+        "mitigation": "AML.M0003 — Adversarial Input Detection + AML.M0002 — Model Hardening",
     },
     "pgd": {
+        "tactic": "AML.TA0000 — ML Attack Staging",
+        "technique": "AML.T0043.001 — Craft Adversarial Data (PGD / Iterative)",
+        "mitigation": "AML.M0003 — Adversarial Input Detection + AML.M0002 — Model Hardening",
+    },
+    "projected_gradient_descent": {
         "tactic": "AML.TA0000 — ML Attack Staging",
         "technique": "AML.T0043.001 — Craft Adversarial Data (PGD / Iterative)",
         "mitigation": "AML.M0003 — Adversarial Input Detection + AML.M0002 — Model Hardening",
@@ -39,6 +51,109 @@ _MITRE_ATLAS: Dict[str, Dict[str, str]] = {
         "tactic": "AML.TA0000 — ML Attack Staging",
         "technique": "AML.T0043.003 — Craft Adversarial Data (Optimization-based, C&W)",
         "mitigation": "AML.M0002 — Model Hardening + AML.M0015 — Adversarial Training",
+    },
+    "carlini_wagner": {
+        "tactic": "AML.TA0000 — ML Attack Staging",
+        "technique": "AML.T0043.003 — Craft Adversarial Data (Optimization-based, C&W)",
+        "mitigation": "AML.M0002 — Model Hardening + AML.M0015 — Adversarial Training",
+    },
+    "carliniwagner": {
+        "tactic": "AML.TA0000 — ML Attack Staging",
+        "technique": "AML.T0043.003 — Craft Adversarial Data (Optimization-based, C&W)",
+        "mitigation": "AML.M0002 — Model Hardening + AML.M0015 — Adversarial Training",
+    },
+    "fab": {
+        "tactic": "AML.TA0000 — ML Attack Staging",
+        "technique": "AML.T0043.004 — Craft Adversarial Data (Fast Adaptive Boundary)",
+        "mitigation": "AML.M0003 — Adversarial Input Detection + AML.M0002 — Model Hardening",
+    },
+    "fast_adaptive_boundary": {
+        "tactic": "AML.TA0000 — ML Attack Staging",
+        "technique": "AML.T0043.004 — Craft Adversarial Data (Fast Adaptive Boundary)",
+        "mitigation": "AML.M0003 — Adversarial Input Detection + AML.M0002 — Model Hardening",
+    },
+    # ── Tabular Domain ────────────────────────────────────────────────────────
+    "cap_pgd": {
+        "tactic": "AML.TA0000 — ML Attack Staging",
+        "technique": "AML.T0043.005 — Craft Adversarial Data (Constrained Tabular PGD)",
+        "mitigation": "AML.M0003 — Adversarial Input Detection + Feature Range Clamping",
+    },
+    "lowprofool": {
+        "tactic": "AML.TA0000 — ML Attack Staging",
+        "technique": "AML.T0043.006 — Craft Adversarial Data (LowProFool Tabular Perturbation)",
+        "mitigation": "AML.M0003 — Adversarial Input Detection + Domain Validation",
+    },
+    "tabular_cw": {
+        "tactic": "AML.TA0000 — ML Attack Staging",
+        "technique": "AML.T0043.007 — Craft Adversarial Data (Tabular Optimization-based)",
+        "mitigation": "AML.M0002 — Model Hardening + Input Clamping",
+    },
+    "tabular_jsma": {
+        "tactic": "AML.TA0000 — ML Attack Staging",
+        "technique": "AML.T0043.008 — Craft Adversarial Data (Jacobian Saliency Map)",
+        "mitigation": "AML.M0003 — Adversarial Input Detection + Saliency Regularization",
+    },
+    "vae_attack": {
+        "tactic": "AML.TA0000 — ML Attack Staging",
+        "technique": "AML.T0043.009 — Craft Adversarial Data (Generative VAE Attack)",
+        "mitigation": "AML.M0003 — Adversarial Input Detection + Distribution Shift Monitoring",
+    },
+    # ── Text Domain ───────────────────────────────────────────────────────────
+    "hotflip": {
+        "tactic": "AML.TA0000 — ML Attack Staging",
+        "technique": "AML.T0043.010 — Craft Adversarial Data (Discrete Token Replacement / HotFlip)",
+        "mitigation": "AML.M0003 — Adversarial Input Detection + Vocabulary Pruning",
+    },
+    "embedding_pgd": {
+        "tactic": "AML.TA0000 — ML Attack Staging",
+        "technique": "AML.T0043.011 — Craft Adversarial Data (Continuous Embedding Space PGD)",
+        "mitigation": "AML.M0002 — Model Hardening + Embedding Regularization",
+    },
+    "textbugger_wb": {
+        "tactic": "AML.TA0000 — ML Attack Staging",
+        "technique": "AML.T0043.012 — Craft Adversarial Data (Character/Word Level Perturbation)",
+        "mitigation": "AML.M0003 — Adversarial Input Detection + Spell Checking / Normalization",
+    },
+    "textbugger": {
+        "tactic": "AML.TA0000 — ML Attack Staging",
+        "technique": "AML.T0043.012 — Craft Adversarial Data (Character/Word Level Perturbation)",
+        "mitigation": "AML.M0003 — Adversarial Input Detection + Spell Checking / Normalization",
+    },
+    "universal_trigger": {
+        "tactic": "AML.TA0000 — ML Attack Staging",
+        "technique": "AML.T0043.013 — Craft Adversarial Data (Universal Adversarial Trigger)",
+        "mitigation": "AML.M0003 — Adversarial Input Detection + Perplexity Filtering",
+    },
+    "gradient_substitution": {
+        "tactic": "AML.TA0000 — ML Attack Staging",
+        "technique": "AML.T0043.014 — Craft Adversarial Data (Gradient Substitution / Surrogate Attack)",
+        "mitigation": "AML.M0002 — Model Hardening + Ensemble Defense",
+    },
+    # ── Time-Series Domain ────────────────────────────────────────────────────
+    "time_series_pgd": {
+        "tactic": "AML.TA0000 — ML Attack Staging",
+        "technique": "AML.T0043.015 — Craft Adversarial Data (Temporal / Time-Series PGD)",
+        "mitigation": "AML.M0003 — Adversarial Input Detection + Temporal Smoothing",
+    },
+    "smooth_pgd": {
+        "tactic": "AML.TA0000 — ML Attack Staging",
+        "technique": "AML.T0043.016 — Craft Adversarial Data (Smooth Temporal Perturbation)",
+        "mitigation": "AML.M0003 — Adversarial Input Detection + Low-Pass Filtering",
+    },
+    "wavelet_attack": {
+        "tactic": "AML.TA0000 — ML Attack Staging",
+        "technique": "AML.T0043.017 — Craft Adversarial Data (Frequency / Wavelet Domain Attack)",
+        "mitigation": "AML.M0003 — Adversarial Input Detection + Frequency Denoising",
+    },
+    "soft_dtw_attack": {
+        "tactic": "AML.TA0000 — ML Attack Staging",
+        "technique": "AML.T0043.018 — Craft Adversarial Data (Dynamic Time Warping Adversarial)",
+        "mitigation": "AML.M0002 — Model Hardening + Elastic Invariance Defense",
+    },
+    "jsma": {
+        "tactic": "AML.TA0000 — ML Attack Staging",
+        "technique": "AML.T0043.008 — Craft Adversarial Data (Jacobian Saliency Map)",
+        "mitigation": "AML.M0003 — Adversarial Input Detection + Saliency Regularization",
     },
 }
 
@@ -197,14 +312,14 @@ class ReportGenerator:
     def _s8_mitre_atlas(self, attack_results: Dict[str, Any]) -> Dict[str, Any]:
         mapping: Dict[str, Any] = {}
         for attack_name in attack_results:
-            key = attack_name.lower()
+            key = str(attack_name).lower().replace("-", "_").replace(" ", "_")
             if key in _MITRE_ATLAS:
                 mapping[attack_name] = _MITRE_ATLAS[key]
             else:
                 mapping[attack_name] = {
                     "tactic": "AML.TA0000 — ML Attack Staging",
-                    "technique": f"AML.T0043 — Craft Adversarial Data ({attack_name.upper()})",
-                    "mitigation": "AML.M0003 — Adversarial Input Detection",
+                    "technique": f"AML.T0043 — Craft Adversarial Data ({str(attack_name).upper()})",
+                    "mitigation": "AML.M0003 — Adversarial Input Detection + AML.M0002 — Model Hardening",
                 }
         return mapping
 
@@ -300,9 +415,14 @@ class ReportGenerator:
         for atk_info in data.attack_results.values():
             if isinstance(atk_info, dict):
                 ev = atk_info.get("evaluation") or atk_info
-                acc = ev.get("accuracy") or (ev.get("metrics") or {}).get("accuracy")
+                acc = ev.get("accuracy") or (ev.get("metrics") or {}).get("accuracy") or ev.get("adversarial_accuracy")
                 if acc is not None:
-                    adv_accs.append(float(acc))
+                    try:
+                        acc_f = float(acc)
+                        if not (math.isnan(acc_f) or math.isinf(acc_f)):
+                            adv_accs.append(acc_f)
+                    except (TypeError, ValueError):
+                        pass
         mean_adv_acc = round(sum(adv_accs) / len(adv_accs), 4) if adv_accs else None
 
         return {
@@ -327,7 +447,13 @@ class ReportGenerator:
             return None
         metrics = baseline.get("metrics") or {}
         acc = metrics.get("accuracy") or baseline.get("accuracy")
-        return float(acc) if acc is not None else None
+        if acc is not None:
+            try:
+                acc_f = float(acc)
+                return acc_f if not (math.isnan(acc_f) or math.isinf(acc_f)) else None
+            except (TypeError, ValueError):
+                return None
+        return None
 
     @staticmethod
     def _extract_composite_vulnerability_score(
@@ -342,9 +468,19 @@ class ReportGenerator:
                 if isinstance(scoring, dict) and "vulnerability_score" in scoring:
                     s = scoring["vulnerability_score"]
                     if s is not None:
-                        scores.append(float(s))
+                        try:
+                            s_f = float(s)
+                            if not (math.isnan(s_f) or math.isinf(s_f)):
+                                scores.append(s_f)
+                        except (TypeError, ValueError):
+                            pass
                 elif "vulnerability_score" in val and val["vulnerability_score"] is not None:
-                    scores.append(float(val["vulnerability_score"]))
+                    try:
+                        s_f = float(val["vulnerability_score"])
+                        if not (math.isnan(s_f) or math.isinf(s_f)):
+                            scores.append(s_f)
+                    except (TypeError, ValueError):
+                        pass
         return round(sum(scores) / len(scores), 2) if scores else None
 
     @staticmethod
@@ -385,6 +521,10 @@ class ReportGenerator:
             if v is None or v == "None":
                 return "N/A"
             if isinstance(v, (int, float)):
+                if math.isnan(v):
+                    return "N/A"
+                if math.isinf(v):
+                    return "Inf" if v > 0 else "-Inf"
                 if abs(float(v)) <= 1.0:
                     return f"{float(v) * 100:.2f}%"
                 return f"{float(v):.2f}"
@@ -502,13 +642,22 @@ class ReportGenerator:
                             asr_val = assess.get("attack_success_rate")
 
                 if acc_drop_val is None and clean_acc_val is not None and adv_acc_val is not None:
-                    acc_drop_val = float(clean_acc_val) - float(adv_acc_val)
+                    try:
+                        acc_drop_val = float(clean_acc_val) - float(adv_acc_val)
+                    except (TypeError, ValueError):
+                        acc_drop_val = None
 
                 if asr_val is None or asr_val == "None":
-                    if clean_acc_val is not None and adv_acc_val is not None and float(clean_acc_val) > 0:
-                        asr_val = (float(clean_acc_val) - float(adv_acc_val)) / float(clean_acc_val)
-                    elif acc_drop_val is not None:
-                        asr_val = float(acc_drop_val)
+                    if clean_acc_val is not None and adv_acc_val is not None:
+                        try:
+                            c_f = float(clean_acc_val)
+                            a_f = float(adv_acc_val)
+                            if c_f > 0:
+                                asr_val = (c_f - a_f) / c_f
+                            else:
+                                asr_val = None
+                        except (TypeError, ValueError):
+                            asr_val = None
 
                 c_str = pct(clean_acc_val)
                 a_str = pct(adv_acc_val)
@@ -542,8 +691,15 @@ class ReportGenerator:
                     clean_a = assess.get("clean_accuracy", executive_summary.get("baseline_accuracy"))
                     adv_a = assess.get("adversarial_accuracy")
                     if (asr_val is None or asr_val == "None") and clean_a is not None and adv_a is not None:
-                        if float(clean_a) > 0:
-                            asr_val = (float(clean_a) - float(adv_a)) / float(clean_a)
+                        try:
+                            c_f = float(clean_a)
+                            a_f = float(adv_a)
+                            if c_f > 0:
+                                asr_val = (c_f - a_f) / c_f
+                            else:
+                                asr_val = None
+                        except (TypeError, ValueError):
+                            asr_val = None
 
                     lines.append(f"    - Attack Success Rate (ASR) : {pct(asr_val)}")
                     lines.append(f"    - Vulnerability Score       : {scoring.get('vulnerability_score', 'N/A')}")
@@ -618,7 +774,12 @@ class ReportGenerator:
             dataset_name = retest.get("dataset_name") or report_data.baseline_performance.get("dataset_name", "N/A")
             samples = retest.get("num_samples") or report_data.baseline_performance.get("num_samples", "N/A")
 
-            defense_name = report_data.hardening_results.get("defense") or report_data.hardening_results.get("defense_name", "Input Preprocessing / Hardening")
+            defense_name = (
+                retest.get("defense_name")
+                or report_data.hardening_results.get("defense")
+                or report_data.hardening_results.get("defense_name")
+                or report_data.hardening_results.get("selected_defense", "Input Preprocessing / Hardening")
+            )
 
             overall_imp = retest.get("overall_improved")
             if overall_imp is None and report_data.before_vs_after:
@@ -627,7 +788,15 @@ class ReportGenerator:
                     for cv in report_data.before_vs_after.values()
                 )
 
-            verdict_str = "✅ PASSED — Defense Successfully Mitigated Attacks" if (overall_imp or overall_imp is None) else "❌ FAILED — Vulnerabilities Persist"
+            retest_status = str(retest.get("overall_status") or retest.get("status") or "").lower()
+            if retest_status in ("unsupported", "failed_defense", "attack_failed"):
+                verdict_str = f"⚠️ {retest_status.replace('_', ' ').upper()} — Defense did not successfully mitigate all attacks"
+            elif overall_imp is True:
+                verdict_str = "✅ PASSED — Defense Successfully Mitigated Attacks"
+            elif overall_imp is False:
+                verdict_str = "❌ FAILED — Vulnerabilities Persist"
+            else:
+                verdict_str = "ℹ INCONCLUSIVE — Retest evaluation could not confirm mitigation"
 
             lines.append(f"  - Hardened Model    : {model_name}")
             lines.append(f"  - Dataset / Samples : {dataset_name} ({samples} samples)")
@@ -663,8 +832,8 @@ class ReportGenerator:
                     b_assess = cv.get("before_assessment") or {}
                     a_assess = cv.get("after_assessment") or {}
 
-                    b_acc = b_assess.get("adversarial_accuracy")
-                    a_acc = a_assess.get("adversarial_accuracy")
+                    b_acc = b_assess.get("adversarial_accuracy", cv.get("before_accuracy"))
+                    a_acc = a_assess.get("adversarial_accuracy", cv.get("after_accuracy"))
 
                     if b_acc is None:
                         vm = report_data.vulnerability_metrics.get(vec_name) or {}
@@ -675,23 +844,51 @@ class ReportGenerator:
                         delta_adv = cv.get("delta_adversarial_accuracy")
                         delta_drop = cv.get("delta_accuracy_drop")
                         if delta_adv is not None and b_acc is not None:
-                            a_acc = float(b_acc) + float(delta_adv)
+                            try:
+                                a_acc = float(b_acc) + float(delta_adv)
+                            except (TypeError, ValueError):
+                                a_acc = None
                         elif delta_drop is not None and b_acc is not None:
-                            a_acc = float(b_acc) - float(delta_drop)
+                            try:
+                                a_acc = float(b_acc) - float(delta_drop)
+                            except (TypeError, ValueError):
+                                a_acc = None
 
                     if a_acc is not None and b_acc is not None:
-                        gain = float(a_acc) - float(b_acc)
+                        try:
+                            gain = float(a_acc) - float(b_acc)
+                        except (TypeError, ValueError):
+                            gain = None
 
-                    b_risk = cv.get("before_risk_level") or (cv.get("before_scoring") or {}).get("risk_level") or "MEDIUM"
-                    a_risk = cv.get("after_risk_level") or (cv.get("after_scoring") or {}).get("risk_level") or "LOW"
+                    b_risk = cv.get("before_risk_level") or (cv.get("before_scoring") or {}).get("risk_level") or "UNKNOWN"
+                    a_risk = cv.get("after_risk_level") or (cv.get("after_scoring") or {}).get("risk_level") or "UNKNOWN"
                     is_imp = cv.get("is_improved", True)
                     if not is_imp:
                         all_improved = False
 
+                    # Check explicit M8 status and defense effectiveness
+                    c_status = str(cv.get("status") or "").lower()
+                    c_eff = str(cv.get("defense_effectiveness") or "").lower()
+                    if c_status == "unsupported" or c_eff == "unsupported":
+                        status_str = "⚠️ UNSUPPORTED"
+                    elif c_status == "attack_failed" or c_eff == "attack_failed":
+                        status_str = "⚠️ ATTACK FAILED"
+                    elif c_eff == "effective":
+                        status_str = "✅ EFFECTIVE"
+                    elif c_eff == "partially_effective":
+                        status_str = "⚠️ PARTIAL"
+                    elif c_eff == "clean_accuracy_degraded":
+                        status_str = "⚠️ ACC DEGRADED"
+                    elif c_eff == "ineffective" or not is_imp:
+                        status_str = "❌ FAILED"
+                    elif is_imp:
+                        status_str = "✅ WORKED"
+                    else:
+                        status_str = "❓ INCONCLUSIVE"
+
                 b_str = pct(b_acc)
                 a_str = pct(a_acc)
-                g_str = f"+{pct(gain)}" if isinstance(gain, float) and gain >= 0 else pct(gain)
-                status_str = "✅ WORKED" if is_imp else "❌ FAILED"
+                g_str = f"+{pct(gain)}" if isinstance(gain, (int, float)) and not math.isnan(gain) and gain >= 0 else pct(gain)
 
                 lines.append(f"| {vec_name.upper():<13} | {b_str:<24} | {a_str:<28} | {g_str:<15} | {b_risk:<11} | {a_risk:<10} | **{status_str}** |")
 
@@ -711,19 +908,22 @@ class ReportGenerator:
         es = report_data.execution_summary
         if es:
             lines.append(f"  Run Label    : {es.run_label}")
-            lines.append(f"  Started At   : {es.run_timestamp}")
+            lines.append(f"  Started At   : {es.run_timestamp or 'N/A'}")
             lines.append(f"  Total Time   : {es.total_elapsed_seconds:.2f}s")
             lines.append(f"  Overall      : {es.overall_status}")
             lines.append("")
-            lines.append(f"  {'MODULE':<30} {'STATUS':<12} {'TIME':>7}")
-            lines.append("  " + SUB)
-            for rec in es.modules:
-                icon = {"SUCCESS": "✅", "FAILED": "❌", "SKIPPED": "⏭"}.get(rec.status, "❓")
-                lines.append(
-                    f"  {rec.module_name:<30} {icon} {rec.status:<10} {rec.elapsed_seconds:>6.2f}s"
-                )
-                for mk, mv in (rec.metrics or {}).items():
-                    lines.append(f"    {'':>30}  └ {mk}: {pct(mv) if isinstance(mv, float) else mv}")
+            if es.modules:
+                lines.append(f"  {'MODULE':<30} {'STATUS':<12} {'TIME':>7}")
+                lines.append("  " + SUB)
+                for rec in es.modules:
+                    icon = {"SUCCESS": "✅", "FAILED": "❌", "SKIPPED": "⏭", "PARTIAL": "⚠️"}.get(rec.status, "❓")
+                    lines.append(
+                        f"  {rec.module_name:<30} {icon} {rec.status:<10} {rec.elapsed_seconds:>6.2f}s"
+                    )
+                    for mk, mv in (rec.metrics or {}).items():
+                        lines.append(f"    {'':>30}  └ {mk}: {pct(mv) if isinstance(mv, (int, float)) else mv}")
+            else:
+                lines.append("  No individual module execution records captured.")
             lines.append("")
         else:
             lines.append("  No execution performance data captured.")

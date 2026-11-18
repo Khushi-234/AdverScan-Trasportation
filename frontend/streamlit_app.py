@@ -1082,7 +1082,8 @@ elif stage == "attack_results":
 
     # Retrieve authentic M5 vulnerability assessment and scoring result (A11, A12, A13)
     vuln_res = get_vulnerability_result() or result.get("vulnerability_assessment") or {}
-    vuln_score = float(vuln_res.get("vulnerability_score", result.get("vulnerability_score", 0.0)))
+    _raw_score = vuln_res.get("vulnerability_score") if vuln_res.get("vulnerability_score") is not None else result.get("vulnerability_score", 0.0)
+    vuln_score = float(_raw_score) if _raw_score is not None else 0.0
     risk_level = str(vuln_res.get("risk_level", result.get("risk_level", "LOW"))).upper()
 
     # 1. 4 Primary Top-line Modern Stat Cards
@@ -1844,7 +1845,8 @@ elif stage == "defense_config":
     asr_pct = attack_res.get("asr_percentage", 0.0)
     acc_drop = attack_res.get("accuracy_drop", 0.0)
     vuln_res = get_vulnerability_result() or attack_res.get("vulnerability_assessment") or {}
-    vuln_score = float(vuln_res.get("vulnerability_score", attack_res.get("vulnerability_score", asr_pct)))
+    _raw_score = vuln_res.get("vulnerability_score") if vuln_res.get("vulnerability_score") is not None else attack_res.get("vulnerability_score", asr_pct)
+    vuln_score = float(_raw_score) if _raw_score is not None else float(asr_pct)
     risk_level = str(vuln_res.get("risk_level", attack_res.get("risk_level", "HIGH" if asr_pct >= 50.0 else "LOW"))).upper()
 
     # 1. Threat Context Banner
@@ -2063,7 +2065,15 @@ elif stage == "defense_results":
     def_type = def_result.get("defense_type", "Preprocessing")
 
     # 1. Top Status Banner & Active Defense
-    if imp_suff:
+    if not def_result.get("success", True) or def_result.get("status") in ("failed", "error"):
+        status_badge = '<span class="badge-status badge-rose" style="font-size: 0.88rem;">❌ RETEST EXECUTION FAILED</span>'
+        status_note = f"Retest execution failed: {def_result.get('error', 'Execution error encountered during retest.')}"
+        card_accent = "card-accent-rose"
+    elif def_result.get("status") == "inconclusive" or not def_result.get("post_asr_defined", True):
+        status_badge = '<span class="badge-status badge-amber" style="font-size: 0.88rem;">⚠️ INCONCLUSIVE RETEST</span>'
+        status_note = def_result.get("reason", "Retest was inconclusive due to undefined baseline metrics or zero clean accuracy.")
+        card_accent = "card-accent-amber"
+    elif imp_suff:
         status_badge = '<span class="badge-status badge-emerald" style="font-size: 0.88rem;">✅ ACCEPTED — Met Acceptance Thresholds</span>'
         status_note = "All acceptance criteria for ASR reduction, vulnerability improvement, and clean accuracy preservation were met during re-testing."
         card_accent = "card-accent-emerald"
@@ -2455,8 +2465,10 @@ elif stage == "report":
     # 1. Executive Certification Banner
     rep_id = report_dict.get("report_id", "REP-UNKNOWN")
     rep_time = report_dict.get("timestamp", datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
-    final_risk = report_dict.get("risk_level", "LOW").upper()
-    final_score = report_dict.get("vulnerability_score", 0.0)
+    final_risk = str(report_dict.get("risk_level") or "LOW").upper()
+    raw_score = report_dict.get("vulnerability_score")
+    final_score = float(raw_score) if raw_score is not None else None
+    score_display = f"{final_score:.1f} / 100" if final_score is not None else "N/A"
 
     st.markdown(
         f"""
@@ -2475,7 +2487,7 @@ elif stage == "report":
                     <span class="risk-badge risk-{final_risk.lower()}">Overall Risk: {final_risk}</span>
                     <div class="modern-card" style="padding: 0.4rem 0.8rem; background: var(--card-bg-subtle);">
                         <span class="stat-label" style="font-size: 0.7rem;">Vulnerability Score</span>
-                        <div style="font-size: 1.1rem; font-weight: 700; color: var(--stat-val-cyan);">{final_score:.1f} / 100</div>
+                        <div style="font-size: 1.1rem; font-weight: 700; color: var(--stat-val-cyan);">{score_display}</div>
                     </div>
                 </div>
             </div>
@@ -2492,7 +2504,7 @@ elif stage == "report":
             **Overall Security Posture**: Model evaluated under white-box adversarial stress testing.
             - **Evaluated Target**: `{report_dict.get('model_info', {}).get('model_name', 'Model')}`
             - **Risk Level**: `{final_risk}`
-            - **Vulnerability Score**: `{final_score:.2f} / 100`
+            - **Vulnerability Score**: `{score_display}`
             - **Primary Mitigation Applied**: `{report_dict.get('hardening_results', {}).get('selected_defense', 'None')}`
             """
         )
@@ -2555,16 +2567,18 @@ elif stage == "report":
         v_metrics = report_dict.get("vulnerability_metrics", {})
         st.markdown(
             f"""
-            - **Overall Vulnerability Score**: `{final_score:.2f} / 100`
+            - **Overall Vulnerability Score**: `{score_display}`
             - **Risk Severity Classification**: `{final_risk}`
             """
         )
         for vk, vv in v_metrics.items():
             assess = vv.get("assessment", {})
-            asr_v = assess.get("attack_success_rate", 0.0) * 100.0
-            acc_d = assess.get("accuracy_drop", 0.0) * 100.0
+            asr_raw = assess.get("attack_success_rate")
+            asr_str = f"{float(asr_raw) * 100:.2f}%" if asr_raw is not None else "N/A"
+            acc_d_raw = assess.get("accuracy_drop")
+            acc_d_str = f"-{float(acc_d_raw) * 100:.2f}%" if acc_d_raw is not None else "N/A"
             st.markdown(
-                f"• **Attack [{vk.upper()}]**: ASR = **{asr_v:.2f}%**, Accuracy Drop = **-{acc_d:.2f}%**"
+                f"• **Attack [{vk.upper()}]**: ASR = **{asr_str}**, Accuracy Drop = **{acc_d_str}**"
             )
 
     with st.expander("🛡️ Section 8: MITRE ATLAS Threat Framework Mapping", expanded=False):
@@ -2587,10 +2601,41 @@ elif stage == "report":
     with st.expander("🔍 Section 9: Explainable AI (XAI) Root Cause Analysis (M6)", expanded=False):
         xai_info = report_dict.get("xai_findings", {})
         if xai_info:
+            tech = xai_info.get("technique") or "attribution"
+            st.markdown(f"**Explainability Method**: `{tech.upper()}`")
+            if "status" in xai_info:
+                st.caption(f"Status: {xai_info.get('status')} • {xai_info.get('message', '')}")
+
+            local_exp = xai_info.get("local_explanation", {})
+            global_exp = xai_info.get("global_explanation", {})
+
+            if local_exp:
+                st.markdown("##### 📍 Local Feature Attribution (Sample Level)")
+                clean_top = local_exp.get("clean_top_features", [])
+                adv_top = local_exp.get("adversarial_top_features", [])
+                if clean_top or adv_top:
+                    col_l1, col_l2 = st.columns(2)
+                    with col_l1:
+                        st.markdown("**Clean Prediction Top Features:**")
+                        for f in clean_top[:5]:
+                            st.markdown(f"- `{f.get('feature', 'feat')}`: {f.get('weight', 0.0):.4f}")
+                    with col_l2:
+                        st.markdown("**Adversarial Prediction Top Features:**")
+                        for f in adv_top[:5]:
+                            st.markdown(f"- `{f.get('feature', 'feat')}`: {f.get('weight', 0.0):.4f}")
+
+            if global_exp:
+                st.markdown("##### 🌐 Global Feature Importance (Dataset Level)")
+                glob_top = global_exp.get("global_top_features", [])
+                if glob_top:
+                    for g in glob_top[:5]:
+                        st.markdown(f"- **{g.get('feature', 'feat')}**: vulnerability frequency `{g.get('frequency', 0)}`")
+
             st.json(xai_info)
         else:
-            st.markdown(
-                "Attribution analysis shows that adversarial perturbations alter high-frequency pixel saliency patterns and gradient alignment, driving confident misclassifications across decision boundaries."
+            st.info(
+                "No XAI explanation generated for this run (technique was not enabled or model unsupported). "
+                "Explanations are displayed only when genuinely computed by the M6 Explainability Engine."
             )
 
     with st.expander("🛠️ Section 10: Model Hardening Engine & Applied Mitigations (M7)", expanded=True):
@@ -2613,15 +2658,29 @@ elif stage == "report":
             st.markdown("##### Before vs. After Hardening Performance:")
             comp_rows = []
             for atk_k, c_data in bva.items():
+                b_asr = c_data.get('before_asr')
+                a_asr = c_data.get('after_asr')
+                d_asr = c_data.get('delta_asr')
+                b_acc = c_data.get('before_accuracy')
+                a_acc = c_data.get('after_accuracy')
+                d_acc = c_data.get('delta_accuracy')
+
+                b_asr_str = f"{float(b_asr) * 100:.1f}%" if b_asr is not None else "N/A"
+                a_asr_str = f"{float(a_asr) * 100:.1f}%" if a_asr is not None else "N/A"
+                d_asr_str = f"-{float(d_asr) * 100:.1f}%" if d_asr is not None else "N/A"
+                b_acc_str = f"{float(b_acc) * 100:.1f}%" if b_acc is not None else "N/A"
+                a_acc_str = f"{float(a_acc) * 100:.1f}%" if a_acc is not None else "N/A"
+                d_acc_str = f"+{float(d_acc) * 100:.1f}%" if (d_acc is not None and float(d_acc) >= 0) else (f"{float(d_acc) * 100:.1f}%" if d_acc is not None else "N/A")
+
                 comp_rows.append(
                     {
                         "Vector": atk_k.upper(),
-                        "ASR Before": f"{c_data.get('before_asr', 0.0) * 100:.1f}%",
-                        "ASR After": f"{c_data.get('after_asr', 0.0) * 100:.1f}%",
-                        "ASR Delta": f"-{c_data.get('delta_asr', 0.0) * 100:.1f}%",
-                        "Acc Before": f"{c_data.get('before_accuracy', 0.0) * 100:.1f}%",
-                        "Acc Defended": f"{c_data.get('after_accuracy', 0.0) * 100:.1f}%",
-                        "Acc Recovery": f"+{c_data.get('delta_accuracy', 0.0) * 100:.1f}%",
+                        "ASR Before": b_asr_str,
+                        "ASR After": a_asr_str,
+                        "ASR Delta": d_asr_str,
+                        "Acc Before": b_acc_str,
+                        "Acc Defended": a_acc_str,
+                        "Acc Recovery": d_acc_str,
                         "Robustness Status": "Improved ✅" if c_data.get("is_improved") else "Stable ⚠️",
                     }
                 )
@@ -2630,11 +2689,13 @@ elif stage == "report":
             st.info("No comparative re-test data available.")
 
     with st.expander("⏱️ Section 13: Execution Performance & Hardware Telemetry (M9)", expanded=False):
-        exec_perf = report_dict.get("execution_summary", {})
+        exec_perf = report_dict.get("execution_summary", {}) or {}
+        tot_time = exec_perf.get("total_elapsed_seconds") or exec_perf.get("total_time_seconds", 0.0)
+        pipe_status = exec_perf.get("overall_status") or exec_perf.get("pipeline_status", "SUCCESS")
         st.markdown(
             f"""
-            - **Total Pipeline Execution Time**: `{exec_perf.get('total_time_seconds', 0.0):.2f}s`
-            - **Pipeline Status**: `{exec_perf.get('pipeline_status', 'SUCCESS')}`
+            - **Total Pipeline Execution Time**: `{float(tot_time):.2f}s`
+            - **Pipeline Status**: `{pipe_status}`
             - **Execution Device**: `{active_data.get('device', 'CPU')}`
             """
         )
@@ -2673,11 +2734,17 @@ elif stage == "report":
     st.markdown("### 📥 Export & Download Report")
     st.caption("Download the complete assessment report in your preferred format")
 
-    col_dl1, col_dl2, col_dl3 = st.columns(3)
+    report_csv = (
+        report_res.to_csv()
+        if hasattr(report_res, "to_csv")
+        else ""
+    )
+
+    col_dl1, col_dl2, col_dl3, col_dl4 = st.columns(4)
 
     with col_dl1:
         st.download_button(
-            label="⬇️ Download Markdown Report (.md)",
+            label="⬇️ Markdown (.md)",
             data=formatted_md,
             file_name=f"adverscan_report_{rep_id}.md",
             mime="text/markdown",
@@ -2686,7 +2753,7 @@ elif stage == "report":
 
     with col_dl2:
         st.download_button(
-            label="⬇️ Download Full JSON Report (.json)",
+            label="⬇️ JSON (.json)",
             data=report_json,
             file_name=f"adverscan_report_{rep_id}.json",
             mime="application/json",
@@ -2695,10 +2762,19 @@ elif stage == "report":
 
     with col_dl3:
         st.download_button(
-            label="⬇️ Download Plaintext Report (.txt)",
+            label="⬇️ Plaintext (.txt)",
             data=formatted_md,
             file_name=f"adverscan_report_{rep_id}.txt",
             mime="text/plain",
+            use_container_width=True,
+        )
+
+    with col_dl4:
+        st.download_button(
+            label="⬇️ Timing CSV (.csv)",
+            data=report_csv,
+            file_name=f"adverscan_report_{rep_id}_timing.csv",
+            mime="text/csv",
             use_container_width=True,
         )
 

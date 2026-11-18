@@ -141,26 +141,42 @@ class AdversarialDetectionDefense(BaseDefense):
         res = self.detect_with_predictions(model, inputs)
         return res["is_adversarial"], res["scores"]
 
-    def detect_with_predictions(self, model: nn.Module, inputs: torch.Tensor) -> Dict[str, Any]:
+    def detect_with_predictions(self, model: Any, inputs: torch.Tensor) -> Dict[str, Any]:
         """
         Evaluate inputs and return predictions alongside adversarial anomaly scores.
         """
-        model.eval()
-        device = inputs.device
-        batch_size = inputs.size(0)
+        was_training = getattr(model, "training", False)
+        if hasattr(model, "eval"):
+            model.eval()
+        try:
+            device = inputs.device
+            batch_size = inputs.size(0)
 
-        with torch.no_grad():
-            clean_logits = model(inputs)
-            if isinstance(clean_logits, tuple):
-                clean_logits = clean_logits[0]
+            if not inputs.is_floating_point() and self.method == "sensitivity":
+                raise HardeningConfigurationError(
+                    "Sensitivity detection using Gaussian noise is incompatible with discrete integer token IDs. Use 'margin' or 'entropy' for text."
+                )
 
-            if clean_logits.ndim > 1 and clean_logits.size(1) > 1:
-                clean_probs = F.softmax(clean_logits, dim=1)
-                clean_preds = torch.argmax(clean_probs, dim=1)
-            else:
-                p = torch.sigmoid(clean_logits).squeeze(-1)
-                clean_probs = torch.stack([1.0 - p, p], dim=-1)
-                clean_preds = (p >= 0.5).long()
+            with torch.no_grad():
+                if not isinstance(model, nn.Module) and hasattr(model, "predict_proba"):
+                    import numpy as np
+                    x_np = inputs.detach().cpu().numpy() if isinstance(inputs, torch.Tensor) else np.asarray(inputs)
+                    probs_np = model.predict_proba(x_np)
+                    clean_probs = torch.from_numpy(probs_np).float().to(device)
+                    clean_logits = torch.log(clean_probs.clamp_min(1e-12))
+                    clean_preds = torch.argmax(clean_probs, dim=1)
+                else:
+                    clean_logits = model(inputs)
+                    if isinstance(clean_logits, tuple):
+                        clean_logits = clean_logits[0]
+
+                    if clean_logits.ndim > 1 and clean_logits.size(1) > 1:
+                        clean_probs = F.softmax(clean_logits, dim=1)
+                        clean_preds = torch.argmax(clean_probs, dim=1)
+                    else:
+                        p = torch.sigmoid(clean_logits).squeeze(-1)
+                        clean_probs = torch.stack([1.0 - p, p], dim=-1)
+                        clean_preds = (p >= 0.5).long()
 
             if self.method == "entropy":
                 # High prediction entropy can indicate perturbed / out-of-distribution sample
@@ -212,17 +228,23 @@ class AdversarialDetectionDefense(BaseDefense):
             scores = scores.clamp(0.0, 1.0)
             is_adversarial = scores >= self.threshold
 
-        return {
-            "logits": clean_logits,
-            "probabilities": clean_probs,
-            "predictions": clean_preds,
-            "scores": scores,
-            "is_adversarial": is_adversarial,
-        }
+            return {
+                "logits": clean_logits,
+                "probabilities": clean_probs,
+                "predictions": clean_preds,
+                "scores": scores,
+                "is_adversarial": is_adversarial,
+            }
+        finally:
+            if hasattr(model, "train") and hasattr(model, "eval"):
+                if was_training:
+                    model.train()
+                else:
+                    model.eval()
 
     def apply(
         self,
-        model: nn.Module,
+        model: Any,
         inputs: Optional[torch.Tensor] = None,
         labels: Optional[torch.Tensor] = None,
         **kwargs: Any,

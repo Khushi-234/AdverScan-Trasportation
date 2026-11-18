@@ -57,8 +57,8 @@ class PaddingDefense(BaseDefense):
         self.padding_mode = str(cfg.get("padding_mode", padding_mode)).lower().strip()
         self.fill_value = float(cfg.get("fill_value", fill_value))
 
-        if self.pad_size < 0:
-            raise HardeningConfigurationError(f"pad_size must be non-negative, got {self.pad_size}")
+        if self.pad_size <= 0:
+            raise HardeningConfigurationError(f"pad_size must be strictly positive, got {self.pad_size}")
         if self.padding_mode not in ("constant", "reflect", "replicate"):
             raise HardeningConfigurationError(
                 f"Unsupported padding_mode '{self.padding_mode}'. Supported: ['constant', 'reflect', 'replicate']"
@@ -69,7 +69,9 @@ class PaddingDefense(BaseDefense):
         if not isinstance(inputs, torch.Tensor):
             raise HardeningConfigurationError(f"Expected torch.Tensor, got {type(inputs)}")
         if inputs.ndim != 4:
-            return inputs.clone()
+            raise HardeningConfigurationError(
+                f"PaddingDefense requires 4D image tensors (B, C, H, W), got {inputs.ndim}D tensor of shape {tuple(inputs.shape)}"
+            )
 
         if self.pad_size == 0:
             return inputs.clone()
@@ -92,13 +94,17 @@ class PaddingDefense(BaseDefense):
 
     def apply(
         self,
-        model: nn.Module,
+        model: Any,
         inputs: Optional[torch.Tensor] = None,
         labels: Optional[torch.Tensor] = None,
         **kwargs: Any,
     ) -> HardeningResult:
         start_time = time.time()
         try:
+            if inputs is not None and inputs.ndim != 4:
+                raise HardeningConfigurationError(
+                    f"PaddingDefense requires 4D image tensors (B, C, H, W), got {inputs.ndim}D tensor of shape {tuple(inputs.shape)}"
+                )
             hardened_inputs = self.transform(inputs) if inputs is not None else None
             self.mark_hardened_input(hardened_inputs, self.transform)
             wrapped_model = HardenedModelWrapper(model, self.transform, defense_name=self.name)

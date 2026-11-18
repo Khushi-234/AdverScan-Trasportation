@@ -91,8 +91,10 @@ class HardeningEngine:
         Returns:
             HardeningResult: Comprehensive result detailing attempts, selected defense, and evaluation metrics.
         """
-        if not isinstance(model, nn.Module):
-            raise HardeningConfigurationError(f"Expected model to be PyTorch nn.Module, got {type(model)}")
+        if not (isinstance(model, nn.Module) or hasattr(model, "predict") or callable(model)):
+            raise HardeningConfigurationError(f"Expected model to be PyTorch nn.Module or Scikit-learn estimator, got {type(model)}")
+
+        was_training = getattr(model, "training", False)
 
         # Parse or default acceptance thresholds
         if isinstance(thresholds, dict):
@@ -257,7 +259,12 @@ class HardeningEngine:
                 )
                 return cand_result
 
-            # Rule 6, 7: Defense did not satisfy thresholds, continue to next candidate
+            # Rule 6, 7: Defense did not satisfy thresholds, clean up resources and continue to next candidate
+            if hasattr(cand_result.hardened_model, "remove_hook") and callable(cand_result.hardened_model.remove_hook):
+                try:
+                    cand_result.hardened_model.remove_hook()
+                except Exception:
+                    pass
 
         # Rule 9: If no candidate satisfies acceptance criteria, check if fallback to most effective defense is enabled
         if fallback_to_best and attempts:
@@ -318,6 +325,12 @@ class HardeningEngine:
             "provided sufficient improvement meeting the configured acceptance criteria. "
             "The baseline model was retained without modification."
         ]
+
+        if hasattr(model, "train") and hasattr(model, "eval"):
+            if was_training:
+                model.train()
+            else:
+                model.eval()
 
         return HardeningResult(
             hardened_model=model,
@@ -392,8 +405,10 @@ class HardeningEngine:
         Returns:
             HardeningResult: DTO containing hardened model, execution metadata, evaluation metrics, and attempts.
         """
-        if not isinstance(model, nn.Module):
-            raise HardeningConfigurationError(f"Expected model to be PyTorch nn.Module, got {type(model)}")
+        if not (isinstance(model, nn.Module) or hasattr(model, "predict") or callable(model)):
+            raise HardeningConfigurationError(f"Expected model to be PyTorch nn.Module or Scikit-learn estimator, got {type(model)}")
+
+        was_training = getattr(model, "training", False)
 
         # Check for iterative defense selection request
         is_iterative_request = iterative or (isinstance(defense, str) and defense.lower().strip() in ("iterative", "loop"))

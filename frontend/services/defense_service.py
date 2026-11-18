@@ -268,8 +268,8 @@ def execute_configured_defense(
         candidate attempt details, restored prediction tables, and hardened model.
     """
     raw_model = getattr(model, "get_model", lambda: model)()
-    if not isinstance(raw_model, nn.Module):
-        raise TypeError(f"Target model must be a PyTorch nn.Module, got {type(raw_model)}")
+    if not (isinstance(raw_model, nn.Module) or hasattr(raw_model, "predict") or callable(raw_model)):
+        raise TypeError(f"Target model must be a PyTorch nn.Module or Scikit-learn estimator, got {type(raw_model)}")
 
     # Ensure tensors are prepared
     labels_tensor = (
@@ -326,22 +326,29 @@ def execute_configured_defense(
     base_risk = "HIGH" if base_asr >= 0.6 else ("MEDIUM" if base_asr >= 0.3 else "LOW")
 
     # Build evaluation closure for candidate models
-    def eval_fn(candidate_model: nn.Module) -> Dict[str, Any]:
-        candidate_model.eval()
+    def eval_fn(candidate_model: Any) -> Dict[str, Any]:
+        if hasattr(candidate_model, "eval"):
+            candidate_model.eval()
         t0 = time.time()
         with torch.no_grad():
             # 1. Clean accuracy
-            logits_clean = candidate_model(test_inputs.to(device))
+            inp_clean = test_inputs.to(device) if isinstance(test_inputs, torch.Tensor) else test_inputs
+            logits_clean = candidate_model(inp_clean)
             if hasattr(logits_clean, "logits"):
                 logits_clean = logits_clean.logits
+            if not isinstance(logits_clean, torch.Tensor):
+                logits_clean = torch.as_tensor(logits_clean)
             c_preds = logits_clean.argmax(dim=-1).cpu()
             c_correct = int((c_preds == labels_tensor.cpu()).sum().item())
             cand_clean_acc = float(c_correct / total_samples) if total_samples > 0 else 0.0
 
             # 2. Defended accuracy on adversarial examples
-            logits_adv = candidate_model(adv_tensor.to(device))
+            inp_adv = adv_tensor.to(device) if isinstance(adv_tensor, torch.Tensor) else adv_tensor
+            logits_adv = candidate_model(inp_adv)
             if hasattr(logits_adv, "logits"):
                 logits_adv = logits_adv.logits
+            if not isinstance(logits_adv, torch.Tensor):
+                logits_adv = torch.as_tensor(logits_adv)
             a_preds = logits_adv.argmax(dim=-1).cpu()
             a_correct = int((a_preds == labels_tensor.cpu()).sum().item())
             cand_adv_acc = float(a_correct / total_samples) if total_samples > 0 else 0.0
@@ -410,18 +417,25 @@ def execute_configured_defense(
     defended_model = hard_res.hardened_model or raw_model
 
     # Run complete post-defense telemetry with confidences
-    defended_model.eval()
+    if hasattr(defended_model, "eval"):
+        defended_model.eval()
     with torch.no_grad():
-        logits_c = defended_model(test_inputs.to(device))
+        inp_c = test_inputs.to(device) if isinstance(test_inputs, torch.Tensor) else test_inputs
+        logits_c = defended_model(inp_c)
         if hasattr(logits_c, "logits"):
             logits_c = logits_c.logits
+        if not isinstance(logits_c, torch.Tensor):
+            logits_c = torch.as_tensor(logits_c)
         probs_c = F.softmax(logits_c, dim=-1)
         def_clean_preds = probs_c.argmax(dim=-1).cpu()
         def_clean_confs = probs_c.max(dim=-1).values.cpu()
 
-        logits_a = defended_model(adv_tensor.to(device))
+        inp_a = adv_tensor.to(device) if isinstance(adv_tensor, torch.Tensor) else adv_tensor
+        logits_a = defended_model(inp_a)
         if hasattr(logits_a, "logits"):
             logits_a = logits_a.logits
+        if not isinstance(logits_a, torch.Tensor):
+            logits_a = torch.as_tensor(logits_a)
         probs_a = F.softmax(logits_a, dim=-1)
         def_adv_preds = probs_a.argmax(dim=-1).cpu()
         def_adv_confs = probs_a.max(dim=-1).values.cpu()
@@ -436,21 +450,24 @@ def execute_configured_defense(
     # Calculate post_asr using clean_correct as denominator (A06, A07)
     clean_right_post = (def_clean_preds == labels_tensor.cpu())
     num_clean_right_post = int(clean_right_post.sum().item())
+    clean_acc_drop = max(0.0, (base_clean_acc * 100.0) - post_clean_acc)
+
     if num_clean_right_post > 0:
         if is_targeted and target_label is not None:
             post_still_succ = clean_right_post & (def_adv_preds == target_label)
         else:
             post_still_succ = clean_right_post & (def_adv_preds != labels_tensor.cpu())
         post_asr = float(post_still_succ.sum().item() / num_clean_right_post) * 100.0
+        asr_reduction_pct = max(0.0, (base_asr * 100.0) - post_asr)
+        post_deg = max(0.0, (post_clean_acc - post_adv_acc))
+        post_vuln = round(0.50 * post_asr + 0.35 * post_deg, 2)
+        vuln_improvement_pts = max(0.0, base_vuln - post_vuln)
     else:
-        post_asr = 0.0
-
-    post_deg = max(0.0, (post_clean_acc - post_adv_acc))
-    post_vuln = round(0.50 * post_asr + 0.35 * post_deg, 2)
-
-    asr_reduction_pct = max(0.0, (base_asr * 100.0) - post_asr)
-    vuln_improvement_pts = max(0.0, base_vuln - post_vuln)
-    clean_acc_drop = max(0.0, (base_clean_acc * 100.0) - post_clean_acc)
+        post_asr = None
+        asr_reduction_pct = 0.0
+        post_deg = 0.0
+        post_vuln = 100.0
+        vuln_improvement_pts = 0.0
 
     # Extract sample comparisons
     clean_orig_preds = attack_result.get("original_predictions")
@@ -524,8 +541,23 @@ def execute_configured_defense(
     min_vuln_imp = float(thresh_dict.get("min_vuln_score_improvement", 5.0))
 
     clean_drop_passed = clean_acc_drop <= max_clean_drop
-    asr_red_passed = asr_reduction_pct >= min_asr_red
+    asr_red_passed = asr_reduction_pct >= min_asr_red and post_asr is not None
     vuln_imp_passed = vuln_improvement_pts >= min_vuln_imp
+
+    if post_asr is None:
+        defense_eff = "Inconclusive (Zero Clean Accuracy)"
+    elif clean_acc_drop > (float(thresh_dict.get("severe_clean_drop_threshold", 0.10)) * 100.0):
+        defense_eff = "Harmful (Severe Clean Accuracy Degradation)"
+    elif asr_reduction_pct >= 50.0 and clean_drop_passed:
+        defense_eff = "High"
+    elif asr_red_passed:
+        defense_eff = "Moderate"
+    elif asr_reduction_pct > 0.0:
+        defense_eff = "Low"
+    else:
+        defense_eff = "Ineffective"
+
+    post_asr_str = f"{post_asr:.1f}%" if post_asr is not None else "Undefined (Zero Clean Acc)"
 
     threshold_compliance = [
         {
@@ -539,10 +571,10 @@ def execute_configured_defense(
         {
             "Criterion": "Attack Success Rate (ASR) Reduction",
             "Baseline (Before)": f"{base_asr * 100.0:.1f}%",
-            "Hardened (Re-Test)": f"{post_asr:.1f}%",
+            "Hardened (Re-Test)": post_asr_str,
             "Observed Change": f"-{asr_reduction_pct:.1f}% drop",
             "Acceptance Bound": f"Reduction ≥ {min_asr_red:.1f}%",
-            "Compliance Verdict": "PASSED (Within Threshold)" if asr_red_passed else "BEYOND THRESHOLD (Insufficient Reduction)",
+            "Compliance Verdict": "PASSED (Within Threshold)" if asr_red_passed else ("INCONCLUSIVE" if post_asr is None else "BEYOND THRESHOLD (Insufficient Reduction)"),
         },
         {
             "Criterion": "Vulnerability Score Improvement",
@@ -555,14 +587,18 @@ def execute_configured_defense(
     ]
 
     return {
+        "success": hard_res.success,
         "status": hard_res.status,
+        "defense_name": selected_defense_name,
         "selected_defense": selected_defense_name,
+        "hardened_model": defended_model,
         "defense_type": getattr(defense_meta, "defense_type", "Preprocessing"),
         "is_improved": hard_res.is_improved,
         "improvement_sufficient": hard_res.improvement_sufficient,
         "fallback_used": (not hard_res.improvement_sufficient) and (hard_res.selected_defense is not None),
         "thresholds": thresh_dict,
         "threshold_compliance": threshold_compliance,
+        "defense_effectiveness": defense_eff,
         "execution_time_seconds": total_exec_time,
         "total_samples": total_samples,
         # Before metrics
@@ -571,9 +607,12 @@ def execute_configured_defense(
         "before_asr": base_asr * 100.0,
         "before_vulnerability_score": base_vuln,
         # After metrics
+        "post_clean_accuracy": post_clean_acc,
         "after_clean_accuracy": post_clean_acc,
         "after_adv_accuracy": post_adv_acc,
-        "after_asr": post_asr,
+        "post_asr": post_asr if post_asr is not None else 0.0,
+        "post_asr_defined": post_asr is not None,
+        "after_asr": post_asr if post_asr is not None else 0.0,
         "after_vulnerability_score": post_vuln,
         # Deltas
         "asr_reduction_percentage": asr_reduction_pct,
@@ -581,6 +620,7 @@ def execute_configured_defense(
         "clean_accuracy_drop": clean_acc_drop,
         # Artifacts
         "candidate_attempts": attempt_records,
+        "sample_comparisons": sample_comps,
         "sample_restorations": sample_comps,
         "recommendations": hard_res.recommendations or [],
         # In-memory handles

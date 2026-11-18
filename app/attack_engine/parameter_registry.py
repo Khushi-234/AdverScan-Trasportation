@@ -608,7 +608,7 @@ _ATTACK_PARAM_REGISTRY: Dict[str, Dict[str, List[ParameterSpec]]] = {
                 description="Target class index for targeted attack",
                 required=False,
                 conditional_visibility={"targeted": True},
-                aliases=["target", "target_labels"],
+                aliases=["target", "target_labels", "targets"],
                 ui_control="number_input",
             ),
             ParameterSpec(
@@ -1584,6 +1584,14 @@ _ATTACK_PARAM_REGISTRY: Dict[str, Dict[str, List[ParameterSpec]]] = {
                 ui_control="select",
             ),
             ParameterSpec(
+                name="initial_trigger",
+                data_type="str",
+                default=None,
+                description="Optional initial trigger token sequence as string or list of token IDs",
+                required=False,
+                ui_control="text_input",
+            ),
+            ParameterSpec(
                 name="targeted",
                 data_type="bool",
                 default=False,
@@ -1950,7 +1958,18 @@ def validate_attack_params(
             validated_params[canonical_name] = raw_val
 
         elif spec.data_type == "str":
+            if canonical_name == "initial_trigger" and isinstance(raw_val, (list, tuple)):
+                if not all(isinstance(t, int) and not isinstance(t, bool) for t in raw_val):
+                    raise AttackConfigurationError(
+                        f"Parameter '{canonical_name}' list must contain integer token IDs, got {raw_val}."
+                    )
+                validated_params[canonical_name] = list(raw_val)
+                continue
             if not isinstance(raw_val, str):
+                if canonical_name == "initial_trigger":
+                    raise AttackConfigurationError(
+                        f"Parameter '{canonical_name}' must be a string or list of integer token IDs, got {type(raw_val).__name__} ({raw_val})."
+                    )
                 raise AttackConfigurationError(
                     f"Parameter '{canonical_name}' must be a string, got {type(raw_val).__name__} ({raw_val})."
                 )

@@ -7,8 +7,11 @@ serialization helpers (JSON, Markdown text).
 
 from __future__ import annotations
 
+import csv
 from dataclasses import dataclass, field
+import io
 import json
+import math
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
@@ -87,16 +90,25 @@ class ReportResult:
     @staticmethod
     def _sanitize(obj: Any) -> Any:
         """Recursively convert non-JSON-serializable objects to primitives."""
-        if obj is None or isinstance(obj, (int, float, str, bool)):
+        if obj is None or isinstance(obj, (str, bool)):
+            return obj
+        if isinstance(obj, (int, float)):
+            if math.isnan(obj) or math.isinf(obj):
+                return None
             return obj
         if hasattr(obj, "item") and callable(getattr(obj, "item")):
             try:
-                return obj.item()
+                val = obj.item()
+                if isinstance(val, (int, float)):
+                    if math.isnan(val) or math.isinf(val):
+                        return None
+                    return val
+                return val
             except Exception:
                 pass
         if hasattr(obj, "tolist") and callable(getattr(obj, "tolist")):
             try:
-                return obj.tolist()
+                return ReportResult._sanitize(obj.tolist())
             except Exception:
                 pass
         if isinstance(obj, dict):
@@ -153,3 +165,48 @@ class ReportResult:
         path.parent.mkdir(parents=True, exist_ok=True)
         with open(path, "w", encoding="utf-8") as f:
             f.write(self.formatted_report)
+
+    def to_csv(self) -> str:
+        """Serialize execution performance and module timings to CSV string."""
+        buf = io.StringIO()
+        es = self.execution_summary
+        if es is None or not es.modules:
+            writer = csv.writer(buf)
+            writer.writerow(["module_id", "module_name", "status", "elapsed_seconds"])
+            writer.writerow(["N/A", "No execution data captured", "UNKNOWN", 0.0])
+            return buf.getvalue()
+
+        metric_keys: List[str] = []
+        for rec in es.modules:
+            for k in (rec.metrics or {}):
+                col = f"metric_{k}"
+                if col not in metric_keys:
+                    metric_keys.append(col)
+
+        header = ["module_id", "module_name", "status", "elapsed_seconds"] + metric_keys
+        dict_writer = csv.DictWriter(buf, fieldnames=header, extrasaction="ignore")
+        dict_writer.writeheader()
+        for rec in es.modules:
+            row: Dict[str, Any] = {
+                "module_id": rec.module_id,
+                "module_name": rec.module_name,
+                "status": rec.status,
+                "elapsed_seconds": rec.elapsed_seconds,
+            }
+            for mk, mv in (rec.metrics or {}).items():
+                if mv is None or (isinstance(mv, float) and (math.isnan(mv) or math.isinf(mv))):
+                    row[f"metric_{mk}"] = "N/A"
+                else:
+                    row[f"metric_{mk}"] = mv
+            dict_writer.writerow(row)
+        writer = csv.writer(buf)
+        writer.writerow([])
+        writer.writerow(["TOTAL", es.run_label, es.overall_status, es.total_elapsed_seconds])
+        return buf.getvalue()
+
+    def save_csv(self, output_path: Union[str, Path]) -> None:
+        """Save execution performance and module timings as CSV file."""
+        path = Path(output_path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "w", newline="", encoding="utf-8") as f:
+            f.write(self.to_csv())

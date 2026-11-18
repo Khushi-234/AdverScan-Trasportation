@@ -56,15 +56,17 @@ class RotationDefense(BaseDefense):
         self.max_angle = float(cfg.get("max_angle", max_angle))
         self.padding_mode = str(cfg.get("padding_mode", padding_mode)).lower().strip()
 
-        if self.max_angle < 0.0:
-            raise HardeningConfigurationError(f"max_angle must be non-negative, got {self.max_angle}")
+        if self.max_angle <= 0.0:
+            raise HardeningConfigurationError(f"max_angle must be strictly positive, got {self.max_angle}")
 
     def transform(self, inputs: torch.Tensor) -> torch.Tensor:
         """Apply random rotation preserving input dimensions."""
         if not isinstance(inputs, torch.Tensor):
             raise HardeningConfigurationError(f"Expected torch.Tensor, got {type(inputs)}")
         if inputs.ndim != 4:
-            return inputs.clone()
+            raise HardeningConfigurationError(
+                f"RotationDefense requires 4D image tensors (B, C, H, W), got {inputs.ndim}D tensor of shape {tuple(inputs.shape)}"
+            )
 
         if self.max_angle == 0.0:
             return inputs.clone()
@@ -98,13 +100,17 @@ class RotationDefense(BaseDefense):
 
     def apply(
         self,
-        model: nn.Module,
+        model: Any,
         inputs: Optional[torch.Tensor] = None,
         labels: Optional[torch.Tensor] = None,
         **kwargs: Any,
     ) -> HardeningResult:
         start_time = time.time()
         try:
+            if inputs is not None and inputs.ndim != 4:
+                raise HardeningConfigurationError(
+                    f"RotationDefense requires 4D image tensors (B, C, H, W), got {inputs.ndim}D tensor of shape {tuple(inputs.shape)}"
+                )
             hardened_inputs = self.transform(inputs) if inputs is not None else None
             self.mark_hardened_input(hardened_inputs, self.transform)
             wrapped_model = HardenedModelWrapper(model, self.transform, defense_name=self.name)

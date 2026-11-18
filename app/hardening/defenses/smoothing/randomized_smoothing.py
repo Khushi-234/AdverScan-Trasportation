@@ -210,7 +210,7 @@ class RandomizedSmoothingDefense(BaseDefense):
 
     def apply(
         self,
-        model: nn.Module,
+        model: Any,
         inputs: Optional[torch.Tensor] = None,
         labels: Optional[torch.Tensor] = None,
         **kwargs: Any,
@@ -218,6 +218,11 @@ class RandomizedSmoothingDefense(BaseDefense):
         start_time = time.time()
 
         try:
+            if inputs is not None and not inputs.is_floating_point():
+                raise HardeningConfigurationError(
+                    "RandomizedSmoothingDefense requires floating-point inputs; discrete integer token IDs are not supported."
+                )
+
             # Create stochastic wrapper (HardenedModelWrapper subclass)
             smoothed_model = RandomizedSmoothingModel(
                 base_model=model,

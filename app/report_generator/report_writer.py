@@ -125,6 +125,11 @@ class ReportWriter:
                     path = out_dir / f"{stem}.txt"
                     self._write_text(result, path)
                     written["txt"] = str(path.resolve())
+                elif fmt == "pdf":
+                    path = out_dir / f"{stem}.pdf"
+                    pdf_ok = self._write_pdf(result, path)
+                    if pdf_ok:
+                        written["pdf"] = str(path.resolve())
             except Exception as exc:  # noqa: BLE001
                 print(f"  ⚠ ReportWriter: Failed to write '{fmt}' — {exc}")
 
@@ -155,45 +160,30 @@ class ReportWriter:
 
     def _write_csv(self, result: ReportResult, path: Path) -> None:
         """Write a per-module execution timing CSV."""
-        path.parent.mkdir(parents=True, exist_ok=True)
+        result.save_csv(path)
 
-        es = result.execution_summary
-        if es is None or not es.modules:
-            # Write a minimal placeholder
-            with open(path, "w", newline="", encoding="utf-8") as f:
-                writer = csv.writer(f)
-                writer.writerow(["module_id", "module_name", "status", "elapsed_seconds"])
-                writer.writerow(["N/A", "No execution data captured", "UNKNOWN", 0.0])
-            return
+    def _write_pdf(self, result: ReportResult, path: Path) -> bool:
+        """
+        Write the report as a PDF document if a supported PDF engine is available.
+        Returns True if successful, False if no PDF engine is installed.
+        """
+        try:
+            import reportlab  # type: ignore # noqa: F401
+            from reportlab.lib.pagesizes import letter
+            from reportlab.pdfgen import canvas
 
-        # Collect all possible metric column names across modules
-        metric_keys: List[str] = []
-        for rec in es.modules:
-            for k in (rec.metrics or {}):
-                col = f"metric_{k}"
-                if col not in metric_keys:
-                    metric_keys.append(col)
-
-        header = ["module_id", "module_name", "status", "elapsed_seconds"] + metric_keys
-
-        with open(path, "w", newline="", encoding="utf-8") as f:
-            writer = csv.DictWriter(f, fieldnames=header, extrasaction="ignore")
-            writer.writeheader()
-            for rec in es.modules:
-                row: Dict[str, Any] = {
-                    "module_id": rec.module_id,
-                    "module_name": rec.module_name,
-                    "status": rec.status,
-                    "elapsed_seconds": rec.elapsed_seconds,
-                }
-                for mk, mv in (rec.metrics or {}).items():
-                    row[f"metric_{mk}"] = mv
-                writer.writerow(row)
-
-        # Append summary footer row
-        with open(path, "a", newline="", encoding="utf-8") as f:
-            writer = csv.writer(f)
-            writer.writerow([])
-            writer.writerow(
-                ["TOTAL", es.run_label, es.overall_status, es.total_elapsed_seconds]
-            )
+            path.parent.mkdir(parents=True, exist_ok=True)
+            c = canvas.Canvas(str(path), pagesize=letter)
+            textobject = c.beginText(40, 750)
+            textobject.setFont("Courier", 8)
+            for line in result.formatted_report.splitlines():
+                textobject.textLine(line[:95])
+            c.drawText(textobject)
+            c.showPage()
+            c.save()
+            return True
+        except ImportError:
+            return False
+        except Exception as exc:  # noqa: BLE001
+            print(f"  ⚠ ReportWriter: Failed to write PDF — {exc}")
+            return False

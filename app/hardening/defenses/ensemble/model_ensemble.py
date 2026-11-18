@@ -178,7 +178,7 @@ class ModelEnsembleDefense(BaseDefense):
 
     def apply(
         self,
-        model: nn.Module,
+        model: Any,
         inputs: Optional[torch.Tensor] = None,
         labels: Optional[torch.Tensor] = None,
         **kwargs: Any,

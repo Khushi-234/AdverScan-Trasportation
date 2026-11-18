@@ -47,6 +47,11 @@ class ComparisonResult:
     summary_notes: List[str] = field(default_factory=list)
     timestamp: Optional[str] = None
     extra_metadata: Dict[str, Any] = field(default_factory=dict)
+    status: str = "successful"
+    defense_effectiveness: str = "unknown"
+    asr_reduction: Optional[float] = None
+    clean_accuracy_drop: Optional[float] = None
+    threshold_evaluation: Optional[Dict[str, Any]] = None
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert ComparisonResult object to dictionary."""
@@ -81,6 +86,13 @@ class RetestResult:
     timestamp: Optional[str] = None
     execution_time_seconds: float = 0.0
     extra_metadata: Dict[str, Any] = field(default_factory=dict)
+    status: str = "COMPLETED"
+    defense_name: Optional[str] = None
+    defense_config: Dict[str, Any] = field(default_factory=dict)
+    defense_metadata: Dict[str, Any] = field(default_factory=dict)
+    thresholds: Dict[str, Any] = field(default_factory=dict)
+    threshold_evaluation: Dict[str, Any] = field(default_factory=dict)
+    overall_status: str = "accepted"
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert RetestResult object to dictionary representation."""
@@ -99,6 +111,13 @@ class RetestResult:
             "timestamp": self.timestamp,
             "execution_time_seconds": self.execution_time_seconds,
             "extra_metadata": self.extra_metadata,
+            "status": self.status,
+            "defense_name": self.defense_name,
+            "defense_config": self.defense_config,
+            "defense_metadata": self.defense_metadata,
+            "thresholds": self.thresholds,
+            "threshold_evaluation": self.threshold_evaluation,
+            "overall_status": self.overall_status,
         }
         return res_dict
 
