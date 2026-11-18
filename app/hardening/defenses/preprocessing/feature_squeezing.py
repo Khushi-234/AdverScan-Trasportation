@@ -118,6 +118,14 @@ class FeatureSqueezingDefense(BaseDefense):
         """Apply bit-depth feature quantization to tensor."""
         if not isinstance(inputs, torch.Tensor):
             raise HardeningConfigurationError(f"Expected torch.Tensor, got {type(inputs)}")
+        if not inputs.is_floating_point():
+            raise HardeningConfigurationError(
+                "FeatureSqueezingDefense requires floating-point inputs; discrete integer token IDs are not supported."
+            )
+        if inputs.ndim not in (2, 4):
+            raise HardeningConfigurationError(
+                f"FeatureSqueezingDefense supports 2D tabular or 4D image tensors, got {inputs.ndim}D tensor of shape {tuple(inputs.shape)}"
+            )
         return reduce_bit_depth(
             inputs,
             bit_depth=self.bit_depth,
@@ -127,7 +135,7 @@ class FeatureSqueezingDefense(BaseDefense):
 
     def apply(
         self,
-        model: nn.Module,
+        model: Any,
         inputs: Optional[torch.Tensor] = None,
         labels: Optional[torch.Tensor] = None,
         **kwargs: Any,

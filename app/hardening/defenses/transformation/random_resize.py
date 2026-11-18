@@ -60,15 +60,17 @@ class RandomResizeDefense(BaseDefense):
 
         if self.min_scale <= 0.0 or self.max_scale <= 0.0:
             raise HardeningConfigurationError("Scales must be positive numbers.")
-        if self.min_scale > self.max_scale:
-            raise HardeningConfigurationError(f"min_scale ({self.min_scale}) cannot exceed max_scale ({self.max_scale})")
+        if self.min_scale >= self.max_scale:
+            raise HardeningConfigurationError(f"min_scale ({self.min_scale}) must be strictly less than max_scale ({self.max_scale})")
 
     def transform(self, inputs: torch.Tensor) -> torch.Tensor:
         """Apply random resizing transform without modifying input in-place."""
         if not isinstance(inputs, torch.Tensor):
             raise HardeningConfigurationError(f"Expected torch.Tensor, got {type(inputs)}")
         if inputs.ndim != 4:
-            return inputs.clone()
+            raise HardeningConfigurationError(
+                f"RandomResizeDefense requires 4D image tensors (B, C, H, W), got {inputs.ndim}D tensor of shape {tuple(inputs.shape)}"
+            )
 
         b, c, h, w = inputs.shape
         scale = random.uniform(self.min_scale, self.max_scale)
@@ -103,13 +105,17 @@ class RandomResizeDefense(BaseDefense):
 
     def apply(
         self,
-        model: nn.Module,
+        model: Any,
         inputs: Optional[torch.Tensor] = None,
         labels: Optional[torch.Tensor] = None,
         **kwargs: Any,
     ) -> HardeningResult:
         start_time = time.time()
         try:
+            if inputs is not None and inputs.ndim != 4:
+                raise HardeningConfigurationError(
+                    f"RandomResizeDefense requires 4D image tensors (B, C, H, W), got {inputs.ndim}D tensor of shape {tuple(inputs.shape)}"
+                )
             hardened_inputs = self.transform(inputs) if inputs is not None else None
             self.mark_hardened_input(hardened_inputs, self.transform)
             wrapped_model = HardenedModelWrapper(model, self.transform, defense_name=self.name)

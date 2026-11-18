@@ -34,7 +34,7 @@ DEFENSE_CAPABILITIES: Dict[str, Dict[str, Any]] = {
     "gaussian_filter": {
         "defense_type": "preprocessing",
         "defense_family": "preprocessing",
-        "supported_domains": ["image"],
+        "supported_domains": ["image", "time-series", "timeseries"],
         "requires_retraining": False,
         "latency_cost": 5.0,
         "training_cost": 0.0,
