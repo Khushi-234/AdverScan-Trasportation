@@ -83,6 +83,8 @@ DEFENSE_REGISTRY: Dict[str, Type[BaseDefense]] = {
     "median_filter": MedianFilterDefense,
     "image_denoising": ImageDenoisingDefense,
     "feature_squeezing": FeatureSqueezingDefense,
+    "bit_depth_reduction": FeatureSqueezingDefense,
+    "bit_depth": FeatureSqueezingDefense,
     "jpeg_compression": JPEGCompressionDefense,
     "preprocessing": PreprocessingDefense,
     # Smoothing

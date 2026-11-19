@@ -74,20 +74,29 @@ class ConfidenceRejectionModelWrapper(nn.Module):
                 - is_rejected: BoolTensor indicating which samples are rejected
                 - coverage: Proportion of accepted samples (1 - rejection_rate)
         """
-        self.model.eval()
+        if hasattr(self.model, "eval"):
+            self.model.eval()
         with torch.no_grad():
-            outputs = self.model(x)
-            if isinstance(outputs, tuple):
-                outputs = outputs[0]
-
-            if outputs.ndim > 1 and outputs.size(1) > 1:
-                probs = F.softmax(outputs, dim=1)
+            if not isinstance(self.model, nn.Module) and hasattr(self.model, "predict_proba"):
+                import numpy as np
+                x_np = x.detach().cpu().numpy() if isinstance(x, torch.Tensor) else np.asarray(x)
+                probs_np = self.model.predict_proba(x_np)
+                probs = torch.from_numpy(probs_np).float()
+                outputs = torch.log(probs.clamp_min(1e-12))
                 max_probs, preds = torch.max(probs, dim=1)
             else:
-                p = torch.sigmoid(outputs).squeeze(-1)
-                probs = torch.stack([1.0 - p, p], dim=-1)
-                max_probs = torch.max(p, 1.0 - p)
-                preds = (p >= 0.5).long()
+                outputs = self.model(x)
+                if isinstance(outputs, tuple):
+                    outputs = outputs[0]
+
+                if outputs.ndim > 1 and outputs.size(1) > 1:
+                    probs = F.softmax(outputs, dim=1)
+                    max_probs, preds = torch.max(probs, dim=1)
+                else:
+                    p = torch.sigmoid(outputs).squeeze(-1)
+                    probs = torch.stack([1.0 - p, p], dim=-1)
+                    max_probs = torch.max(p, 1.0 - p)
+                    preds = (p >= 0.5).long()
 
             is_rejected = max_probs < self.threshold
             coverage = float((~is_rejected).float().mean().item()) if len(is_rejected) > 0 else 0.0
@@ -145,14 +154,16 @@ class ConfidenceRejectionDefense(BaseDefense):
 
     def apply(
         self,
-        model: nn.Module,
+        model: Any,
         inputs: Optional[torch.Tensor] = None,
         labels: Optional[torch.Tensor] = None,
         **kwargs: Any,
     ) -> HardeningResult:
         start_time = time.time()
+        was_training = getattr(model, "training", False)
         try:
-            model.eval()
+            if hasattr(model, "eval"):
+                model.eval()
             wrapped_model = ConfidenceRejectionModelWrapper(
                 model=model,
                 threshold=self.threshold,
@@ -248,3 +259,9 @@ class ConfidenceRejectionDefense(BaseDefense):
             if isinstance(e, HardeningConfigurationError):
                 raise
             raise DefenseExecutionError(f"ConfidenceRejectionDefense failed: {str(e)}") from e
+        finally:
+            if hasattr(model, "train") and hasattr(model, "eval"):
+                if was_training:
+                    model.train()
+                else:
+                    model.eval()

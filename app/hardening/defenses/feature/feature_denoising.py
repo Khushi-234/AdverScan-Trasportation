@@ -144,6 +144,10 @@ class FeatureDenoisedModelWrapper(nn.Module):
             self._hook_handle.remove()
             self._hook_handle = None
 
+    def cleanup(self) -> None:
+        """Alias for remove_hook to ensure resource release."""
+        self.remove_hook()
+
 
 class FeatureDenoisingDefense(BaseDefense):
     """
@@ -184,8 +188,8 @@ class FeatureDenoisingDefense(BaseDefense):
         self.method = str(cfg.get("method", method)).lower().strip()
         self.strength = float(cfg.get("strength", strength))
 
-        if not (0.0 <= self.strength <= 1.0):
-            raise HardeningConfigurationError(f"strength must be in [0.0, 1.0], got {self.strength}")
+        if not (0.0 < self.strength <= 1.0):
+            raise HardeningConfigurationError(f"strength must be strictly positive in (0.0, 1.0], got {self.strength}")
         if self.method not in ("mean", "soft_threshold"):
             raise HardeningConfigurationError(
                 f"Unsupported feature denoising method '{self.method}'. Supported: ['mean', 'soft_threshold']"
@@ -193,11 +197,15 @@ class FeatureDenoisingDefense(BaseDefense):
 
     def apply(
         self,
-        model: nn.Module,
+        model: Any,
         inputs: Optional[torch.Tensor] = None,
         labels: Optional[torch.Tensor] = None,
         **kwargs: Any,
     ) -> HardeningResult:
+        if not isinstance(model, nn.Module):
+            raise HardeningConfigurationError(
+                f"FeatureDenoisingDefense requires a PyTorch nn.Module with intermediate layers for hook registration, got {type(model)}"
+            )
         start_time = time.time()
         try:
             wrapped_model = FeatureDenoisedModelWrapper(

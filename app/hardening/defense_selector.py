@@ -598,7 +598,7 @@ class DefenseSelector:
                 latency_efficiency_score = 1.0
 
             # 4. Composite Score Calculation
-            if not robustness_available:
+            if not robustness_available or norm_robustness is None:
                 # Dynamically rebalance remaining weights (performance + latency) without faking zero ASR
                 total_remaining = w_perf + w_lat
                 norm_w_perf = w_perf / total_remaining if total_remaining > 0 else 0.5

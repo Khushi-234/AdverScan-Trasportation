@@ -31,6 +31,56 @@ class HardeningMetadata:
 
 
 @dataclass
+class DefenseAttemptResult:
+    """
+    Evaluation result for an individual defense candidate attempt during iterative defense selection.
+
+    Attributes:
+        defense_name: Name/identifier of the attempted defense candidate.
+        status: Evaluation status ("accepted", "insufficient", "harmful").
+        is_improved: True if any measurable improvement occurred (vuln score or ASR reduced).
+        improvement_sufficient: True if improvement satisfies all configured acceptance thresholds.
+        vuln_score_before: Baseline vulnerability score before defense.
+        vuln_score_after: Vulnerability score after defense.
+        vuln_score_improvement: Vulnerability score reduction (before - after).
+        asr_before: Baseline Attack Success Rate before defense.
+        asr_after: Attack Success Rate after defense.
+        asr_reduction: ASR reduction (before - after).
+        clean_accuracy_before: Baseline clean accuracy before defense.
+        clean_accuracy_after: Clean accuracy after defense.
+        clean_accuracy_drop: Clean accuracy drop (before - after).
+        clean_accuracy_drop_pct_points: Clean accuracy drop in percentage points.
+        latency_ms: Inference latency after defense (ms).
+        latency_overhead_ms: Latency overhead compared to baseline (ms).
+        parameters: Defense configuration parameters used for this attempt.
+        reason: Clear explanation of acceptance, insufficiency, or harm.
+    """
+
+    defense_name: str
+    status: str
+    is_improved: bool
+    improvement_sufficient: bool
+    vuln_score_before: Optional[float] = None
+    vuln_score_after: Optional[float] = None
+    vuln_score_improvement: Optional[float] = None
+    asr_before: Optional[float] = None
+    asr_after: Optional[float] = None
+    asr_reduction: Optional[float] = None
+    clean_accuracy_before: Optional[float] = None
+    clean_accuracy_after: Optional[float] = None
+    clean_accuracy_drop: Optional[float] = None
+    clean_accuracy_drop_pct_points: Optional[float] = None
+    latency_ms: Optional[float] = None
+    latency_overhead_ms: Optional[float] = None
+    parameters: Dict[str, Any] = field(default_factory=dict)
+    reason: Optional[str] = None
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert attempt result to dictionary."""
+        return asdict(self)
+
+
+@dataclass
 class HardeningResult:
     """
     Standardized result contract returned by the Hardening Engine.
@@ -44,6 +94,13 @@ class HardeningResult:
         metrics_before: Optional metric mapping before hardening (e.g., baseline/adversarial accuracy).
         metrics_after: Optional metric mapping after hardening (e.g., hardened adversarial accuracy).
         recommendations: Recommended follow-up hardening steps or evaluation notes.
+        selected_defense: Name of the defense that was finally selected (or None if none accepted).
+        defense_attempts: List of DefenseAttemptResult records evaluated during iterative selection.
+        num_attempts: Total count of defense attempts made.
+        is_improved: True if any measurable improvement was achieved.
+        improvement_sufficient: True if selected defense met configured acceptance thresholds.
+        status: Overall result status ("accepted", "insufficient", "harmful").
+        thresholds: Optional serialized dictionary of configured acceptance thresholds.
     """
 
     hardened_model: Any
@@ -55,14 +112,34 @@ class HardeningResult:
     metrics_after: Dict[str, Any] = field(default_factory=dict)
     recommendations: List[str] = field(default_factory=list)
 
+    # Iterative defense selection attributes
+    selected_defense: Optional[str] = None
+    defense_attempts: List[DefenseAttemptResult] = field(default_factory=list)
+    num_attempts: int = 1
+    is_improved: bool = False
+    improvement_sufficient: bool = False
+    status: str = "accepted"
+    thresholds: Optional[Dict[str, Any]] = None
+
     def to_dict(self) -> Dict[str, Any]:
         """
-        Convert HardeningResult metadata and evaluation metrics to dictionary format.
+        Convert HardeningResult metadata, evaluation metrics, and attempts to dictionary format.
         Note: Model tensors and callables are excluded or converted to descriptive strings.
         """
+        attempts_dicts = [
+            att.to_dict() if hasattr(att, "to_dict") else att
+            for att in self.defense_attempts
+        ]
         res_dict = {
             "metadata": asdict(self.metadata),
             "success": self.success,
+            "status": self.status,
+            "selected_defense": self.selected_defense or self.metadata.defense_name,
+            "num_attempts": self.num_attempts,
+            "is_improved": self.is_improved,
+            "improvement_sufficient": self.improvement_sufficient,
+            "thresholds": self.thresholds,
+            "defense_attempts": attempts_dicts,
             "metrics_before": self.metrics_before,
             "metrics_after": self.metrics_after,
             "recommendations": self.recommendations,
