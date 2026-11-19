@@ -10,7 +10,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from app.explainability.utils import to_numpy, to_tensor, unwrap_model
+from app.explainability.utils import extract_logits, to_numpy, to_tensor, unwrap_model
 from app.explainability.modality import Modality
 from app.explainability.techniques.base import BaseExplainer
 
@@ -81,8 +81,9 @@ class GradientExplainer(BaseExplainer):
         else:
             return self._explain_saliency(unwrapped, inputs, target_class=target_class, **kwargs)
 
-    def _get_target_class(self, outputs: torch.Tensor, target_class: Optional[int]) -> int:
+    def _get_target_class(self, outputs: Any, target_class: Optional[int]) -> int:
         """Infer target class if not explicitly provided."""
+        outputs = extract_logits(outputs)
         if target_class is not None:
             return int(target_class)
         if outputs.ndim >= 2:
@@ -93,8 +94,9 @@ class GradientExplainer(BaseExplainer):
             return int(torch.argmax(outputs, dim=0).item())
         return 0
 
-    def _get_target_score(self, outputs: torch.Tensor, c: int) -> torch.Tensor:
+    def _get_target_score(self, outputs: Any, c: int) -> torch.Tensor:
         """Extract scalar score for target class c, handling single-output binary models safely."""
+        outputs = extract_logits(outputs)
         if outputs.ndim == 1 and len(outputs) == 1:
             raw = outputs[0]
             return raw if c == 1 else -raw
@@ -129,7 +131,7 @@ class GradientExplainer(BaseExplainer):
             x = to_tensor(inputs).to(device).clone().detach().requires_grad_(True)
 
             model_eval = model.eval()
-            outputs = model_eval(x)
+            outputs = extract_logits(model_eval(x))
             c = self._get_target_class(outputs, target_class)
             score = self._get_target_score(outputs, c)
 
@@ -214,7 +216,7 @@ class GradientExplainer(BaseExplainer):
 
             model_eval = model.eval()
             with torch.no_grad():
-                init_out = model_eval(x)
+                init_out = extract_logits(model_eval(x))
             c = self._get_target_class(init_out, target_class)
 
             # Batched path interpolation
@@ -225,7 +227,7 @@ class GradientExplainer(BaseExplainer):
             out_chunks = []
             for i in range(0, len(x_steps), batch_size):
                 chunk = x_steps[i:i + batch_size]
-                out_chunks.append(model_eval(chunk))
+                out_chunks.append(extract_logits(model_eval(chunk)))
             out_batch = torch.cat(out_chunks, dim=0) if len(out_chunks) > 1 else out_chunks[0]
 
             if out_batch.ndim == 1 or (out_batch.ndim == 2 and out_batch.shape[1] == 1):
@@ -324,7 +326,7 @@ class GradientExplainer(BaseExplainer):
 
             try:
                 model_eval = model.eval()
-                out = model_eval(x)
+                out = extract_logits(model_eval(x))
                 c = self._get_target_class(out, target_class)
                 score = self._get_target_score(out, c)
 

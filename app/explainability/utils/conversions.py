@@ -15,17 +15,20 @@ def unwrap_model(model: Any) -> Any:
 
     Traverses through common wrapper attributes (`get_model()`, `_model`, `model`)
     while guarding against circular references.
-
-    Args:
-        model: Model instance, adapter, or callable.
-
-    Returns:
-        Underlying PyTorch nn.Module, scikit-learn estimator, or callable.
     """
     curr = model
     visited = set()
     while curr is not None and id(curr) not in visited:
         visited.add(id(curr))
+        # If curr is already a PyTorch nn.Module, do not traverse internal submodules like self.model
+        if isinstance(curr, torch.nn.Module):
+            if hasattr(curr, "get_model") and callable(curr.get_model):
+                inner = curr.get_model()
+                if inner is not curr and inner is not None:
+                    curr = inner
+                    continue
+            break
+
         if hasattr(curr, "get_model") and callable(curr.get_model):
             curr = curr.get_model()
         elif hasattr(curr, "_model") and curr._model is not None and curr._model is not curr:
@@ -35,6 +38,30 @@ def unwrap_model(model: Any) -> Any:
         else:
             break
     return curr
+
+
+def extract_logits(outputs: Any) -> Any:
+    """
+    Extract classification logits tensor from model outputs.
+    Handles standard Tensors, HuggingFace ModelOutput instances (.logits, .prediction_logits, .prediction_outputs),
+    and dictionary/tuple wrappers.
+    """
+    if hasattr(outputs, "logits") and outputs.logits is not None:
+        return outputs.logits
+    if hasattr(outputs, "prediction_logits") and outputs.prediction_logits is not None:
+        return outputs.prediction_logits
+    if hasattr(outputs, "prediction_outputs") and outputs.prediction_outputs is not None:
+        return outputs.prediction_outputs
+    if hasattr(outputs, "last_hidden_state") and outputs.last_hidden_state is not None:
+        return outputs.last_hidden_state
+    if isinstance(outputs, (tuple, list)) and len(outputs) > 0:
+        return outputs[0]
+    if hasattr(outputs, "get") and callable(getattr(outputs, "get")):
+        for k in ("logits", "prediction_logits", "prediction_outputs"):
+            val = outputs.get(k)
+            if val is not None:
+                return val
+    return outputs
 
 
 def to_numpy(x: Any, dtype: Optional[Any] = None) -> np.ndarray:

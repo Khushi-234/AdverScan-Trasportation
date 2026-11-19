@@ -12,7 +12,7 @@ except ImportError:
     shap = None
     _SHAP_AVAILABLE = False
 
-from app.explainability.utils import predict_proba_np, to_numpy, to_tensor, unwrap_model
+from app.explainability.utils import extract_logits, predict_proba_np, to_numpy, to_tensor, unwrap_model
 from app.explainability.modality import Modality
 from app.explainability.techniques.base import BaseExplainer
 from app.explainability.techniques.tree_shap_explainer import TreeSHAPExplainer
@@ -38,6 +38,64 @@ class SHAPExplainer(BaseExplainer):
         """Initialize SHAPExplainer."""
         self.kwargs = kwargs
         self.is_available = _SHAP_AVAILABLE
+
+    def _eval_model(self, model: Any, x_tensor: Any) -> np.ndarray:
+        """Helper to safely evaluate model and return 2D numpy array (batch_size, num_classes)."""
+        import torch
+
+        if hasattr(model, "predict") and callable(getattr(model, "predict")):
+            res = model.predict(x_tensor, return_numpy=True)
+        elif callable(model):
+            model_eval = model.eval() if hasattr(model, "eval") else model
+            with torch.no_grad():
+                res = model_eval(x_tensor)
+        else:
+            raise TypeError("Model must be callable or possess a callable predict method.")
+
+        res = extract_logits(res)
+
+        if isinstance(res, torch.Tensor):
+            res = res.detach().cpu().numpy()
+
+        res_np = np.asarray(res, dtype=np.float32)
+        if res_np.ndim == 1:
+            res_np = res_np.reshape(1, -1)
+        return res_np
+
+    def _extract_target_attribution(
+        self, shap_values: Any, target_class: Optional[int] = None, batch_size: int = 1
+    ) -> np.ndarray:
+        """Extract numpy attribution array for the target class from SHAP output."""
+        if hasattr(shap_values, "values"):
+            vals = shap_values.values
+        else:
+            vals = shap_values
+
+        tc_idx = target_class if target_class is not None else 0
+
+        if isinstance(vals, list):
+            tc = max(0, min(tc_idx, len(vals) - 1))
+            arr = vals[tc]
+        elif isinstance(vals, np.ndarray):
+            if vals.ndim == 3:
+                s = vals.shape
+                if s[0] == batch_size:
+                    # Shape (B, F, num_classes)
+                    tc = max(0, min(tc_idx, s[2] - 1))
+                    arr = vals[:, :, tc]
+                elif s[1] == batch_size:
+                    # Shape (num_classes, B, F)
+                    tc = max(0, min(tc_idx, s[0] - 1))
+                    arr = vals[tc, :, :]
+                else:
+                    tc = max(0, min(tc_idx, s[2] - 1))
+                    arr = vals[:, :, tc]
+            else:
+                arr = vals
+        else:
+            arr = np.asarray(vals, dtype=np.float64)
+
+        return np.asarray(arr, dtype=np.float64)
 
     def explain(
         self,
