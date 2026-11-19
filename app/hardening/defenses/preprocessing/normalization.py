@@ -72,6 +72,11 @@ class NormalizationDefense(BaseDefense):
         if not isinstance(inputs, torch.Tensor):
             raise HardeningConfigurationError(f"Expected torch.Tensor, got {type(inputs)}")
 
+        if not inputs.is_floating_point():
+            raise HardeningConfigurationError(
+                "NormalizationDefense requires a floating-point tensor; discrete integer token IDs are not supported."
+            )
+
         x = inputs.clone()
 
         if self.norm_type == "mean_std":
@@ -90,14 +95,23 @@ class NormalizationDefense(BaseDefense):
                 else:
                     std_t = torch.tensor(list(self.std), device=device, dtype=dtype)
 
-                # Broadcast to (1, C, 1, 1) if 4D image tensor, or (1, C) if 2D
+                # Broadcast to (1, C, 1, 1) if 4D image tensor, or (1, C) if 2D, or (1, C, 1) if 3D
                 if x.ndim == 4 and mean_t.ndim == 1:
                     mean_t = mean_t.view(1, -1, 1, 1)
                     std_t = std_t.view(1, -1, 1, 1)
+                elif x.ndim == 3 and mean_t.ndim == 1:
+                    mean_t = mean_t.view(1, -1, 1)
+                    std_t = std_t.view(1, -1, 1)
                 elif x.ndim == 2 and mean_t.ndim == 1:
                     mean_t = mean_t.view(1, -1)
                     std_t = std_t.view(1, -1)
 
+                x = (x - mean_t) / (std_t + 1e-8)
+            elif self.clip_min is None and self.clip_max is None:
+                # Default standardization across samples to prevent silent no-op
+                dims = tuple(range(1, x.ndim)) if x.ndim > 1 else (0,)
+                mean_t = x.mean(dim=dims, keepdim=True)
+                std_t = x.std(dim=dims, keepdim=True)
                 x = (x - mean_t) / (std_t + 1e-8)
 
         elif self.norm_type == "min_max":
@@ -124,7 +138,7 @@ class NormalizationDefense(BaseDefense):
 
     def apply(
         self,
-        model: nn.Module,
+        model: Any,
         inputs: Optional[torch.Tensor] = None,
         labels: Optional[torch.Tensor] = None,
         **kwargs: Any,

@@ -87,18 +87,24 @@ class MedianFilterDefense(BaseDefense):
         if not isinstance(inputs, torch.Tensor):
             raise HardeningConfigurationError(f"Expected torch.Tensor, got {type(inputs)}")
         if inputs.ndim != 4:
-            return inputs.clone()
+            raise HardeningConfigurationError(
+                f"MedianFilterDefense requires 4D image tensors (B, C, H, W), got {inputs.ndim}D tensor of shape {tuple(inputs.shape)}"
+            )
         return apply_median_filter_2d(inputs, kernel_size=self.kernel_size)
 
     def apply(
         self,
-        model: nn.Module,
+        model: Any,
         inputs: Optional[torch.Tensor] = None,
         labels: Optional[torch.Tensor] = None,
         **kwargs: Any,
     ) -> HardeningResult:
         start_time = time.time()
         try:
+            if inputs is not None and inputs.ndim != 4:
+                raise HardeningConfigurationError(
+                    f"MedianFilterDefense requires 4D image tensors (B, C, H, W), got {inputs.ndim}D tensor of shape {tuple(inputs.shape)}"
+                )
             hardened_inputs = self.filter(inputs) if inputs is not None else None
             self.mark_hardened_input(hardened_inputs, self.filter)
             wrapped_model = HardenedModelWrapper(model, self.filter, defense_name=self.name)

@@ -219,12 +219,13 @@ class FeatureAlignmentDefense(BaseDefense):
 
     def apply(
         self,
-        model: nn.Module,
+        model: Any,
         inputs: Optional[torch.Tensor] = None,
         labels: Optional[torch.Tensor] = None,
         **kwargs: Any,
     ) -> HardeningResult:
         start_time = time.time()
+        was_training = getattr(model, "training", False)
         try:
             wrapped_model = FeatureAlignmentModelWrapper(
                 base_model=model,
@@ -248,7 +249,6 @@ class FeatureAlignmentDefense(BaseDefense):
 
             hardened_inputs = inputs.clone() if inputs is not None else None
             exec_time = time.time() - start_time
-
             meta = HardeningMetadata(
                 defense_name=self.name,
                 defense_type=self.defense_type,
@@ -278,3 +278,9 @@ class FeatureAlignmentDefense(BaseDefense):
             if isinstance(e, HardeningConfigurationError):
                 raise
             raise DefenseExecutionError(f"FeatureAlignmentDefense failed: {str(e)}") from e
+        finally:
+            if hasattr(model, "train") and hasattr(model, "eval"):
+                if was_training:
+                    model.train()
+                else:
+                    model.eval()

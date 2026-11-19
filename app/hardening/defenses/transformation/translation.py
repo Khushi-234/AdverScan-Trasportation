@@ -60,13 +60,17 @@ class TranslationDefense(BaseDefense):
 
         if self.max_dx < 0.0 or self.max_dy < 0.0:
             raise HardeningConfigurationError("max_dx and max_dy must be non-negative.")
+        if self.max_dx == 0.0 and self.max_dy == 0.0:
+            raise HardeningConfigurationError("At least one of max_dx or max_dy must be strictly positive.")
 
     def transform(self, inputs: torch.Tensor) -> torch.Tensor:
         """Apply random translation preserving input dimensions."""
         if not isinstance(inputs, torch.Tensor):
             raise HardeningConfigurationError(f"Expected torch.Tensor, got {type(inputs)}")
         if inputs.ndim != 4:
-            return inputs.clone()
+            raise HardeningConfigurationError(
+                f"TranslationDefense requires 4D image tensors (B, C, H, W), got {inputs.ndim}D tensor of shape {tuple(inputs.shape)}"
+            )
 
         if self.max_dx == 0.0 and self.max_dy == 0.0:
             return inputs.clone()
@@ -98,13 +102,17 @@ class TranslationDefense(BaseDefense):
 
     def apply(
         self,
-        model: nn.Module,
+        model: Any,
         inputs: Optional[torch.Tensor] = None,
         labels: Optional[torch.Tensor] = None,
         **kwargs: Any,
     ) -> HardeningResult:
         start_time = time.time()
         try:
+            if inputs is not None and inputs.ndim != 4:
+                raise HardeningConfigurationError(
+                    f"TranslationDefense requires 4D image tensors (B, C, H, W), got {inputs.ndim}D tensor of shape {tuple(inputs.shape)}"
+                )
             hardened_inputs = self.transform(inputs) if inputs is not None else None
             self.mark_hardened_input(hardened_inputs, self.transform)
             wrapped_model = HardenedModelWrapper(model, self.transform, defense_name=self.name)
