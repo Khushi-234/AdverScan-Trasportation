@@ -264,10 +264,16 @@ class SoftDTWAttack(BaseAttack):
             )
 
         is_2d = inputs.dim() == 2
+        is_channels_first = False
         if is_2d:
             inputs_3d = inputs.unsqueeze(-1)
         else:
-            inputs_3d = inputs
+            # Detect (B, C, T) vs (B, T, C)
+            if inputs.dim() == 3 and inputs.shape[1] == 1 and inputs.shape[2] > 1:
+                is_channels_first = True
+                inputs_3d = inputs.transpose(1, 2)
+            else:
+                inputs_3d = inputs
 
         params = config.params or {}
         targeted = params.get("targeted", False)
@@ -279,7 +285,12 @@ class SoftDTWAttack(BaseAttack):
         x_orig = inputs_3d.clone().detach().to(device)
 
         def forward_model(x_tensor: torch.Tensor) -> Any:
-            m_in = x_tensor.squeeze(-1) if is_2d else x_tensor
+            if is_2d:
+                m_in = x_tensor.squeeze(-1)
+            elif is_channels_first:
+                m_in = x_tensor.transpose(1, 2)
+            else:
+                m_in = x_tensor
             return self.raw_model(m_in)
 
         if labels is None:
@@ -349,6 +360,8 @@ class SoftDTWAttack(BaseAttack):
             )
             if is_2d:
                 clamped = clamped.squeeze(-1).contiguous()
+            elif is_channels_first:
+                clamped = clamped.transpose(1, 2).contiguous()
             return clamped
 
         loss_fn = (
@@ -430,6 +443,8 @@ class SoftDTWAttack(BaseAttack):
             res = final_warped.detach().contiguous()
             if is_2d:
                 res = res.squeeze(-1).contiguous()
+            elif is_channels_first:
+                res = res.transpose(1, 2).contiguous()
             return res
 
         except AttackExecutionError:
