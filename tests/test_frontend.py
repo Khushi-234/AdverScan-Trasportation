@@ -987,6 +987,192 @@ def test_vae_attack_auto_equips_fallback_vae():
     assert "asr_percentage" in res
 
 
+def test_xai_session_state_and_navigation():
+    """Verify session state management for XAI analysis stage and explanation caching."""
+    from frontend.utils.session_state import (
+        get_workflow_stage,
+        set_workflow_stage,
+        get_xai_result,
+        set_xai_result,
+        get_defense_xai_result,
+        set_defense_xai_result,
+    )
+    set_workflow_stage("xai_analysis")
+    assert get_workflow_stage() == "xai_analysis"
+
+    mock_xai = {"technique": "saliency", "executed": True, "clean_prediction": 1, "adversarial_prediction": 0}
+    set_xai_result(mock_xai)
+    assert get_xai_result() == mock_xai
+
+    mock_def_xai = {"technique": "saliency", "executed": True, "clean_prediction": 1, "adversarial_prediction": 1}
+    set_defense_xai_result(mock_def_xai)
+    assert get_defense_xai_result() == mock_def_xai
+
+
+def test_get_available_xai_techniques_modalities():
+    """Verify detection of available XAI techniques and suggested techniques across diverse modalities."""
+    from frontend.services.xai_service import get_available_xai_techniques, get_suggested_xai_technique
+
+    for mod in ["image", "text", "tabular", "timeseries", "audio"]:
+        techs = get_available_xai_techniques(domain=mod)
+        assert isinstance(techs, list)
+        assert len(techs) > 0
+
+        suggested = get_suggested_xai_technique(domain=mod)
+        assert isinstance(suggested, str)
+        assert suggested in techs
+
+
+def test_session_state_active_assessment_populates_model():
+    """Verify that set_active_assessment and get_active_assessment ensure model is populated."""
+    from frontend.utils.session_state import set_active_assessment, get_active_assessment
+
+    dummy_adapter = object()
+    set_active_assessment({"adapter": dummy_adapter, "domain": "tabular"})
+    active = get_active_assessment()
+    assert active is not None
+    assert active.get("model") is dummy_adapter
+
+
+def test_xai_visualizer_modality_independent():
+    """Verify modality-independent visualizer functions render without exceptions."""
+    import numpy as np
+    from frontend.components.xai_visualizer import (
+        render_dynamic_xai_dashboard,
+        render_pre_post_defense_comparison,
+        render_feature_importance_bars,
+        render_spatial_heatmaps,
+        render_token_attribution_view,
+        render_temporal_attribution_curve,
+    )
+
+    # 1. Tabular mock
+    tabular_xai = {
+        "status": "success",
+        "executed": True,
+        "technique": "shap",
+        "clean_prediction": 1,
+        "adversarial_prediction": 0,
+        "clean_confidence": 0.92,
+        "adversarial_confidence": 0.88,
+        "prediction_changed": True,
+        "local_explanation": {
+            "clean_top_features": [{"feature": "age", "weight": 0.45}, {"feature": "income", "weight": -0.32}],
+            "adversarial_top_features": [{"feature": "age", "weight": -0.10}, {"feature": "income", "weight": 0.65}],
+            "attribution_drift": 0.55,
+        },
+    }
+    render_dynamic_xai_dashboard(tabular_xai)
+    assert render_feature_importance_bars(tabular_xai) is True
+
+    # 2. Image / Spatial mock (2D attribution)
+    spatial_xai = {
+        "status": "success",
+        "executed": True,
+        "technique": "saliency",
+        "clean_prediction": 3,
+        "adversarial_prediction": 7,
+        "clean_confidence": 0.98,
+        "adversarial_confidence": 0.91,
+        "prediction_changed": True,
+        "clean_attribution": np.random.rand(28, 28),
+        "adversarial_attribution": np.random.rand(28, 28),
+    }
+    render_dynamic_xai_dashboard(spatial_xai)
+    assert render_spatial_heatmaps(spatial_xai) is True
+
+    # 3. Text mock (tokens)
+    text_xai = {
+        "status": "success",
+        "executed": True,
+        "technique": "integrated_gradients",
+        "clean_prediction": 1,
+        "adversarial_prediction": 0,
+        "prediction_changed": True,
+        "local_explanation": {
+            "tokens": ["The", "movie", "was", "terrible", "!", "bad"],
+            "attributions": [0.05, 0.1, 0.0, -0.8, -0.2, -0.9],
+        },
+    }
+    render_dynamic_xai_dashboard(text_xai)
+    assert render_token_attribution_view(text_xai) is True
+
+    # 4. Time-series mock (1D temporal sequence)
+    ts_xai = {
+        "status": "success",
+        "executed": True,
+        "technique": "saliency",
+        "clean_prediction": 0,
+        "adversarial_prediction": 1,
+        "prediction_changed": True,
+        "clean_attribution": np.random.rand(50),
+        "adversarial_attribution": np.random.rand(50),
+    }
+    render_dynamic_xai_dashboard(ts_xai)
+    assert render_temporal_attribution_curve(ts_xai) is True
+
+    # 5. Pre vs Post defense comparison
+    post_def_xai = dict(tabular_xai)
+    post_def_xai["adversarial_prediction"] = 1  # Restored!
+    post_def_xai["prediction_changed"] = False
+    render_pre_post_defense_comparison(tabular_xai, post_def_xai)
+
+
+def test_report_generation_with_and_without_xai():
+    """Verify Section 9 population in security report generation when XAI is executed vs skipped."""
+    from frontend.services.report_service import generate_security_report
+
+    model_meta = {"Model Name": "TestNet", "Architecture": "CNN", "Framework": "PyTorch"}
+    dataset_info = {"dataset_name": "TestBatch", "total_samples": 10}
+    attack_res = {
+        "attack_name": "PGD",
+        "asr_percentage": 75.0,
+        "clean_accuracy": 100.0,
+        "adversarial_accuracy": 25.0,
+        "clean_confidence": 95.0,
+        "adversarial_confidence": 60.0,
+        "accuracy_drop": 75.0,
+        "confidence_drop": 35.0,
+        "total_samples": 10,
+    }
+
+    # Case A: Report without XAI (skipped)
+    rep_no_xai = generate_security_report(
+        model_metadata=model_meta,
+        dataset_info=dataset_info,
+        attack_result=attack_res,
+        xai_result=None,
+    )
+    assert rep_no_xai is not None
+    rep_no_xai_dict = rep_no_xai.to_dict()
+    assert "xai_findings" in rep_no_xai_dict
+    assert rep_no_xai_dict["xai_findings"] == {}
+
+    # Case B: Report with XAI result
+    xai_findings = {
+        "technique": "integrated_gradients",
+        "status": "success",
+        "clean_prediction": 1,
+        "adversarial_prediction": 0,
+        "local_explanation": {
+            "clean_top_features": [{"feature": "f1", "weight": 0.8}],
+            "adversarial_top_features": [{"feature": "f2", "weight": -0.9}],
+            "attribution_drift": 0.65,
+        },
+    }
+    rep_with_xai = generate_security_report(
+        model_metadata=model_meta,
+        dataset_info=dataset_info,
+        attack_result=attack_res,
+        xai_result=xai_findings,
+    )
+    assert rep_with_xai is not None
+    rep_with_xai_dict = rep_with_xai.to_dict()
+    assert rep_with_xai_dict["xai_findings"]["technique"] == "integrated_gradients"
+    assert rep_with_xai_dict["xai_findings"]["local_explanation"]["attribution_drift"] == 0.65
+
+
+
 
 
 

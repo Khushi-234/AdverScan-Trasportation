@@ -21,6 +21,7 @@ DEFAULT_SESSION_STATE: Dict[str, Any] = {
     "active_metadata_dict": None,
     "active_attack_name": None,
     "active_defense_name": None,
+    "active_xai_technique": None,
     "last_error": None,
     # Internal in-memory handles for the active assessment run
     "_active_assessment_data": None,
@@ -30,7 +31,9 @@ DEFAULT_SESSION_STATE: Dict[str, Any] = {
     "_test_labels": None,
     "_latest_attack_result": None,
     "_latest_vulnerability_result": None,
+    "_latest_xai_result": None,
     "_latest_defense_result": None,
+    "_latest_defense_xai_result": None,
     "_latest_report_result": None,
 }
 
@@ -79,6 +82,7 @@ def set_workflow_stage(stage: str) -> None:
         "ingestion",
         "attack_config",
         "attack_results",
+        "xai_analysis",
         "defense_config",
         "defense_results",
         "report",
@@ -93,9 +97,12 @@ def set_workflow_stage(stage: str) -> None:
 def set_active_assessment(data: Dict[str, Any]) -> None:
     """Store loaded model and dataset context into active session state."""
     init_session_state()
+    if isinstance(data, dict) and not data.get("model"):
+        data["model"] = data.get("adapter") or data.get("raw_model")
     st.session_state["is_assessment_active"] = True
     st.session_state["_active_assessment_data"] = data
     st.session_state["_active_adapter"] = data.get("adapter")
+    st.session_state["_active_model"] = data.get("model") or data.get("adapter") or data.get("raw_model")
     st.session_state["_active_metadata"] = data.get("metadata")
     st.session_state["_test_inputs"] = data.get("test_inputs")
     st.session_state["_test_labels"] = data.get("test_labels")
@@ -118,11 +125,14 @@ def get_active_assessment() -> Optional[Dict[str, Any]]:
         return None
 
     stored = st.session_state.get("_active_assessment_data")
-    if isinstance(stored, dict) and stored.get("adapter") is not None:
+    if isinstance(stored, dict) and (stored.get("adapter") is not None or stored.get("model") is not None):
+        if not stored.get("model"):
+            stored["model"] = stored.get("adapter") or stored.get("raw_model")
         return stored
 
     return {
         "adapter": st.session_state.get("_active_adapter"),
+        "model": st.session_state.get("_active_model") or st.session_state.get("_active_adapter"),
         "metadata": st.session_state.get("_active_metadata"),
         "test_inputs": st.session_state.get("_test_inputs"),
         "test_labels": st.session_state.get("_test_labels"),
@@ -154,6 +164,32 @@ def get_vulnerability_result() -> Optional[Dict[str, Any]]:
     """Get latest M5 vulnerability assessment and scoring result."""
     init_session_state()
     return st.session_state.get("_latest_vulnerability_result")
+
+
+def set_xai_result(result: Dict[str, Any]) -> None:
+    """Save latest M6 explainability (XAI) analysis result."""
+    init_session_state()
+    st.session_state["_latest_xai_result"] = result
+    if isinstance(result, dict) and "technique" in result:
+        st.session_state["active_xai_technique"] = result["technique"]
+
+
+def get_xai_result() -> Optional[Dict[str, Any]]:
+    """Get latest M6 explainability (XAI) analysis result."""
+    init_session_state()
+    return st.session_state.get("_latest_xai_result")
+
+
+def set_defense_xai_result(result: Dict[str, Any]) -> None:
+    """Save post-hardening M6 explainability result."""
+    init_session_state()
+    st.session_state["_latest_defense_xai_result"] = result
+
+
+def get_defense_xai_result() -> Optional[Dict[str, Any]]:
+    """Get post-hardening M6 explainability result."""
+    init_session_state()
+    return st.session_state.get("_latest_defense_xai_result")
 
 
 def set_defense_result(result: Dict[str, Any]) -> None:

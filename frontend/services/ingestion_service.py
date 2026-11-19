@@ -406,6 +406,7 @@ def load_model_and_dataset(
     return {
         "adapter": adapter,
         "raw_model": raw_model,
+        "model": adapter or raw_model,
         "metadata": metadata,
         "metadata_dict": metadata_dict,
         "telemetry": telemetry,

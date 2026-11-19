@@ -40,6 +40,10 @@ from frontend.components.sidebar import (
     render_sidebar_branding,
     render_sidebar_session,
 )
+from frontend.components.xai_visualizer import (
+    render_dynamic_xai_dashboard,
+    render_pre_post_defense_comparison,
+)
 from frontend.services.attack_service import (
     execute_configured_attack,
     get_class_labels_mapping,
@@ -59,23 +63,33 @@ from frontend.services.vulnerability_service import (
     assess_and_score_vulnerability,
     generate_vulnerability_recommendations,
 )
+from frontend.services.xai_service import (
+    explain_assessment,
+    get_available_xai_techniques,
+    get_suggested_xai_technique,
+    TECHNIQUE_DISPLAY_NAMES,
+)
 from frontend.utils.session_state import (
     get_active_assessment,
     get_attack_result,
     get_defense_result,
+    get_defense_xai_result,
     get_report_result,
     get_state,
     get_vulnerability_result,
     get_workflow_stage,
+    get_xai_result,
     init_session_state,
     reset_workflow_state,
     set_active_assessment,
     set_attack_result,
     set_defense_result,
+    set_defense_xai_result,
     set_report_result,
     set_state,
     set_vulnerability_result,
     set_workflow_stage,
+    set_xai_result,
 )
 from frontend.utils.theme_manager import initialize_theme, load_theme
 
@@ -2233,12 +2247,94 @@ elif stage == "attack_results":
 
     st.markdown("---")
 
+    # --------------------------------------------------------------------------
+    # M6: Explainable AI (XAI) Root-Cause Analysis Expander
+    # --------------------------------------------------------------------------
+    with st.expander("🔍 Explainable AI (XAI) Root-Cause Analysis (M6)", expanded=False):
+        st.markdown(
+            """
+            <div style="font-size: 0.92rem; color: var(--text-secondary); margin-bottom: 12px;">
+                Investigate which input features, tokens, frequency bands, or pixels were most leveraged by the adversarial perturbation to cause model failure.
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+        domain = active_data.get("domain", "image")
+        model = (
+            active_data.get("adapter")
+            or active_data.get("raw_model")
+            or active_data.get("model")
+        )
+        vuln_res = get_vulnerability_result() or result.get("vulnerability_assessment")
+        available_techs = get_available_xai_techniques(domain, model)
+        suggested_tech = get_suggested_xai_technique(domain, model)
+
+        if not available_techs:
+            st.warning("No compatible XAI explainers found for this model architecture.")
+        else:
+            def _format_tech_expander(t: str) -> str:
+                base = TECHNIQUE_DISPLAY_NAMES.get(t, t.upper())
+                return f"{base} ★ (Suggested)" if t == suggested_tech else base
+
+            default_exp_idx = available_techs.index(suggested_tech) if suggested_tech in available_techs else 0
+
+            col_x1, col_x2 = st.columns([3, 1])
+            with col_x1:
+                expander_tech = st.selectbox(
+                    "Attribution Method",
+                    available_techs,
+                    index=default_exp_idx,
+                    format_func=_format_tech_expander,
+                    key="xai_expander_tech_select",
+                )
+            with col_x2:
+                st.markdown("<div style='height: 28px;'></div>", unsafe_allow_html=True)
+                btn_run_xai_expander = st.button(
+                    "🚀 Explain Attack",
+                    type="primary",
+                    use_container_width=True,
+                    key="btn_run_xai_expander",
+                )
+
+            if btn_run_xai_expander:
+                with st.spinner(f"Computing {expander_tech.upper()} root-cause attribution..."):
+                    try:
+                        res_xai = explain_assessment(
+                            model=model,
+                            attack_result=result,
+                            vulnerability_result=vuln_res,
+                            domain=domain,
+                            technique=expander_tech,
+                            mode="standard",
+                        )
+                        set_xai_result(res_xai)
+                        set_report_result(None)
+                        st.success(f"Generated {expander_tech.upper()} explanation successfully!")
+                    except Exception as e:
+                        st.error(f"XAI Execution Failed: {e}")
+
+        # If XAI result exists, render preview and link to dedicated page
+        current_xai = get_xai_result()
+        if current_xai and current_xai.get("executed", False):
+            render_dynamic_xai_dashboard(current_xai, title="Root-Cause Attribution Preview")
+            if st.button("Open Full Dedicated XAI Analysis Page ↗️", use_container_width=True, key="btn_goto_xai_from_expander"):
+                set_workflow_stage("xai_analysis")
+                st.rerun()
+
+    st.markdown("<div style='height: 12px;'></div>", unsafe_allow_html=True)
+
     # Workflow Actions
-    col_back, col_fwd = st.columns([1, 1])
+    col_back, col_xai, col_fwd = st.columns([1, 1, 1])
 
     with col_back:
         if st.button("⬅️ Test Another Attack on this Model", use_container_width=True):
             set_workflow_stage("attack_config")
+            st.rerun()
+
+    with col_xai:
+        if st.button("🔍 Root-Cause XAI Analysis ➡️", use_container_width=True):
+            set_workflow_stage("xai_analysis")
             st.rerun()
 
     with col_fwd:
@@ -2250,6 +2346,199 @@ elif stage == "attack_results":
     if st.button(
         "🔄 Start New Assessment (Reset)", use_container_width=True, key="reset_from_attack_results"
     ):
+        reset_workflow_state()
+        set_workflow_stage("dashboard")
+        st.rerun()
+
+
+# ==============================================================================
+# STAGE 4: EXPLAINABLE AI (XAI) ROOT-CAUSE & ATTRIBUTION ANALYSIS
+# ==============================================================================
+elif stage == "xai_analysis":
+    st.markdown("## 🔍 Explainable AI (XAI) Root-Cause Analysis")
+    st.caption(
+        "Step 4 of 7 • Isolate sensitive input features, inspect adversarial attribution drift, and understand decision shifts."
+    )
+
+    active_data = get_active_assessment()
+    attack_res = get_attack_result()
+
+    if not active_data or not attack_res:
+        st.warning("No active attack results found to explain. Run an adversarial attack first.")
+        col_warn1, col_warn2 = st.columns(2)
+        with col_warn1:
+            if st.button("⬅️ Go to Model Ingestion", use_container_width=True):
+                set_workflow_stage("ingestion")
+                st.rerun()
+        with col_warn2:
+            if st.button("⬅️ Go to Attack Engine", type="primary", use_container_width=True):
+                set_workflow_stage("attack_config")
+                st.rerun()
+        st.stop()
+
+    model = (
+        active_data.get("adapter")
+        or active_data.get("raw_model")
+        or active_data.get("model")
+    )
+    domain = active_data.get("domain", "image")
+    vuln_res = get_vulnerability_result() or attack_res.get("vulnerability_assessment")
+    cached_xai = get_xai_result()
+
+    available_techs = get_available_xai_techniques(domain, model)
+    suggested_tech = get_suggested_xai_technique(domain, model)
+
+    if not available_techs:
+        st.warning("No compatible XAI explainers found for this model architecture.")
+        st.stop()
+
+    def format_tech_label(t: str) -> str:
+        base = TECHNIQUE_DISPLAY_NAMES.get(t, t.upper())
+        if t == suggested_tech:
+            return f"{base} ★ (Suggested)"
+        return base
+
+    default_idx = (
+        available_techs.index(cached_xai["technique"])
+        if (cached_xai and cached_xai.get("technique") in available_techs)
+        else (available_techs.index(suggested_tech) if suggested_tech in available_techs else 0)
+    )
+
+    # Clean, non-overwhelming Controls Card
+    st.markdown(
+        """
+        <div class="modern-card" style="margin-bottom: 1.25rem;">
+            <div style="font-size: 1.05rem; font-weight: 700; color: var(--text-primary); margin-bottom: 0.5rem;">
+                ⚙️ Explainability Diagnostic Controls
+            </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    ctrl_col1, ctrl_col2 = st.columns([3, 1])
+    with ctrl_col1:
+        selected_tech = st.selectbox(
+            "Attribution Technique",
+            available_techs,
+            index=default_idx,
+            format_func=format_tech_label,
+            help="Supported explainability algorithms verified for this model architecture and data domain.",
+            key="xai_tech_select",
+        )
+    with ctrl_col2:
+        st.markdown("<div style='height: 28px;'></div>", unsafe_allow_html=True)
+        btn_run_xai = st.button(
+            "🚀 Generate Explanation",
+            type="primary",
+            use_container_width=True,
+            key="btn_run_xai_page",
+        )
+
+    # Optional Collapsible Advanced Settings (Keeps screen clean and uncluttered)
+    with st.expander("⚙️ Advanced Parameters (Optional)", expanded=False):
+        adv_col1, adv_col2 = st.columns(2)
+        with adv_col1:
+            selected_mode = st.selectbox(
+                "Evaluation Mode",
+                ["standard", "fast", "thorough"],
+                index=0,
+                help="Fast uses fewer evaluation steps; thorough maximizes sampling / IG integration steps.",
+                key="xai_mode_select",
+            )
+        with adv_col2:
+            tot_eval_samples = attack_res.get("total_samples", 1)
+            eval_orig = attack_res.get("_original_inputs")
+            if eval_orig is not None and hasattr(eval_orig, "__len__"):
+                try:
+                    tot_eval_samples = len(eval_orig)
+                except Exception:
+                    pass
+            sample_options = ["First Sample (Index 0)"] + [f"Sample {i}" for i in range(1, min(10, tot_eval_samples))]
+            selected_sample_label = st.selectbox(
+                "Sample Target",
+                sample_options,
+                index=0,
+                key="xai_sample_selector",
+            )
+
+    st.markdown("</div>", unsafe_allow_html=True)
+
+    if btn_run_xai:
+        with st.spinner(f"Computing {selected_tech.upper()} attributions for {domain} model..."):
+            try:
+                xai_res = explain_assessment(
+                    model=model,
+                    attack_result=attack_res,
+                    vulnerability_result=vuln_res,
+                    domain=domain,
+                    technique=selected_tech,
+                    mode=selected_mode,
+                )
+                set_xai_result(xai_res)
+                set_report_result(None)
+                cached_xai = xai_res
+                st.success(f"Successfully generated {selected_tech.upper()} explainability diagnostics!")
+            except Exception as e:
+                st.error(f"XAI Generation Failed: {e}")
+
+    # Render Active XAI Results
+    if cached_xai and cached_xai.get("executed", False):
+        render_dynamic_xai_dashboard(cached_xai)
+    elif cached_xai and not cached_xai.get("executed", False):
+        st.warning(f"XAI Explainer Status: {cached_xai.get('status', 'unknown')}. Message: {cached_xai.get('message', 'No details available.')}")
+    else:
+        st.info("💡 Click **'🚀 Generate / Refresh XAI Explanation'** above to compute feature attributions, attribution drift, and decision-boundary shift metrics for this attack.")
+
+    # Pre-Defense vs. Post-Defense Comparison Section (if defense has been executed)
+    defense_res = get_defense_result()
+    if defense_res:
+        st.markdown("---")
+        st.markdown("### 🛡️ Defense Verification: Pre vs. Post-Hardening Attribution")
+        st.caption("Evaluate whether model hardening neutralized adversarial sensitivity hotspots and stabilized feature attributions.")
+
+        defended_xai = get_defense_xai_result()
+        if defended_xai:
+            render_pre_post_defense_comparison(cached_xai or {}, defended_xai)
+        else:
+            st.info("Defense hardening has been executed! Compute post-defense explainability to compare attribution stabilization.")
+            if st.button("🔬 Compute Post-Defense Explanations", key="btn_compute_def_xai"):
+                defended_model = defense_res.get("defended_model", model)
+                with st.spinner("Computing post-defense attribution profiles..."):
+                    try:
+                        post_xai_res = explain_assessment(
+                            model=defended_model,
+                            attack_result=attack_res,
+                            vulnerability_result=vuln_res,
+                            domain=domain,
+                            technique=selected_tech,
+                            mode=selected_mode,
+                        )
+                        set_defense_xai_result(post_xai_res)
+                        set_report_result(None)
+                        st.success("Post-defense XAI attribution profile computed successfully!")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Post-Defense XAI Generation Failed: {e}")
+
+    st.markdown("---")
+
+    # Workflow Actions
+    col_nav1, col_nav2, col_nav3 = st.columns([1, 1, 1])
+    with col_nav1:
+        if st.button("⬅️ Back to Attack Results", use_container_width=True):
+            set_workflow_stage("attack_results")
+            st.rerun()
+    with col_nav2:
+        if st.button("🛡️ Proceed to Defense Hardening ➡️", type="primary", use_container_width=True):
+            set_workflow_stage("defense_config")
+            st.rerun()
+    with col_nav3:
+        if st.button("📄 Jump to Security Report ➡️", use_container_width=True):
+            set_workflow_stage("report")
+            st.rerun()
+
+    st.markdown("<div style='height: 8px;'></div>", unsafe_allow_html=True)
+    if st.button("🔄 Start New Assessment (Reset)", use_container_width=True, key="reset_from_xai"):
         reset_workflow_state()
         set_workflow_stage("dashboard")
         st.rerun()
@@ -2843,11 +3132,16 @@ elif stage == "defense_results":
     st.markdown("---")
 
     # Workflow Actions (Backward left, Forward right, Reset below)
-    col_back, col_fwd = st.columns([1, 1])
+    col_back, col_xai, col_fwd = st.columns([1, 1, 1])
 
     with col_back:
         if st.button("⬅️ Reconfigure Defense", use_container_width=True):
             set_workflow_stage("defense_config")
+            st.rerun()
+
+    with col_xai:
+        if st.button("🔬 Compare Pre vs. Post-Defense XAI ➡️", use_container_width=True):
+            set_workflow_stage("xai_analysis")
             st.rerun()
 
     with col_fwd:
@@ -2900,6 +3194,7 @@ elif stage == "report":
                 defense_result=defense_res,
                 domain=active_data.get("domain", "image"),
                 vulnerability_result=get_vulnerability_result() or attack_res.get("vulnerability_assessment"),
+                xai_result=get_xai_result(),
             )
             set_report_result(report_res)
 

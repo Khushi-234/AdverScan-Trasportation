@@ -12,18 +12,53 @@ from app.explainability.explanation_result import ExplanationResult
 from app.explainability.aggregate import aggregate_explanations
 from app.explainability.techniques.registry import technique_registry
 from app.explainability.modality import Modality
+from app.explainability.domain_profiles import get_domain_profile
+
+
+TECHNIQUE_DISPLAY_NAMES: Dict[str, str] = {
+    "shap": "SHAP (Kernel / Deep SHAP)",
+    "treeshap": "TreeSHAP (Tree Ensemble)",
+    "lime": "LIME (Local Interpretable Explanations)",
+    "saliency": "Vanilla Saliency (Input Gradient)",
+    "integrated_gradients": "Integrated Gradients (Path Integral)",
+    "gradcam": "Grad-CAM (Activation Mapping)",
+}
 
 
 def get_available_xai_techniques(domain: str = "image", model: Any = None) -> List[str]:
     """
     Query backend TechniqueRegistry for genuinely available and compatible XAI techniques.
+    Only returns techniques verified to be supported for the specified domain and model.
     """
     clean_domain = domain.strip().lower().replace("-", "_")
     try:
         mod = Modality.from_str(clean_domain)
-        return technique_registry.get_compatible_techniques(mod, model=model)
+        compatible = technique_registry.get_compatible_techniques(mod, model=model)
+        if compatible:
+            return compatible
+        profile = get_domain_profile(mod)
+        return [t for t in profile.compatible_techniques if t != "treeshap" or model is None]
     except Exception:
         return ["saliency", "integrated_gradients", "shap", "lime"]
+
+
+def get_suggested_xai_technique(domain: str = "image", model: Any = None) -> str:
+    """
+    Determine the optimal and supported XAI technique for the given domain and model.
+    """
+    clean_domain = domain.strip().lower().replace("-", "_")
+    compatible = get_available_xai_techniques(domain=clean_domain, model=model)
+    if not compatible:
+        return "saliency"
+    try:
+        mod = Modality.from_str(clean_domain)
+        profile = get_domain_profile(mod)
+        suggested = profile.default_technique
+        if suggested in compatible:
+            return suggested
+        return compatible[0]
+    except Exception:
+        return compatible[0]
 
 
 def explain_assessment(
@@ -81,10 +116,12 @@ def explain_assessment(
             "global_explanation": {},
         }
 
+    resolved_technique = technique or get_suggested_xai_technique(domain=clean_domain, model=model)
+
     try:
         xai_cfg = XAIConfig(
             mode=mode if mode in ("fast", "standard", "thorough") else "standard",
-            technique=technique,
+            technique=resolved_technique,
             budget=budget or 100,
         )
         explainer = XAIExplainer(config=xai_cfg)
@@ -100,7 +137,7 @@ def explain_assessment(
             attack_result=attack_result,
             assessment_result=assessment_obj,
             scoring_result=scoring_obj,
-            technique=technique,
+            technique=resolved_technique,
             modality=clean_domain,
             target_class=target_class,
             raise_on_error=False,
