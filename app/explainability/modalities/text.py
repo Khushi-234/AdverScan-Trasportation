@@ -55,13 +55,16 @@ class TextModalityHandler(BaseModalityHandler):
         # Check raw tensor of token IDs
         try:
             import torch
-            if isinstance(inputs, torch.Tensor) and tokenizer is not None and hasattr(tokenizer, "decode"):
-                ids_cpu = inputs.detach().cpu()
-                if ids_cpu.ndim == 2:
-                    if ids_cpu.shape[0] == 1:
-                        return tokenizer.decode(ids_cpu[0], skip_special_tokens=True)
-                    return [tokenizer.decode(row, skip_special_tokens=True) for row in ids_cpu]
-                return tokenizer.decode(ids_cpu, skip_special_tokens=True)
+            if isinstance(inputs, torch.Tensor):
+                if tokenizer is not None and hasattr(tokenizer, "decode"):
+                    ids_cpu = inputs.detach().cpu()
+                    if ids_cpu.ndim == 2:
+                        if ids_cpu.shape[0] == 1:
+                            return tokenizer.decode(ids_cpu[0], skip_special_tokens=True)
+                        return [tokenizer.decode(row, skip_special_tokens=True) for row in ids_cpu]
+                    return tokenizer.decode(ids_cpu, skip_special_tokens=True)
+                elif inputs.dtype in (torch.int64, torch.int32, torch.int16, torch.int8, torch.uint8):
+                    return inputs
         except Exception:
             pass
 

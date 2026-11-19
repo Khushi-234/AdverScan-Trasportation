@@ -4,6 +4,7 @@ Contains modular utilities for data conversions, shape validation, and batched p
 """
 
 from app.explainability.utils.conversions import (
+    extract_logits,
     to_numpy,
     to_tensor,
     unwrap_model,
@@ -25,6 +26,7 @@ from app.explainability.utils.validation import (
 __all__ = [
     # Conversions
     "unwrap_model",
+    "extract_logits",
     "to_numpy",
     "to_tensor",
     # Validation

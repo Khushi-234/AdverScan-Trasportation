@@ -14,7 +14,7 @@ except (ImportError, Exception):
     shap = None
     _SHAP_AVAILABLE = False
 
-from app.explainability.utils import predict_proba_np, to_numpy, to_tensor, unwrap_model
+from app.explainability.utils import extract_logits, predict_proba_np, to_numpy, to_tensor, unwrap_model
 from app.explainability.modality import Modality
 from app.explainability.techniques.base import BaseExplainer
 from app.explainability.techniques.tree_shap_explainer import TreeSHAPExplainer
@@ -54,8 +54,7 @@ class SHAPExplainer(BaseExplainer):
         else:
             raise TypeError("Model must be callable or possess a callable predict method.")
 
-        if hasattr(res, "logits"):
-            res = res.logits
+        res = extract_logits(res)
 
         if isinstance(res, torch.Tensor):
             res = res.detach().cpu().numpy()

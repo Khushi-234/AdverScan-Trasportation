@@ -81,6 +81,26 @@ class ExplanationResult:
     defense_hints: List[Dict[str, Any]] = field(default_factory=list)
     defense_pipeline: Dict[str, Any] = field(default_factory=dict)
 
+    @property
+    def clean_attribution(self) -> Any:
+        """Convenience property for clean input attribution array."""
+        if isinstance(self.attribution, dict):
+            clean_obj = self.attribution.get("clean")
+            if isinstance(clean_obj, dict):
+                return clean_obj.get("attribution")
+            return clean_obj
+        return None
+
+    @property
+    def adversarial_attribution(self) -> Any:
+        """Convenience property for adversarial input attribution array."""
+        if isinstance(self.attribution, dict):
+            adv_obj = self.attribution.get("adversarial")
+            if isinstance(adv_obj, dict):
+                return adv_obj.get("attribution")
+            return adv_obj
+        return None
+
     def to_dict(self) -> Dict[str, Any]:
         """Convert ExplanationResult object to dictionary."""
         return asdict(self)
