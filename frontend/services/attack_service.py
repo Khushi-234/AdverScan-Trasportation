@@ -666,6 +666,27 @@ def execute_configured_attack(
         params=clean_params,
     )
 
+    # Auto-align time-series sequence length and channels to model configuration if needed
+    if isinstance(inputs, torch.Tensor) and inputs.ndim == 3:
+        raw_m = getattr(model, "get_model", lambda: model)()
+        cfg = getattr(raw_m, "config", None)
+        if cfg is not None:
+            exp_seq_len = getattr(cfg, "context_length", None) or getattr(cfg, "sequence_length", None)
+            if exp_seq_len is not None and inputs.shape[1] != exp_seq_len:
+                if inputs.shape[1] < exp_seq_len:
+                    pad_len = exp_seq_len - inputs.shape[1]
+                    inputs = torch.cat([inputs, inputs[:, -1:, :].expand(-1, pad_len, -1)], dim=1)
+                else:
+                    inputs = inputs[:, :exp_seq_len, :]
+
+            exp_channels = getattr(cfg, "num_input_channels", None) or getattr(cfg, "num_channels", None)
+            if exp_channels is not None and inputs.shape[2] != exp_channels:
+                if inputs.shape[2] < exp_channels:
+                    pad_c = exp_channels - inputs.shape[2]
+                    inputs = torch.cat([inputs, inputs[:, :, -1:].expand(-1, -1, pad_c)], dim=2)
+                else:
+                    inputs = inputs[:, :, :exp_channels]
+
     # Clean cache before launching attack
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
@@ -961,6 +982,10 @@ def execute_configured_attack(
         "original_predictions": orig_preds.tolist() if isinstance(orig_preds, torch.Tensor) else orig_preds,
         "adversarial_predictions": adv_preds.tolist() if isinstance(adv_preds, torch.Tensor) else adv_preds,
         "has_adversarial_tensor": attack_res.adversarial_examples is not None,
+        "_attack_result_obj": attack_res,
+        "original_inputs": inputs,
+        "adversarial_examples": attack_res.adversarial_examples,
+        "labels": labels,
         "_adversarial_examples": attack_res.adversarial_examples,
         "_clean_inputs": inputs,
         "_clean_labels": labels,

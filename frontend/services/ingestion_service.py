@@ -295,13 +295,17 @@ def load_model_and_dataset(
             break
     except Exception as exc:
         fallback_reason = str(exc)
-        test_inputs, test_labels = _generate_domain_sample_batch(metadata, sample_size)
+        test_inputs, test_labels = _generate_domain_sample_batch(
+            metadata, sample_size, raw_model=raw_model, preset_info=preset_info
+        )
         is_synthetic_dataset = True
 
     if test_inputs is None or test_labels is None:
         if not fallback_reason:
             fallback_reason = "Dataset loader returned empty batch"
-        test_inputs, test_labels = _generate_domain_sample_batch(metadata, sample_size)
+        test_inputs, test_labels = _generate_domain_sample_batch(
+            metadata, sample_size, raw_model=raw_model, preset_info=preset_info
+        )
         is_synthetic_dataset = True
 
     actual_evaluated_samples = _get_input_sample_count(
@@ -471,7 +475,10 @@ def _get_input_shape_desc(inputs: Any) -> Tuple[Optional[List[int]], str]:
 
 
 def _generate_domain_sample_batch(
-    metadata: Any, sample_size: int = 10
+    metadata: Any,
+    sample_size: int = 10,
+    raw_model: Optional[Any] = None,
+    preset_info: Optional[Dict[str, Any]] = None,
 ) -> Tuple[Any, Any]:
     """Generate a sample input tensor conforming to the model's expected shape and domain."""
     domain = str(getattr(metadata, "data_domain", "image")).lower().replace("_", "-")
@@ -486,15 +493,46 @@ def _generate_domain_sample_batch(
         labels = torch.randint(0, num_classes, (sample_size,))
     elif domain in ("time-series", "timeseries", "sequence"):
         # Correctly format time-series tensors as (batch_size, sequence_length, num_channels)
-        seq_len = getattr(metadata, "sequence_length", 14) or 14
-        num_channels = (
-            getattr(metadata, "num_channels", getattr(metadata, "num_features", 1)) or 1
+        cfg = getattr(raw_model, "config", None) if raw_model is not None else None
+        seq_len = (
+            getattr(cfg, "context_length", None)
+            or getattr(cfg, "sequence_length", None)
+            or getattr(cfg, "seq_length", None)
+            or getattr(cfg, "max_position_embeddings", None)
         )
+        num_channels = (
+            getattr(cfg, "num_input_channels", None)
+            or getattr(cfg, "num_channels", None)
+            or getattr(cfg, "input_size", None)
+        )
+
+        if seq_len is None and preset_info:
+            seq_len = preset_info.get("sequence_length") or preset_info.get("context_length")
+        if num_channels is None and preset_info:
+            num_channels = preset_info.get("num_channels") or preset_info.get("num_input_channels")
+
+        if seq_len is None:
+            extra = getattr(metadata, "extra_info", {}) or {}
+            seq_len = getattr(metadata, "sequence_length", None) or extra.get("sequence_length") or extra.get("context_length")
+            if seq_len is None and getattr(metadata, "input_shape", None):
+                in_shape = metadata.input_shape
+                if len(in_shape) >= 2:
+                    seq_len = in_shape[0] if in_shape[0] > in_shape[1] else in_shape[1]
+
+        if num_channels is None:
+            extra = getattr(metadata, "extra_info", {}) or {}
+            num_channels = getattr(metadata, "num_channels", None) or extra.get("num_channels") or getattr(metadata, "num_features", 1)
+
+        seq_len = int(seq_len or 32)
+        num_channels = int(num_channels or 1)
+
         inputs = torch.randn(sample_size, seq_len, num_channels)
         labels = torch.randint(0, num_classes, (sample_size,))
     elif domain in ("text", "nlp"):
         # Generate tokenized text representation for text models
-        seq_len = getattr(metadata, "max_length", 32) or 32
+        cfg = getattr(raw_model, "config", None) if raw_model is not None else None
+        seq_len = getattr(cfg, "max_position_embeddings", None) or getattr(metadata, "max_length", 32) or 32
+        seq_len = min(int(seq_len), 128)
         input_ids = torch.randint(100, 2000, (sample_size, seq_len))
         attention_mask = torch.ones((sample_size, seq_len), dtype=torch.long)
         inputs = {"input_ids": input_ids, "attention_mask": attention_mask}
