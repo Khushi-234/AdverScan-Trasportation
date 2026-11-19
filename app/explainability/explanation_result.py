@@ -5,7 +5,7 @@ ExplanationResult DTO for the explainability module in AdverScan.
 import json
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Union, cast
 import numpy as np
 
 
@@ -25,7 +25,13 @@ def numpy_json_serializer(obj: Any) -> Any:
         return obj.to_dict()
     elif hasattr(obj, "__dict__"):
         return obj.__dict__
-    raise TypeError(f"Object of type {type(obj)} is not JSON serializable")
+    try:
+        import torch
+        if isinstance(obj, torch.Tensor):
+            return obj.detach().cpu().tolist()
+    except Exception:
+        pass
+    return str(obj)
 
 
 def _downsample_heatmap(arr: np.ndarray, max_dim: int = 16) -> List[Any]:
@@ -75,9 +81,67 @@ class ExplanationResult:
     defense_hints: List[Dict[str, Any]] = field(default_factory=list)
     defense_pipeline: Dict[str, Any] = field(default_factory=dict)
 
+    @property
+    def clean_attribution(self) -> Any:
+        """Convenience property for clean input attribution array."""
+        if isinstance(self.attribution, dict):
+            clean_obj = self.attribution.get("clean")
+            if isinstance(clean_obj, dict):
+                return clean_obj.get("attribution")
+            return clean_obj
+        return None
+
+    @property
+    def adversarial_attribution(self) -> Any:
+        """Convenience property for adversarial input attribution array."""
+        if isinstance(self.attribution, dict):
+            adv_obj = self.attribution.get("adversarial")
+            if isinstance(adv_obj, dict):
+                return adv_obj.get("attribution")
+            return adv_obj
+        return None
+
     def to_dict(self) -> Dict[str, Any]:
         """Convert ExplanationResult object to dictionary."""
         return asdict(self)
+
+    def format_summary(self) -> str:
+        """
+        Produce a concise, human-readable summary of the security explanation.
+        All numerical claims are directly traceable to computed result metrics.
+        """
+        lines = [
+            f"=== AdverScan XAI Security Assessment [{self.attack_name}] ===",
+            f"Technique: {self.technique.upper()} | Modality: {self.modality} | Domain: {self.domain}",
+            f"Prediction Outcome: Clean={self.clean_prediction} (conf: {float(self.clean_confidence):.4f}) -> Adv={self.adversarial_prediction} (conf: {float(self.adversarial_confidence):.4f})",
+            f"Prediction Flip: {self.prediction_changed} | Attack Caused Failure: {self.attack_caused_failure}",
+        ]
+
+        pred_an = self.prediction_analysis
+        if pred_an and "attack_objective" in pred_an:
+            lines.append(f"Attack Objective: {pred_an['attack_objective']} | Attack Success: {pred_an.get('attack_success')}")
+
+        tf = self.attack_transformation
+        if tf and tf.get("perturbation_count") is not None:
+            p_cnt = tf.get("perturbation_count")
+            p_ratio = tf.get("perturbation_ratio", 0.0)
+            comp = tf.get("constraint_compliance")
+            comp_str = f"Compliant: {comp.get('compliant')}" if isinstance(comp, dict) else "N/A"
+            lines.append(f"Transformation Evidence: Perturbed elements={p_cnt} ({p_ratio*100:.2f}%) | Constraint={comp_str}")
+
+        attr_val = self.attribution_validation
+        if attr_val and "status" in attr_val:
+            lines.append(f"Attribution Validation: Status={attr_val['status']} | Finite={attr_val.get('is_finite')} | Near-Zero={attr_val.get('is_near_zero')}")
+
+        top_feats = self.feature_importance.get("adversarial_top_features") or self.feature_importance.get("clean_top_features") or []
+        if top_feats:
+            feat_strs = [f"{f.get('feature')} (imp: {float(f.get('importance', 0.0)):.4f})" for f in top_feats[:5]]
+            lines.append("Top Salient Features: " + ", ".join(feat_strs))
+
+        if self.failure_analysis and "attribution_interpretation" in self.failure_analysis:
+            lines.append(f"Interpretation Note: {self.failure_analysis['attribution_interpretation']}")
+
+        return "\n".join(lines)
 
     def save_json(
         self,
@@ -101,7 +165,7 @@ class ExplanationResult:
         res_dict = self.to_dict()
 
         if store_npz:
-            npz_arrays: Dict[str, np.ndarray] = {}
+            npz_arrays: Dict[str, Any] = {}
             # Check for large raw attributions
             for key in ("clean", "adversarial"):
                 attr_obj = res_dict.get("attribution", {}).get(key)
@@ -120,7 +184,7 @@ class ExplanationResult:
 
             if npz_arrays:
                 npz_path = path.with_suffix(".npz")
-                np.savez_compressed(npz_path, **npz_arrays)
+                cast(Any, np.savez_compressed)(npz_path, **npz_arrays)
                 res_dict["metadata"]["npz_arrays_path"] = str(npz_path)
 
         with open(path, "w", encoding="utf-8") as f:

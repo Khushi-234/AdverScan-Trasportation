@@ -23,6 +23,7 @@ from app.explainability.utils import (
     safe_predict,
     to_numpy,
     to_tensor,
+    unwrap_model,
     validate_single_sample,
 )
 from app.explainability.domain_profiles import get_domain_profile, is_valid_adversarial
@@ -34,6 +35,7 @@ from app.explainability.techniques.shap_explainer import SHAPExplainer, TreeSHAP
 from app.explainability.profiling import profile_explainer_call
 from app.explainability.config import XAIConfig
 from app.explainability.cache import ExplanationCache, cache_key
+from app.explainability.transformation_evidence import extract_attack_transformation
 
 
 class XAIExplainer:
@@ -179,8 +181,23 @@ class XAIExplainer:
         validate_single_sample(clean_input, modality=mod.value)
         validate_single_sample(adversarial_input, modality=mod.value)
 
+        # Resolve tokenizer if available
+        tok = kwargs.get("tokenizer")
+        if tok is None:
+            if hasattr(model, "tokenizer") and model.tokenizer is not None:
+                tok = model.tokenizer
+            elif hasattr(model, "processor") and model.processor is not None:
+                tok = getattr(model.processor, "tokenizer", model.processor)
+                if hasattr(tok, "get_processor"):
+                    tok = tok.get_processor()
+            elif hasattr(unwrap_model(model), "tokenizer"):
+                tok = unwrap_model(model).tokenizer
+
         # 3. Input preparation
-        prep_clean, prep_adv = handler.prepare_batch(clean_input, adversarial_input)
+        if mod == Modality.TEXT:
+            prep_clean, prep_adv = handler.prepare_batch(clean_input, adversarial_input, tokenizer=tok, **kwargs)
+        else:
+            prep_clean, prep_adv = handler.prepare_batch(clean_input, adversarial_input)
 
         # Domain validity check on adversarial sample
         validity_flags = {}
@@ -210,6 +227,9 @@ class XAIExplainer:
                 "selection_reason": f"Selected '{tech_name}' for {mod.value}.",
             }
 
+        if tok is not None and "tokenizer" not in explainer_kwargs:
+            explainer_kwargs["tokenizer"] = tok
+
         # 5. Get predictions, confidences, and probabilities using batched prediction
         clean_probs = predict_proba_np(
             model,
@@ -217,7 +237,7 @@ class XAIExplainer:
             output_mode=output_mode,
             batch_size=cfg.batch_size,
             max_text_length=cfg.max_text_length,
-            tokenizer=kwargs.get("tokenizer"),
+            tokenizer=tok,
         )
         adv_probs = predict_proba_np(
             model,
@@ -225,7 +245,7 @@ class XAIExplainer:
             output_mode=output_mode,
             batch_size=cfg.batch_size,
             max_text_length=cfg.max_text_length,
-            tokenizer=kwargs.get("tokenizer"),
+            tokenizer=tok,
         )
         clean_pred, clean_conf = extract_prediction_and_confidence(clean_probs, output_mode=output_mode)
         adv_pred, adv_conf = extract_prediction_and_confidence(adv_probs, output_mode=output_mode)
@@ -371,14 +391,17 @@ class XAIExplainer:
             total_model_queries += adv_class_stats.num_model_queries
 
         # 8. Postprocess attributions using modality handler
+        target_clean_inp = prep_clean if mod == Modality.TEXT else clean_input
+        target_adv_inp = prep_adv if mod == Modality.TEXT else adversarial_input
+
         clean_postprocessed = handler.postprocess_attribution(
             clean_attr_result.get("attribution"),
-            clean_input,
+            target_clean_inp,
             **kwargs,
         )
         adv_postprocessed = handler.postprocess_attribution(
             adv_attr_result.get("attribution"),
-            adversarial_input,
+            target_adv_inp,
             **kwargs,
         )
 
@@ -482,7 +505,70 @@ class XAIExplainer:
                 background_inputs=kwargs.get("background_inputs"),
             )
 
-        # 12. Metadata
+        # 12. Empirical attack transformation evidence (cleanly decoupled from attributions)
+        attack_meta = kwargs.get("attack_metadata") or (getattr(assessment_result, "attack_metadata", None) if assessment_result is not None else None)
+        transformation_data = extract_attack_transformation(
+            clean_input=prep_clean if mod == Modality.TEXT else clean_input,
+            adversarial_input=prep_adv if mod == Modality.TEXT else adversarial_input,
+            modality=mod.value,
+            metadata=attack_meta,
+            feature_names=domain_prof.feature_names if domain_prof else kwargs.get("feature_names"),
+            tokenizer=tok,
+        )
+
+        # 13. Attribution validation & alignment evaluation
+        clean_val = clean_postprocessed.get("attribution_validation") or {}
+        adv_val = adv_postprocessed.get("attribution_validation") or {}
+        comp_val = comp_data.get("attribution_validity") or {}
+
+        overall_val_status = "valid"
+        if clean_val.get("status") in ("empty", "non_finite", "near_zero"):
+            overall_val_status = clean_val.get("status")
+        elif adv_val.get("status") in ("empty", "non_finite", "near_zero"):
+            overall_val_status = adv_val.get("status")
+        elif comp_val.get("status") in ("non_finite", "empty", "near_zero", "shape_mismatch"):
+            overall_val_status = comp_val.get("status")
+        elif attribution_status in ("error", "unavailable"):
+            overall_val_status = attribution_status
+
+        attr_validation = {
+            "status": overall_val_status,
+            "is_finite": bool(clean_val.get("is_finite", True) and adv_val.get("is_finite", True)),
+            "is_near_zero": bool(clean_val.get("is_near_zero", False) or adv_val.get("is_near_zero", False) or comp_val.get("clean_is_near_zero", False)),
+            "clean_validation": clean_val,
+            "adversarial_validation": adv_val,
+            "token_alignment_status": clean_val.get("token_alignment_status", "not_applicable"),
+            "saliency_detected": bool(clean_val.get("saliency_detected", True) or adv_val.get("saliency_detected", True)),
+        }
+
+        # 14. Structured Prediction Analysis
+        pred_analysis = dict(comp_data.get("prediction_analysis") or {})
+        pred_analysis.update({
+            "clean_correct": fail_data.get("clean_correct"),
+            "adversarial_correct": fail_data.get("adversarial_correct"),
+            "attack_caused_failure": fail_data.get("attack_caused_failure"),
+            "attack_objective": fail_data.get("attack_objective", "untargeted"),
+        })
+
+        # 15. Rich Explanation Metadata & Limitations
+        unavailable_metrics = []
+        if true_label is None:
+            unavailable_metrics.append("ground_truth_accuracy")
+            unavailable_metrics.append("verified_attack_causation")
+        if clean_probs is None or adv_probs is None:
+            unavailable_metrics.append("per_class_probabilities")
+        if comp_data.get("attribution_l1") is None:
+            unavailable_metrics.append("attribution_distance_metrics")
+
+        explanation_limitations = [
+            "Local surrogate approximation: Attribution weights explain local model sensitivity, not global network semantics.",
+            "Non-causal interpretation: Attribution scores indicate feature importance/correlation under perturbation, not established causal necessity.",
+            "Baseline dependence: Saliency scores are computed relative to the specified baseline/background reference.",
+        ]
+
+        baseline_strat = kwargs.get("background_strategy", kwargs.get("baseline", "default_modality_baseline"))
+        masking_cfg = kwargs.get("masker", kwargs.get("masking", "default_partition_masker"))
+
         meta: Dict[str, Any] = {
             "attack_name": attack_name,
             "technique": actual_tech_used,
@@ -504,6 +590,13 @@ class XAIExplainer:
                 meta["assessment_result"] = assessment_result.to_dict()
             elif isinstance(assessment_result, dict):
                 meta["assessment_result"] = assessment_result
+
+        scoring_res = kwargs.get("scoring_result")
+        if scoring_res is not None:
+            if hasattr(scoring_res, "to_dict"):
+                meta["scoring_result"] = scoring_res.to_dict()
+            elif isinstance(scoring_res, dict):
+                meta["scoring_result"] = scoring_res
 
         feature_importance = {
             "clean_top_features": clean_top_features,
@@ -568,6 +661,15 @@ class XAIExplainer:
         Returns:
             List of ExplanationResult objects, one per sample.
         """
+        if clean_inputs is None or adversarial_inputs is None:
+            return []
+        if isinstance(clean_inputs, (list, tuple)) and len(clean_inputs) == 0:
+            return []
+        if hasattr(clean_inputs, "size") and getattr(clean_inputs, "size", 1) == 0:
+            return []
+        if hasattr(clean_inputs, "numel") and clean_inputs.numel() == 0:
+            return []
+
         mod = detect_modality(clean_inputs, hint=modality)
 
         # Determine batch size N respecting config budget
@@ -601,6 +703,15 @@ class XAIExplainer:
             elif isinstance(clean_list, np.ndarray):
                 sample_clean = clean_list[i : i + 1]
                 sample_adv = adv_list[i : i + 1]
+            elif isinstance(clean_list, dict) or hasattr(clean_list, "items"):
+                sample_clean = {
+                    k: (v[i : i + 1] if hasattr(v, "__getitem__") and len(v) > i else v)
+                    for k, v in clean_list.items()
+                }
+                sample_adv = {
+                    k: (v[i : i + 1] if hasattr(v, "__getitem__") and len(v) > i else v)
+                    for k, v in adv_list.items()
+                } if (isinstance(adv_list, dict) or hasattr(adv_list, "items")) else adv_list
             else:
                 sample_clean = clean_list
                 sample_adv = adv_list
@@ -672,16 +783,57 @@ class XAIExplainer:
         Returns:
             ExplanationResult (for single sample) or List[ExplanationResult] (for batches).
         """
-        clean_input = attack_result.original_inputs
-        adv_input = attack_result.adversarial_examples
-        labels = attack_result.labels
-        meta = getattr(attack_result, "metadata", None)
-        raw_attack_name = getattr(meta, "attack_name", None) if meta is not None else None
-        attack_name: str = raw_attack_name if raw_attack_name is not None else "unknown_attack"
+        if isinstance(attack_result, dict):
+            clean_input = attack_result.get("original_inputs") if attack_result.get("original_inputs") is not None else attack_result.get("_clean_inputs")
+            adv_input = attack_result.get("adversarial_examples") if attack_result.get("adversarial_examples") is not None else attack_result.get("_adversarial_examples")
+            labels = attack_result.get("labels") if attack_result.get("labels") is not None else attack_result.get("ground_truth_labels")
+            meta = attack_result.get("metadata")
+            raw_attack_name = attack_result.get("attack_name") or (getattr(meta, "attack_name", None) if meta else None)
+            attack_name = raw_attack_name if raw_attack_name is not None else "unknown_attack"
+        else:
+            clean_input = getattr(attack_result, "original_inputs", None)
+            if clean_input is None:
+                clean_input = getattr(attack_result, "_clean_inputs", None)
+            adv_input = getattr(attack_result, "adversarial_examples", None)
+            if adv_input is None:
+                adv_input = getattr(attack_result, "_adversarial_examples", None)
+            labels = getattr(attack_result, "labels", None)
+            meta = getattr(attack_result, "metadata", None)
+            raw_attack_name = getattr(meta, "attack_name", None) if meta is not None else getattr(attack_result, "attack_name", None)
+            attack_name = raw_attack_name if raw_attack_name is not None else "unknown_attack"
 
         if clean_input is None:
+            if not kwargs.get("raise_on_error", True):
+                return ExplanationResult(
+                    attack_name=attack_name,
+                    technique=technique or "unknown",
+                    clean_prediction=0,
+                    adversarial_prediction=0,
+                    clean_confidence=0.0,
+                    adversarial_confidence=0.0,
+                    prediction_changed=False,
+                    true_label=None,
+                    attack_caused_failure=False,
+                    attribution_status="error",
+                    metadata={"error": "AttackResult missing clean inputs for XAI explainability."},
+                )
             raise ValueError("AttackResult must contain 'original_inputs' for XAI explainability.")
+
         if adv_input is None:
+            if not kwargs.get("raise_on_error", True):
+                return ExplanationResult(
+                    attack_name=attack_name,
+                    technique=technique or "unknown",
+                    clean_prediction=0,
+                    adversarial_prediction=0,
+                    clean_confidence=0.0,
+                    adversarial_confidence=0.0,
+                    prediction_changed=False,
+                    true_label=None,
+                    attack_caused_failure=False,
+                    attribution_status="error",
+                    metadata={"error": "AttackResult contains no adversarial examples for XAI explainability."},
+                )
             raise ValueError("AttackResult contains no 'adversarial_examples' for XAI explainability.")
 
         shape = get_shape(clean_input)
@@ -690,6 +842,10 @@ class XAIExplainer:
             is_batch = True
         elif shape and shape[0] > 1:
             is_batch = True
+
+        call_kwargs = dict(kwargs)
+        if "attack_metadata" not in call_kwargs and meta is not None:
+            call_kwargs["attack_metadata"] = meta
 
         if is_batch:
             return self.explain_batch(
@@ -701,7 +857,7 @@ class XAIExplainer:
                 attack_name=attack_name,
                 modality=modality,
                 assessment_result=assessment_result,
-                **kwargs,
+                **call_kwargs,
             )
         else:
             return self.explain(
@@ -713,5 +869,5 @@ class XAIExplainer:
                 attack_name=attack_name,
                 assessment_result=assessment_result,
                 modality=modality,
-                **kwargs,
+                **call_kwargs,
             )
