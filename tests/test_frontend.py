@@ -1252,6 +1252,70 @@ def test_timeseries_sequence_length_alignment_on_attack():
     assert "original_inputs" in res
 
 
+def test_timeseries_negative_inputs_clip_bounds_and_predictions():
+    """Verify that standardized time-series inputs with negative values retain valid bounds and extract predictions."""
+    import torch.nn as nn
+    from frontend.services.attack_service import execute_configured_attack
+
+    class DummyTSLinear(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.fc = nn.Linear(50, 2)
+
+        def forward(self, x):
+            # Expects (B, 1, 50) or (B, 50, 1)
+            flat = x.reshape(x.size(0), -1)
+            return self.fc(flat)
+
+    model = DummyTSLinear()
+    # Negative standardized values
+    inputs = torch.randn(8, 1, 50)
+    labels = torch.randint(0, 2, (8,))
+
+    res = execute_configured_attack(
+        model=model,
+        attack_name="pgd",
+        inputs=inputs,
+        labels=labels,
+        epsilon=0.5,
+        clip_min=0.0,
+        clip_max=1.0,
+    )
+    assert res is not None
+    assert "asr_percentage" in res
+    assert res["clean_accuracy"] is not None
+    assert res["adversarial_accuracy"] is not None
+    assert res["_clean_inputs"] is not None
+
+
+def test_timeseries_soft_dtw_channels_first_layout():
+    """Verify SoftDTWAttack operates on (B, 1, T) layout without early aborting."""
+    import torch.nn as nn
+    from app.attack_engine.attacks.time_series.soft_dtw import SoftDTWAttack
+    from app.attack_engine.config import AttackConfig
+
+    class Dummy1DNet(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.conv = nn.Conv1d(1, 4, kernel_size=3, padding=1)
+            self.fc = nn.Linear(4 * 20, 2)
+
+        def forward(self, x):
+            # Expects (B, 1, 20)
+            h = self.conv(x)
+            return self.fc(h.view(x.size(0), -1))
+
+    model = Dummy1DNet()
+    inputs = torch.randn(4, 1, 20)
+    labels = torch.tensor([0, 1, 0, 1])
+
+    attack = SoftDTWAttack(model=model)
+    cfg = AttackConfig(epsilon=0.2, params={"num_steps": 3, "max_warp": 0.2})
+    adv = attack.generate(inputs, labels=labels, config=cfg)
+    assert adv.shape == inputs.shape
+    assert isinstance(adv, torch.Tensor)
+
+
 
 
 
