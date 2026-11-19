@@ -1316,6 +1316,62 @@ def test_timeseries_soft_dtw_channels_first_layout():
     assert isinstance(adv, torch.Tensor)
 
 
+def test_xai_model_output_prediction_outputs_unwrapping():
+    """Verify XAI explainer extracts logits and avoids over-unwrapping models with .model attribute."""
+    import torch.nn as nn
+    from frontend.services.xai_service import explain_assessment
+
+    class DummyBackbone(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.linear = nn.Linear(10, 10)
+
+        def forward(self, x):
+            return self.linear(x)
+
+    class DummyContainer:
+        def __init__(self, logits, hidden):
+            self.prediction_outputs = logits
+            self.last_hidden_state = hidden
+
+    class DummyModelWithModelAttr(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.model = DummyBackbone()
+            self.head = nn.Linear(10, 2)
+
+        def forward(self, x):
+            flat = x.view(x.size(0), -1)
+            h = self.model(flat)
+            logits = self.head(h)
+            return DummyContainer(logits=logits, hidden=h)
+
+    model = DummyModelWithModelAttr()
+    inputs = torch.randn(4, 10)
+    labels = torch.tensor([0, 1, 0, 1])
+
+    attack_result = {
+        "attack_name": "PGD",
+        "original_inputs": inputs,
+        "clean_inputs": inputs,
+        "adversarial_examples": inputs + 0.05,
+        "labels": labels,
+        "original_predictions": labels,
+        "adversarial_predictions": labels,
+        "threat_model": "white_box",
+    }
+
+    xai_res = explain_assessment(
+        model=model,
+        attack_result=attack_result,
+        domain="tabular",
+        technique="saliency",
+    )
+    assert xai_res is not None
+    assert xai_res.get("executed") is True
+    assert xai_res.get("status") == "success"
+
+
 
 
 

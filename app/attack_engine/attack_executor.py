@@ -77,7 +77,6 @@ def execute_attack(
         prediction_eval_error = None
 
         if (isinstance(inputs, (torch.Tensor, dict))) and (isinstance(adv_inputs, (torch.Tensor, dict))):
-        if (isinstance(inputs, (torch.Tensor, dict))) and (isinstance(adv_inputs, (torch.Tensor, dict))):
             try:
                 raw_model = attack_instance._get_raw_model()
                 with torch.no_grad():
