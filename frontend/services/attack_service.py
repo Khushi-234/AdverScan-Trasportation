@@ -1,0 +1,1032 @@
+"""
+Attack Engine Service for AdverScan Frontend.
+
+Bridges the Streamlit UI to the existing backend attack engine (Module 3)
+without duplicating attack discovery or execution logic.
+Provides canonical domain attack routing and rich telemetry matching
+scripts/run_pipeline_for_multimodel.py.
+"""
+
+from __future__ import annotations
+
+import time
+from typing import Any, Dict, List, Optional
+import torch
+import torch.nn.functional as F
+
+from app.attack_engine.attack_discovery import discover_attacks
+from app.attack_engine.attack_executor import execute_attack
+from app.attack_engine.attack_registry import get_attack, list_attacks
+from app.attack_engine.config import AttackConfig
+from app.attack_engine.exceptions import (
+    AttackConfigurationError,
+    AttackError,
+    AttackExecutionError,
+    UnsupportedModelError,
+)
+from app.attack_engine.models import AttackMetadata, AttackResult
+from app.attack_engine.utils.perturbation import compute_perturbation_metrics
+from app.attack_engine.utils.validation import check_model_compatibility
+
+# Canonical catalog of attacks per domain with full descriptive metadata
+CANONICAL_DOMAIN_CATALOG: Dict[str, List[Dict[str, str]]] = {
+    "image": [
+        {
+            "id": "fgsm",
+            "name": "FGSM",
+            "full_name": "Fast Gradient Sign Method",
+            "category": "Gradient-based (One-step)",
+            "threat_model": "White-Box",
+            "description": "Fast single-step perturbation along the sign of the loss gradient.",
+        },
+        {
+            "id": "pgd",
+            "name": "PGD",
+            "full_name": "Projected Gradient Descent",
+            "category": "Gradient-based (Iterative)",
+            "threat_model": "White-Box",
+            "description": "Multi-step iterative gradient ascent projected onto the epsilon ball.",
+        },
+        {
+            "id": "deepfool",
+            "name": "DeepFool",
+            "full_name": "DeepFool Minimal Perturbation",
+            "category": "Boundary-based",
+            "threat_model": "White-Box",
+            "description": "Finds closest decision boundary via iterative linearized hyperplane projections.",
+        },
+        {
+            "id": "cw",
+            "name": "Carlini & Wagner (CW)",
+            "full_name": "Carlini & Wagner L2 Optimization",
+            "category": "Optimization-based",
+            "threat_model": "White-Box",
+            "description": "Optimization-based attack finding minimal L2 distortion to alter predictions.",
+        },
+        {
+            "id": "fab",
+            "name": "FAB",
+            "full_name": "Fast Adaptive Boundary Attack",
+            "category": "Boundary-based",
+            "threat_model": "White-Box",
+            "description": "Fast adaptive boundary projection minimizing Lp distance without gradient masking.",
+        },
+    ],
+    "text": [
+        {
+            "id": "embedding_pgd",
+            "name": "Embedding PGD",
+            "full_name": "Embedding-Space Projected Gradient Descent",
+            "category": "Gradient-based",
+            "threat_model": "White-Box",
+            "description": "Iterative perturbation in continuous word and subword embedding spaces.",
+        },
+        {
+            "id": "hotflip",
+            "name": "HotFlip",
+            "full_name": "HotFlip Gradient Substitution",
+            "category": "Gradient-based (Token-level)",
+            "threat_model": "White-Box",
+            "description": "Single-token substitution using directional gradient approximation.",
+        },
+        {
+            "id": "textbugger_wb",
+            "name": "TextBugger WB",
+            "full_name": "TextBugger White-Box Attack",
+            "category": "Gradient-based / Saliency",
+            "threat_model": "White-Box",
+            "description": "Character and word-level perturbations guided by token saliency.",
+        },
+        {
+            "id": "universal_trigger",
+            "name": "Universal Trigger",
+            "full_name": "Universal Adversarial Trigger",
+            "category": "Optimization / Trigger",
+            "threat_model": "White-Box",
+            "description": "Optimizes static token sequences that induce targeted misclassification.",
+        },
+        {
+            "id": "gradient_substitution",
+            "name": "Gradient Substitution",
+            "full_name": "First-Order Gradient Token Substitution",
+            "category": "Gradient-based",
+            "threat_model": "White-Box",
+            "description": "Token-level replacement guided by first-order loss gradients.",
+        },
+    ],
+    "time-series": [
+        {
+            "id": "time_series_pgd",
+            "name": "Time-Series PGD",
+            "full_name": "Temporal Projected Gradient Descent",
+            "category": "Gradient-based",
+            "threat_model": "White-Box",
+            "description": "Iterative Linf/L2 gradient perturbation constrained to temporal signal bounds.",
+        },
+        {
+            "id": "smooth_pgd",
+            "name": "Smooth PGD",
+            "full_name": "Smooth Projected Gradient Descent",
+            "category": "Gradient-based / TV Regularized",
+            "threat_model": "White-Box",
+            "description": "PGD with Total Variation penalization to preserve signal waveform smoothness.",
+        },
+        {
+            "id": "wavelet",
+            "name": "Wavelet Attack",
+            "full_name": "Wavelet Spectral Perturbation Attack",
+            "category": "Spectral / Frequency-Domain",
+            "threat_model": "White-Box",
+            "description": "Injects adversarial perturbations into discrete wavelet frequency sub-bands.",
+        },
+        {
+            "id": "soft_dtw",
+            "name": "Soft-DTW Attack",
+            "full_name": "Soft Dynamic Time Warping Attack",
+            "category": "Temporal Warping",
+            "threat_model": "White-Box",
+            "description": "Adversarial time-series distortion minimizing differentiable soft-DTW distance.",
+        },
+        {
+            "id": "time_series_jsma",
+            "name": "Time-Series JSMA",
+            "full_name": "Jacobian Saliency Map for Time-Series",
+            "category": "Saliency-based",
+            "threat_model": "White-Box",
+            "description": "Greedy saliency-guided perturbation of critical temporal timestamps.",
+        },
+    ],
+    "tabular": [
+        {
+            "id": "cap_pgd",
+            "name": "CapPGD",
+            "full_name": "Constraint-Aware Projected Gradient Descent",
+            "category": "Gradient-based / Constrained",
+            "threat_model": "White-Box",
+            "description": "Iterative PGD projecting perturbations onto continuous and categorical bounds.",
+        },
+        {
+            "id": "lowprofool",
+            "name": "LowProFool",
+            "full_name": "LowProFool Feature-Weighted Saliency",
+            "category": "Gradient-based / Weighted",
+            "threat_model": "White-Box",
+            "description": "Perturbs tabular features while penalizing distance according to feature mutability.",
+        },
+        {
+            "id": "tabular_cw",
+            "name": "Tabular CW",
+            "full_name": "Carlini & Wagner for Tabular Data",
+            "category": "Optimization-based",
+            "threat_model": "White-Box",
+            "description": "L2 optimization attack respecting tabular feature boundaries and immutability.",
+        },
+        {
+            "id": "tabular_jsma",
+            "name": "Tabular JSMA",
+            "full_name": "Jacobian Saliency Map for Tabular",
+            "category": "Saliency-based",
+            "threat_model": "White-Box",
+            "description": "Iteratively perturbs the most influential mutable tabular feature columns.",
+        },
+        {
+            "id": "vae_attack",
+            "name": "VAE Attack",
+            "full_name": "On-Manifold VAE Latent Attack",
+            "category": "Manifold-based",
+            "threat_model": "White-Box",
+            "description": "Generates realistic adversarial tabular records by perturbing in latent VAE space.",
+        },
+    ],
+}
+
+
+def get_compatible_attacks(
+    model: Any, data_domain: str = "image"
+) -> List[Dict[str, Any]]:
+    """
+    Retrieve registered attacks from the existing attack engine and filter
+    only those that are strictly compatible with the loaded model and domain.
+    Eliminates duplicates (such as 'cw' vs 'carlini_wagner') by prioritizing canonical IDs.
+
+    Args:
+        model: Target model or BaseModelAdapter instance.
+        data_domain: Target data domain string ('image', 'text', 'tabular', 'time-series').
+
+    Returns:
+        List of dictionaries with attack metadata and parameters for compatible attacks.
+    """
+    # 1. Trigger dynamic package discovery across attack modules
+    discover_attacks()
+
+    clean_domain = data_domain.strip().lower().replace("-", "_")
+    if clean_domain in ("timeseries", "sequence"):
+        clean_domain = "time-series"
+    elif clean_domain in ("vision",):
+        clean_domain = "image"
+    elif clean_domain in ("nlp",):
+        clean_domain = "text"
+    elif clean_domain in ("csv",):
+        clean_domain = "tabular"
+
+    canonical_list = CANONICAL_DOMAIN_CATALOG.get(clean_domain, [])
+    compatible_attacks: List[Dict[str, Any]] = []
+    seen_classes = set()
+
+    for item in canonical_list:
+        atk_id = item["id"]
+        try:
+            attack_cls = get_attack(atk_id)
+        except Exception:
+            continue
+
+        if attack_cls in seen_classes:
+            continue
+
+        meta: Optional[AttackMetadata] = getattr(attack_cls, "metadata", None)
+        if meta is None:
+            continue
+
+        # Check model capability compatibility
+        try:
+            check_model_compatibility(model, meta)
+        except (UnsupportedModelError, AttackConfigurationError):
+            continue
+
+        seen_classes.add(attack_cls)
+        compatible_attacks.append(
+            {
+                "id": atk_id,
+                "name": item["name"],
+                "full_name": item["full_name"],
+                "class_name": attack_cls.__name__,
+                "domain": clean_domain,
+                "category": item["category"],
+                "threat_model": item["threat_model"],
+                "description": item["description"],
+                "supported_norms": meta.supported_norms or ["Linf"],
+                "targeted_supported": bool(meta.targeted_supported),
+                "untargeted_supported": bool(meta.untargeted_supported),
+                "iterative": bool(meta.iterative),
+                "computational_cost": meta.computational_cost.capitalize(),
+                "attack_cls": attack_cls,
+            }
+        )
+
+    # Fallback to general registry lookup if canonical list had no hits
+    if not compatible_attacks:
+        for name in sorted(list_attacks()):
+            try:
+                attack_cls = get_attack(name)
+            except Exception:
+                continue
+
+            if attack_cls in seen_classes:
+                continue
+
+            meta = getattr(attack_cls, "metadata", None)
+            if not meta:
+                continue
+
+            meta_domain = meta.domain.strip().lower().replace("-", "_")
+            if clean_domain.replace("-", "_") != meta_domain:
+                continue
+
+            try:
+                check_model_compatibility(model, meta)
+            except Exception:
+                continue
+
+            seen_classes.add(attack_cls)
+            compatible_attacks.append(
+                {
+                    "id": name,
+                    "name": meta.name.upper(),
+                    "full_name": meta.name.upper(),
+                    "class_name": attack_cls.__name__,
+                    "domain": meta.domain,
+                    "category": meta.category.capitalize(),
+                    "threat_model": "White-Box",
+                    "description": f"{meta.name.upper()} adversarial attack algorithm.",
+                    "supported_norms": meta.supported_norms or ["Linf"],
+                    "targeted_supported": bool(meta.targeted_supported),
+                    "untargeted_supported": bool(meta.untargeted_supported),
+                    "iterative": bool(meta.iterative),
+                    "computational_cost": meta.computational_cost.capitalize(),
+                    "attack_cls": attack_cls,
+                }
+            )
+
+    return compatible_attacks
+
+
+def get_class_labels_mapping(
+    model: Any = None,
+    dataset_name: Optional[str] = None,
+    num_classes: Optional[int] = None,
+) -> Dict[int, str]:
+    """
+    Resolve semantic human-readable class names for target classification and outcome reporting.
+    Inspects model config id2label, dataset identifier mappings, and fallbacks.
+    """
+    mapping: Dict[int, str] = {}
+
+    # 1. Inspect model architecture / HuggingFace config id2label
+    if model is not None:
+        raw = getattr(model, "get_model", lambda: model)()
+        if hasattr(raw, "config") and getattr(raw.config, "id2label", None):
+            id2l = raw.config.id2label
+            if isinstance(id2l, dict):
+                for k, v in id2l.items():
+                    try:
+                        mapping[int(k)] = str(v)
+                    except (ValueError, TypeError):
+                        pass
+
+    if mapping:
+        return mapping
+
+    # 2. Known benchmark dataset name matching
+    ds = str(dataset_name or "").lower().strip()
+    if any(k in ds for k in ("census", "adult")):
+        return {0: "<=50K (Low Income)", 1: ">50K (High Income)"}
+    if any(k in ds for k in ("fraud", "credit")):
+        return {0: "Legitimate Transaction", 1: "Fraudulent Transaction"}
+    if "cifar" in ds:
+        return {
+            0: "Airplane", 1: "Automobile", 2: "Bird", 3: "Cat", 4: "Deer",
+            5: "Dog", 6: "Frog", 7: "Horse", 8: "Ship", 9: "Truck",
+        }
+    if any(k in ds for k in ("intel", "scenery")):
+        return {0: "Buildings", 1: "Forest", 2: "Glacier", 3: "Mountain", 4: "Sea", 5: "Street"}
+    if any(k in ds for k in ("sst", "imdb")):
+        return {0: "Negative Sentiment", 1: "Positive Sentiment"}
+    if "twitter" in ds:
+        return {0: "Negative", 1: "Neutral", 2: "Positive"}
+    if any(k in ds for k in ("ag_news", "ag-news", "news")):
+        return {0: "World", 1: "Sports", 2: "Business", 3: "Sci/Tech"}
+    if "ecg" in ds:
+        return {0: "Normal Sinus Rhythm", 1: "Arrhythmia / Abnormal"}
+    if "gtsrb" in ds:
+        return {
+            0: "Speed 20km/h", 1: "Speed 30km/h", 2: "Speed 50km/h", 3: "Speed 60km/h",
+            4: "Speed 70km/h", 5: "Speed 80km/h", 6: "End Speed 80km/h", 7: "Speed 100km/h",
+            8: "Speed 120km/h", 9: "No passing", 10: "No passing >3.5t", 11: "Right-of-way",
+            12: "Priority road", 13: "Yield", 14: "Stop", 15: "No vehicles",
+            16: "Veh >3.5t prohibited", 17: "No entry", 18: "General caution", 19: "Dangerous curve left",
+            20: "Dangerous curve right", 21: "Double curve", 22: "Bumpy road", 23: "Slippery road",
+            24: "Road narrows right", 25: "Road work", 26: "Traffic signals", 27: "Pedestrians",
+            28: "Children crossing", 29: "Bicycles crossing", 30: "Ice/snow", 31: "Wild animals",
+            32: "End speed/passing limits", 33: "Turn right", 34: "Turn left", 35: "Ahead only",
+            36: "Straight or right", 37: "Straight or left", 38: "Keep right", 39: "Keep left",
+            40: "Roundabout", 41: "End no passing", 42: "End no passing >3.5t",
+        }
+
+    # 3. Numeric generic fallback
+    n = max(2, num_classes or 2)
+    return {i: f"Class {i}" for i in range(n)}
+
+
+class SimpleTabularVAE(torch.nn.Module):
+    """Automatic lightweight fallback VAE for tabular models when model.vae is not pre-packaged."""
+    def __init__(self, in_features: int = 14, latent_dim: int = 4):
+        super().__init__()
+        l_dim = min(latent_dim, max(1, in_features // 2))
+        self.encoder = torch.nn.Sequential(
+            torch.nn.Linear(in_features, max(8, in_features)),
+            torch.nn.ReLU(),
+            torch.nn.Linear(max(8, in_features), l_dim),
+        )
+        self.decoder = torch.nn.Sequential(
+            torch.nn.Linear(l_dim, max(8, in_features)),
+            torch.nn.ReLU(),
+            torch.nn.Linear(max(8, in_features), in_features),
+        )
+
+    def encode(self, x: torch.Tensor) -> torch.Tensor:
+        return self.encoder(x)
+
+    def decode(self, z: torch.Tensor) -> torch.Tensor:
+        return self.decoder(z)
+
+
+def _execute_attack_batched(
+    model: Any,
+    attack_cls: Any,
+    inputs: Any,
+    labels: Any,
+    config: AttackConfig,
+) -> AttackResult:
+    """
+    Execute attack with automatic VRAM-safe micro-batching and memory reclamation.
+    Prevents CUDA Out-Of-Memory (OOM) errors when evaluating large batches (e.g., 1,500 samples
+    on memory-intensive architectures like Vision Transformers or deep CNNs).
+    """
+    if not isinstance(inputs, torch.Tensor):
+        return execute_attack(
+            model=model,
+            attack_cls=attack_cls,
+            inputs=inputs,
+            labels=labels,
+            config=config,
+        )
+
+    total_samples = inputs.size(0)
+    raw_model = getattr(model, "get_model", lambda: model)()
+    is_cuda = False
+    try:
+        is_cuda = next(raw_model.parameters()).is_cuda
+    except Exception:
+        is_cuda = torch.cuda.is_available()
+
+    # Determine safe micro-batch chunk size based on input dimensions and accelerator
+    if inputs.dim() >= 4:
+        # Vision 4D tensor [N, C, H, W] - large intermediate backprop activation tensors
+        chunk_size = 16 if is_cuda else 32
+    elif inputs.dim() == 3:
+        # Time-series/Sequence 3D tensor [N, T, D]
+        chunk_size = 32 if is_cuda else 64
+    else:
+        # Tabular 2D tensor [N, D]
+        chunk_size = 64 if is_cuda else 128
+
+    # Filter out runtime return stats so they do not contaminate config.params
+    clean_params = {
+        k: v for k, v in (config.params or {}).items()
+        if k not in ("perturbation_stats", "weighted_distance", "success_rate")
+    }
+
+    # If the batch is already small, run directly with memory cleanup
+    if total_samples <= chunk_size:
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+        single_config = AttackConfig(
+            epsilon=config.epsilon,
+            clip_min=config.clip_min,
+            clip_max=config.clip_max,
+            loss_fn=config.loss_fn,
+            params=dict(clean_params),
+        )
+        return execute_attack(
+            model=model,
+            attack_cls=attack_cls,
+            inputs=inputs,
+            labels=labels,
+            config=single_config,
+        )
+
+    # Process in safe micro-batches to guarantee VRAM bounds
+    adv_chunks = []
+    orig_preds_chunks = []
+    adv_preds_chunks = []
+    success_chunks = []
+    labels_tensor = (
+        labels if isinstance(labels, torch.Tensor) else (torch.as_tensor(labels) if labels is not None else None)
+    )
+
+    start_time = time.time()
+
+    for start_idx in range(0, total_samples, chunk_size):
+        end_idx = min(start_idx + chunk_size, total_samples)
+        batch_inputs = inputs[start_idx:end_idx]
+        batch_labels = labels_tensor[start_idx:end_idx] if labels_tensor is not None else None
+
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
+        chunk_config = AttackConfig(
+            epsilon=config.epsilon,
+            clip_min=config.clip_min,
+            clip_max=config.clip_max,
+            loss_fn=config.loss_fn,
+            params=dict(clean_params),
+        )
+
+        try:
+            chunk_res = execute_attack(
+                model=model,
+                attack_cls=attack_cls,
+                inputs=batch_inputs,
+                labels=batch_labels,
+                config=chunk_config,
+            )
+        except Exception as oom_exc:
+            # Fallback if a very large model (e.g. ViT-Large) still OOMs on 16: retry with half batch size
+            if "out of memory" in str(oom_exc).lower() and chunk_size > 4:
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+                sub_chunk = max(2, chunk_size // 2)
+                sub_advs, sub_origs, sub_adv_p, sub_succs = [], [], [], []
+                for s_i in range(start_idx, end_idx, sub_chunk):
+                    e_i = min(s_i + sub_chunk, end_idx)
+                    s_in = inputs[s_i:e_i]
+                    s_lbl = labels_tensor[s_i:e_i] if labels_tensor is not None else None
+                    if torch.cuda.is_available():
+                        torch.cuda.empty_cache()
+                    sub_cfg = AttackConfig(
+                        epsilon=config.epsilon,
+                        clip_min=config.clip_min,
+                        clip_max=config.clip_max,
+                        loss_fn=config.loss_fn,
+                        params=dict(clean_params),
+                    )
+                    s_res = execute_attack(
+                        model=model,
+                        attack_cls=attack_cls,
+                        inputs=s_in,
+                        labels=s_lbl,
+                        config=sub_cfg,
+                    )
+                    if isinstance(s_res.adversarial_examples, torch.Tensor):
+                        sub_advs.append(s_res.adversarial_examples.detach().cpu())
+                    elif s_res.adversarial_examples is not None:
+                        sub_advs.append(s_res.adversarial_examples)
+                    if s_res.original_predictions is not None:
+                        sub_origs.append(s_res.original_predictions.detach().cpu())
+                    if s_res.adversarial_predictions is not None:
+                        sub_adv_p.append(s_res.adversarial_predictions.detach().cpu())
+                    if s_res.success is not None:
+                        sub_succs.append(s_res.success.detach().cpu())
+
+                adv_chunks.extend(sub_advs)
+                orig_preds_chunks.extend(sub_origs)
+                adv_preds_chunks.extend(sub_adv_p)
+                success_chunks.extend(sub_succs)
+                continue
+            else:
+                raise oom_exc
+
+        if isinstance(chunk_res.adversarial_examples, torch.Tensor):
+            adv_chunks.append(chunk_res.adversarial_examples.detach().cpu())
+        elif chunk_res.adversarial_examples is not None:
+            adv_chunks.append(chunk_res.adversarial_examples)
+
+        if chunk_res.original_predictions is not None:
+            orig_preds_chunks.append(chunk_res.original_predictions.detach().cpu())
+        if chunk_res.adversarial_predictions is not None:
+            adv_preds_chunks.append(chunk_res.adversarial_predictions.detach().cpu())
+        if chunk_res.success is not None:
+            success_chunks.append(chunk_res.success.detach().cpu())
+
+        del chunk_res
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
+    elapsed_time = time.time() - start_time
+
+    # Reconstruct aggregated full tensors on CPU
+    merged_adv = torch.cat(adv_chunks, dim=0) if adv_chunks and isinstance(adv_chunks[0], torch.Tensor) else None
+    merged_orig = torch.cat(orig_preds_chunks, dim=0) if orig_preds_chunks else None
+    merged_adv_preds = torch.cat(adv_preds_chunks, dim=0) if adv_preds_chunks else None
+    merged_success = torch.cat(success_chunks, dim=0) if success_chunks else None
+
+    # Compute global perturbation metrics on combined CPU tensors
+    metrics = {}
+    if merged_adv is not None and isinstance(inputs, torch.Tensor):
+        metrics = compute_perturbation_metrics(inputs.cpu(), merged_adv.cpu())
+
+    static_metadata = getattr(attack_cls, "metadata", None)
+    exec_meta = AttackMetadata(
+        name=getattr(static_metadata, "name", getattr(attack_cls, "__name__", "attack")),
+        domain=getattr(static_metadata, "domain", "image"),
+        category=getattr(static_metadata, "category", "gradient"),
+        attack_type=getattr(static_metadata, "attack_type", "white_box"),
+        epsilon=config.epsilon,
+        clip_min=config.clip_min,
+        clip_max=config.clip_max,
+        execution_time_seconds=elapsed_time,
+        parameters=config.params or {},
+    )
+    return AttackResult(
+        adversarial_examples=merged_adv,
+        metadata=exec_meta,
+        original_inputs=inputs,
+        labels=labels,
+        attack_name=getattr(static_metadata, "name", getattr(attack_cls, "__name__", "attack")),
+        success=merged_success,
+        original_predictions=merged_orig,
+        adversarial_predictions=merged_adv_preds,
+        perturbation_metrics=metrics,
+        execution_time=elapsed_time,
+        attack_metadata=static_metadata,
+    )
+
+
+def _extract_model_logits(outputs: Any) -> Any:
+    """Extract classification logits tensor from model outputs across frameworks and output types."""
+    if hasattr(outputs, "logits") and outputs.logits is not None:
+        return outputs.logits
+    if hasattr(outputs, "prediction_logits") and outputs.prediction_logits is not None:
+        return outputs.prediction_logits
+    if hasattr(outputs, "prediction_outputs") and outputs.prediction_outputs is not None:
+        return outputs.prediction_outputs
+    if hasattr(outputs, "last_hidden_state") and outputs.last_hidden_state is not None:
+        return outputs.last_hidden_state
+    if isinstance(outputs, (tuple, list)) and len(outputs) > 0:
+        return outputs[0]
+    if hasattr(outputs, "get") and callable(getattr(outputs, "get")):
+        for k in ("logits", "prediction_logits", "prediction_outputs"):
+            val = outputs.get(k)
+            if val is not None:
+                return val
+    return outputs
+
+
+def execute_configured_attack(
+    model: Any,
+    attack_name: str,
+    inputs: Any,
+    labels: Any,
+    epsilon: float = 0.05,
+    clip_min: Optional[float] = 0.0,
+    clip_max: Optional[float] = 1.0,
+    params: Optional[Dict[str, Any]] = None,
+    dataset_name: Optional[str] = None,
+    class_names: Optional[Dict[int, str]] = None,
+) -> Dict[str, Any]:
+    """
+    Execute selected attack on the model using the backend execution interface
+    and compute all telemetry matching run_pipeline_for_multimodel.py.
+    Equipped with automatic VRAM-safe micro-batching to handle 1,500+ samples.
+
+    Returns:
+        Structured result dictionary formatted for Streamlit UI display.
+    """
+    # 1. Retrieve attack class from backend registry
+    try:
+        attack_cls = get_attack(attack_name)
+    except Exception as exc:
+        raise AttackConfigurationError(
+            f"Attack '{attack_name}' is not registered: {str(exc)}"
+        ) from exc
+
+    # 2. Auto-equip lightweight tabular VAE if running VAEAttack without model.vae
+    clean_params = dict(params or {})
+    canon_atk = str(attack_name).lower().strip()
+    if canon_atk in ("vae_attack", "tabular_vae", "vae") and "vae" not in clean_params:
+        raw_m = getattr(model, "get_model", lambda: model)()
+        if not hasattr(model, "vae") and not hasattr(raw_m, "vae"):
+            in_f = 14
+            if hasattr(inputs, "shape") and len(inputs.shape) >= 2:
+                in_f = int(inputs.shape[-1])
+            try:
+                device = (
+                    getattr(inputs, "device", None)
+                    or (next(raw_m.parameters()).device if hasattr(raw_m, "parameters") and list(raw_m.parameters()) else torch.device("cpu"))
+                )
+            except Exception:
+                device = torch.device("cpu")
+            clean_params["vae"] = SimpleTabularVAE(in_features=in_f).to(device)
+
+    # Build backend AttackConfig
+    # For non-image domains or tensors whose natural range extends outside [0, 1] (e.g. standardized time series/audio),
+    # an explicit clip of [0.0, 1.0] will corrupt negative values to 0.0.
+    if isinstance(inputs, torch.Tensor) and clip_min == 0.0 and clip_max == 1.0:
+        if (inputs.min() < -1e-4) or (inputs.max() > 1.0 + 1e-4):
+            clip_min = None
+            clip_max = None
+
+    config = AttackConfig(
+        epsilon=float(epsilon),
+        clip_min=float(clip_min) if clip_min is not None else None,
+        clip_max=float(clip_max) if clip_max is not None else None,
+        params=clean_params,
+    )
+
+    # Auto-align time-series sequence length and channels to model configuration if needed
+    if isinstance(inputs, torch.Tensor) and inputs.ndim == 3:
+        raw_m = getattr(model, "get_model", lambda: model)()
+        cfg = getattr(raw_m, "config", None)
+        if cfg is not None:
+            exp_seq_len = getattr(cfg, "context_length", None) or getattr(cfg, "sequence_length", None)
+            if exp_seq_len is not None and inputs.shape[1] != exp_seq_len:
+                if inputs.shape[1] < exp_seq_len:
+                    pad_len = exp_seq_len - inputs.shape[1]
+                    inputs = torch.cat([inputs, inputs[:, -1:, :].expand(-1, pad_len, -1)], dim=1)
+                else:
+                    inputs = inputs[:, :exp_seq_len, :]
+
+            exp_channels = getattr(cfg, "num_input_channels", None) or getattr(cfg, "num_channels", None)
+            if exp_channels is not None and inputs.shape[2] != exp_channels:
+                if inputs.shape[2] < exp_channels:
+                    pad_c = exp_channels - inputs.shape[2]
+                    inputs = torch.cat([inputs, inputs[:, :, -1:].expand(-1, -1, pad_c)], dim=2)
+                else:
+                    inputs = inputs[:, :, :exp_channels]
+
+    # Clean cache before launching attack
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+
+    # 3. Execute via VRAM-safe batched attack executor
+    try:
+        t0 = time.time()
+        attack_res: AttackResult = _execute_attack_batched(
+            model=model,
+            attack_cls=attack_cls,
+            inputs=inputs,
+            labels=labels,
+            config=config,
+        )
+        wall_time = time.time() - t0
+    except (AttackExecutionError, AttackConfigurationError, AttackError) as known_err:
+        raise known_err
+    except Exception as exc:
+        raise AttackExecutionError(
+            f"Backend execution failure during '{attack_name}': {str(exc)}"
+        ) from exc
+
+    # 4. Extract real predictions and confidences
+    raw_model = getattr(model, "get_model", lambda: model)()
+    orig_preds = attack_res.original_predictions
+    adv_preds = attack_res.adversarial_predictions
+    success_mask = attack_res.success
+    metrics = dict(attack_res.perturbation_metrics or {})
+    if isinstance(inputs, torch.Tensor) and inputs.numel() > 0 and "l0" in metrics:
+        elem_per_sample = inputs[0].numel()
+        if elem_per_sample > 0:
+            metrics["l0_pct"] = min(
+                100.0, float(metrics["l0"] / elem_per_sample * 100.0)
+            )
+    exec_time = attack_res.execution_time or wall_time
+
+    # Compute confidences using safe inference batches under torch.no_grad()
+    clean_confs = None
+    adv_confs = None
+    if hasattr(raw_model, "eval"):
+        try:
+            device = (
+                next(raw_model.parameters()).device
+                if list(raw_model.parameters())
+                else torch.device("cpu")
+            )
+            with torch.no_grad():
+                raw_model.eval()
+
+                # Clean confidences & predictions
+                if isinstance(inputs, dict) or hasattr(inputs, "items"):
+                    batch_in = {k: (v.to(device) if isinstance(v, torch.Tensor) else v) for k, v in inputs.items()}
+                    out_c = _extract_model_logits(raw_model(**batch_in))
+                    clean_confs = F.softmax(out_c, dim=-1).max(dim=-1).values.cpu()
+                    if orig_preds is None:
+                        orig_preds = out_c.argmax(dim=-1).cpu()
+                elif isinstance(inputs, torch.Tensor):
+                    eval_bs = 32 if inputs.dim() >= 4 else 64
+                    conf_c_list = []
+                    pred_c_list = []
+                    for b_i in range(0, inputs.size(0), eval_bs):
+                        b_in = inputs[b_i : b_i + eval_bs].to(device)
+                        out_c = _extract_model_logits(raw_model(b_in))
+                        conf_c_list.append(F.softmax(out_c, dim=-1).max(dim=-1).values.cpu())
+                        if orig_preds is None:
+                            pred_c_list.append(out_c.argmax(dim=-1).cpu())
+                    if conf_c_list:
+                        clean_confs = torch.cat(conf_c_list, dim=0)
+                    if orig_preds is None and pred_c_list:
+                        orig_preds = torch.cat(pred_c_list, dim=0)
+
+                # Adversarial confidences & predictions
+                if attack_res.adversarial_examples is not None:
+                    adv_tensor_all = attack_res.adversarial_examples
+                    if isinstance(adv_tensor_all, dict) or hasattr(adv_tensor_all, "items"):
+                        batch_adv = {k: (v.to(device) if isinstance(v, torch.Tensor) else v) for k, v in adv_tensor_all.items()}
+                        out_a = _extract_model_logits(raw_model(**batch_adv))
+                        adv_confs = F.softmax(out_a, dim=-1).max(dim=-1).values.cpu()
+                        if adv_preds is None:
+                            adv_preds = out_a.argmax(dim=-1).cpu()
+                    elif isinstance(adv_tensor_all, torch.Tensor):
+                        eval_bs = 32 if adv_tensor_all.dim() >= 4 else 64
+                        conf_a_list = []
+                        pred_a_list = []
+                        for b_i in range(0, adv_tensor_all.size(0), eval_bs):
+                            b_in = adv_tensor_all[b_i : b_i + eval_bs].to(device)
+                            out_a = _extract_model_logits(raw_model(b_in))
+                            conf_a_list.append(F.softmax(out_a, dim=-1).max(dim=-1).values.cpu())
+                            if adv_preds is None:
+                                pred_a_list.append(out_a.argmax(dim=-1).cpu())
+                        if conf_a_list:
+                            adv_confs = torch.cat(conf_a_list, dim=0)
+                        if adv_preds is None and pred_a_list:
+                            adv_preds = torch.cat(pred_a_list, dim=0)
+        except Exception:
+            pass
+        finally:
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+
+    # Accuracy calculations
+    total_samples = len(labels) if hasattr(labels, "__len__") else 1
+    labels_tensor = (
+        labels if isinstance(labels, torch.Tensor) else torch.as_tensor(labels)
+    )
+
+    clean_correct = 0
+    adv_correct = 0
+    if orig_preds is not None and isinstance(orig_preds, torch.Tensor):
+        clean_correct = int((orig_preds.cpu() == labels_tensor.cpu()).sum().item())
+    if adv_preds is not None and isinstance(adv_preds, torch.Tensor):
+        adv_correct = int((adv_preds.cpu() == labels_tensor.cpu()).sum().item())
+
+    clean_acc = (clean_correct / total_samples) * 100.0 if total_samples > 0 else 0.0
+    adv_acc = (adv_correct / total_samples) * 100.0 if total_samples > 0 else 0.0
+    acc_drop = clean_acc - adv_acc
+
+    # Confidence averages
+    clean_conf_avg = (
+        float(clean_confs.mean().item() * 100.0) if clean_confs is not None else None
+    )
+    adv_conf_avg = (
+        float(adv_confs.mean().item() * 100.0) if adv_confs is not None else None
+    )
+    conf_drop = (
+        (clean_conf_avg - adv_conf_avg)
+        if (clean_conf_avg is not None and adv_conf_avg is not None)
+        else None
+    )
+
+    # Calculate Attack Success Rate (ASR) strictly matching backend definition
+    # Denominator: initially correctly classified clean samples (num_clean_correct)
+    is_targeted = bool((params or {}).get("targeted", False))
+    target_label = (params or {}).get("target_label", (params or {}).get("target", None))
+    if target_label is not None:
+        try:
+            target_label = int(target_label)
+        except (ValueError, TypeError):
+            pass
+
+    successful_count = 0
+    asr_undefined = False
+    if clean_correct > 0:
+        if is_targeted and target_label is not None:
+            if orig_preds is not None and adv_preds is not None:
+                succ_mask = (orig_preds.cpu() == labels_tensor.cpu()) & (adv_preds.cpu() == target_label)
+                successful_count = int(succ_mask.sum().item())
+            elif success_mask is not None:
+                successful_count = int(success_mask.sum().item()) if isinstance(success_mask, torch.Tensor) else sum(1 for s in success_mask if s)
+            asr_pct = (successful_count / clean_correct) * 100.0
+        else:
+            if orig_preds is not None and adv_preds is not None:
+                succ_mask = (orig_preds.cpu() == labels_tensor.cpu()) & (adv_preds.cpu() != labels_tensor.cpu())
+                successful_count = int(succ_mask.sum().item())
+            elif success_mask is not None:
+                successful_count = int(success_mask.sum().item()) if isinstance(success_mask, torch.Tensor) else sum(1 for s in success_mask if s)
+            asr_pct = (successful_count / clean_correct) * 100.0
+    else:
+        successful_count = 0
+        asr_pct = 0.0
+        asr_undefined = True
+
+    # Format predictions for UI table comparison
+    sample_comparisons: List[Dict[str, Any]] = []
+    labels_list = labels.tolist() if isinstance(labels, torch.Tensor) else list(labels)
+    clean_list = (
+        orig_preds.tolist()
+        if isinstance(orig_preds, torch.Tensor)
+        else [None] * total_samples
+    )
+    adv_list = (
+        adv_preds.tolist()
+        if isinstance(adv_preds, torch.Tensor)
+        else [None] * total_samples
+    )
+    clean_conf_list = (
+        clean_confs.tolist() if clean_confs is not None else [None] * total_samples
+    )
+    adv_conf_list = (
+        adv_confs.tolist() if adv_confs is not None else [None] * total_samples
+    )
+
+    # Resolve class name mapping for clear label semantics
+    class_map = class_names or get_class_labels_mapping(
+        model=model,
+        dataset_name=dataset_name,
+        num_classes=max(
+            int(labels_tensor.max().item() + 1) if labels_tensor.numel() > 0 else 2,
+            int(target_label + 1) if target_label is not None else 2,
+        ),
+    )
+    tgt_name = class_map.get(target_label, f"Class {target_label}") if (is_targeted and target_label is not None) else None
+    targeted_hit_count = 0
+    collateral_flip_count = 0
+
+    for idx in range(total_samples):
+        y_true = labels_list[idx] if idx < len(labels_list) else "N/A"
+        y_orig = clean_list[idx] if idx < len(clean_list) else "N/A"
+        y_adv = adv_list[idx] if idx < len(adv_list) else "N/A"
+        c_conf = (
+            f"{clean_conf_list[idx] * 100:.1f}%"
+            if clean_conf_list[idx] is not None
+            else "N/A"
+        )
+        a_conf = (
+            f"{adv_conf_list[idx] * 100:.1f}%"
+            if adv_conf_list[idx] is not None
+            else "N/A"
+        )
+
+        clean_right = (
+            (y_orig == y_true) if (y_orig != "N/A" and y_true != "N/A") else False
+        )
+
+        true_name = class_map.get(int(y_true), "") if (isinstance(y_true, (int, torch.Tensor)) or str(y_true).isdigit()) else ""
+        orig_name = class_map.get(int(y_orig), "") if (isinstance(y_orig, (int, torch.Tensor)) or str(y_orig).isdigit()) else ""
+        adv_name = class_map.get(int(y_adv), "") if (isinstance(y_adv, (int, torch.Tensor)) or str(y_adv).isdigit()) else ""
+
+        true_str = f"{y_true} ({true_name})" if true_name else str(y_true)
+        clean_str = f"{y_orig} ({orig_name}) [{c_conf}]" if orig_name else f"{y_orig} ({c_conf})"
+        adv_str = f"{y_adv} ({adv_name}) [{a_conf}]" if adv_name else f"{y_adv} ({a_conf})"
+
+        if is_targeted and target_label is not None:
+            if not clean_right:
+                outcome_str = "Initial Clean Error ❌"
+            elif y_adv == target_label:
+                outcome_str = f"Targeted Hit (→ {target_label}: {tgt_name}) 🎯"
+                targeted_hit_count += 1
+            elif y_adv != y_true:
+                outcome_str = f"Collateral Flip (→ {y_adv}: {adv_name}) ⚠️" if adv_name else f"Collateral Flip (→ {y_adv}) ⚠️"
+                collateral_flip_count += 1
+            else:
+                outcome_str = "Preserved Correct ✅"
+        else:
+            if not clean_right:
+                outcome_str = "Initial Clean Error ❌"
+            elif y_adv != y_true:
+                outcome_str = "Adversarial Flip ⚠️"
+            else:
+                outcome_str = "Preserved Correct ✅"
+
+        sample_comparisons.append(
+            {
+                "Sample": f"#{idx + 1}",
+                "Ground Truth": true_str,
+                "Clean Prediction": clean_str,
+                "Adversarial Prediction": adv_str,
+                "Outcome": outcome_str,
+            }
+        )
+
+    # Detailed Attack Specs for Overview
+    static_meta = getattr(attack_cls, "metadata", None)
+    meta_info = {
+        "id": attack_name,
+        "name": attack_res.attack_name.upper(),
+        "class_name": attack_cls.__name__,
+        "threat_model": "White-Box",
+        "category": getattr(static_meta, "category", "Gradient-based").capitalize(),
+        "computational_cost": getattr(
+            static_meta, "computational_cost", "Medium"
+        ).capitalize(),
+        "supported_norms": getattr(static_meta, "supported_norms", ["Linf"]),
+    }
+
+    return {
+        "attack_name": attack_res.attack_name.upper(),
+        "attack_class": attack_cls.__name__,
+        "attack_meta": meta_info,
+        "execution_time": exec_time,
+        "total_samples": total_samples,
+        "clean_correct_count": clean_correct,
+        "successful_count": successful_count,
+        "asr_percentage": asr_pct,
+        "asr_undefined": asr_undefined,
+        "is_targeted": is_targeted,
+        "target_label": target_label,
+        "target_label_name": tgt_name,
+        "targeted_hit_count": targeted_hit_count,
+        "collateral_flip_count": collateral_flip_count,
+        "class_names": class_map,
+        "clean_accuracy": clean_acc,
+        "adversarial_accuracy": adv_acc,
+        "accuracy_drop": acc_drop,
+        "clean_confidence": clean_conf_avg,
+        "adversarial_confidence": adv_conf_avg,
+        "clean_confidence_avg": clean_conf_avg,
+        "adv_confidence_avg": adv_conf_avg,
+        "confidence_drop": conf_drop,
+        "ms_per_sample": (
+            (exec_time / total_samples * 1000.0) if total_samples > 0 else 0.0
+        ),
+        "perturbation_metrics": metrics,
+        "sample_comparisons": sample_comparisons,
+        "original_predictions": orig_preds.tolist() if isinstance(orig_preds, torch.Tensor) else orig_preds,
+        "adversarial_predictions": adv_preds.tolist() if isinstance(adv_preds, torch.Tensor) else adv_preds,
+        "has_adversarial_tensor": attack_res.adversarial_examples is not None,
+        "_attack_result_obj": attack_res,
+        "original_inputs": inputs,
+        "adversarial_examples": attack_res.adversarial_examples,
+        "labels": labels,
+        "_adversarial_examples": attack_res.adversarial_examples,
+        "_clean_inputs": inputs,
+        "_clean_labels": labels,
+        "epsilon_used": epsilon,
+        "parameters": params or {},
+        "parameters_used": {
+            **(params or {}),
+            "epsilon": epsilon,
+            "clip_min": clip_min,
+            "clip_max": clip_max,
+            "targeted": is_targeted,
+            "target_label": target_label,
+        },
+        "clip_bounds": f"[{clip_min}, {clip_max}]",
+    }
