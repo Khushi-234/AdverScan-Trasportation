@@ -2,6 +2,7 @@
 Attack executor for instantiating and running selected attack classes.
 """
 
+import logging
 import time
 from typing import Any, Optional, Type
 import torch
@@ -11,6 +12,8 @@ from app.attack_engine.config import AttackConfig
 from app.attack_engine.models import AttackMetadata, AttackResult
 from app.attack_engine.exceptions import AttackError, AttackExecutionError
 from app.attack_engine.utils.perturbation import compute_perturbation_metrics
+
+logger = logging.getLogger(__name__)
 
 
 def execute_attack(
@@ -71,25 +74,62 @@ def execute_attack(
         orig_preds = None
         adv_preds = None
         success = None
+        prediction_eval_error = None
 
-        if isinstance(inputs, torch.Tensor) and isinstance(adv_inputs, torch.Tensor):
+        if (isinstance(inputs, (torch.Tensor, dict))) and (isinstance(adv_inputs, (torch.Tensor, dict))):
             try:
                 raw_model = attack_instance._get_raw_model()
                 with torch.no_grad():
                     device = next(raw_model.parameters()).device if list(raw_model.parameters()) else torch.device("cpu")
-                    out_orig = raw_model(inputs.to(device))
+                    if isinstance(inputs, dict):
+                        batch_in = {k: (v.to(device) if isinstance(v, torch.Tensor) else v) for k, v in inputs.items()}
+                        out_orig = raw_model(**batch_in)
+                    else:
+                        out_orig = raw_model(inputs.to(device))
                     logits_orig = attack_instance._extract_logits(out_orig)
                     orig_preds = logits_orig.argmax(dim=-1).cpu()
 
-                    out_adv = raw_model(adv_inputs.to(device))
+                    if isinstance(adv_inputs, dict):
+                        batch_adv = {k: (v.to(device) if isinstance(v, torch.Tensor) else v) for k, v in adv_inputs.items()}
+                        out_adv = raw_model(**batch_adv)
+                    else:
+                        out_adv = raw_model(adv_inputs.to(device))
                     logits_adv = attack_instance._extract_logits(out_adv)
                     adv_preds = logits_adv.argmax(dim=-1).cpu()
 
-                    success = (orig_preds != adv_preds)
-            except Exception:
-                pass
+                    if labels is not None:
+                        labels_cpu = labels.cpu() if isinstance(labels, torch.Tensor) else torch.as_tensor(labels)
+                        is_targeted = bool(config.params.get("targeted", False)) if config and config.params else False
+                        target_label = None
+                        if config and config.params:
+                            for alias in ("target_label", "target", "targets", "target_labels"):
+                                if config.params.get(alias) is not None:
+                                    target_label = config.params[alias]
+                                    break
+                        if is_targeted and target_label is not None:
+                            target_tensor = torch.full_like(orig_preds, int(target_label)) if isinstance(target_label, int) else torch.as_tensor(target_label)
+                            success = (orig_preds == labels_cpu) & (adv_preds == target_tensor) & (target_tensor != labels_cpu)
+                        else:
+                            success = (orig_preds == labels_cpu) & (adv_preds != labels_cpu)
+                    else:
+                        success = (orig_preds != adv_preds)
+            except Exception as eval_exc:
+                prediction_eval_error = str(eval_exc)
+                logger.warning(
+                    "Post-attack prediction inference failed for attack '%s': %s",
+                    attack_name,
+                    str(eval_exc),
+                    exc_info=True,
+                )
+                orig_preds = None
+                adv_preds = None
+                success = None
 
         # Execution metadata
+        metadata_params = dict(config.params or {})
+        if prediction_eval_error is not None:
+            metadata_params["prediction_eval_error"] = prediction_eval_error
+
         metadata = AttackMetadata(
             name=attack_name,
             attack_name=attack_name,
@@ -110,7 +150,7 @@ def execute_attack(
             clip_min=config.clip_min,
             clip_max=config.clip_max,
             execution_time_seconds=elapsed_time,
-            parameters=config.params or {},
+            parameters=metadata_params,
         )
 
         query_count = getattr(attack_instance, "query_count", None)

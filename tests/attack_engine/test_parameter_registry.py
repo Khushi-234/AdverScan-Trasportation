@@ -122,7 +122,7 @@ def test_get_supported_attacks_text():
         ("text", "hotflip", ["max_modifications", "candidate_vocab_size", "targeted", "target_label"]),
         ("text", "embedding_pgd", ["epsilon", "alpha", "num_steps", "norm", "k_nearest", "max_modifications", "targeted", "target_label"]),
         ("text", "textbugger_wb", ["max_modifications", "bug_types", "targeted", "target_label"]),
-        ("text", "universal_trigger", ["trigger_length", "num_iterations", "candidate_vocab_size", "placement", "targeted", "target_label"]),
+        ("text", "universal_trigger", ["trigger_length", "num_iterations", "candidate_vocab_size", "placement", "initial_trigger", "targeted", "target_label"]),
         ("text", "gradient_substitution", ["max_modifications", "num_candidates", "similarity_threshold", "targeted", "target_label"]),
     ],
 )
