@@ -1172,6 +1172,86 @@ def test_report_generation_with_and_without_xai():
     assert rep_with_xai_dict["xai_findings"]["local_explanation"]["attribution_drift"] == 0.65
 
 
+def test_xai_explain_assessment_accepts_dict_attack_result():
+    """Verify that explain_assessment handles dictionary attack results without AttributeError."""
+    import torch.nn as nn
+    from frontend.services.xai_service import explain_assessment
+
+    class DummyLinearModel(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.linear = nn.Linear(4, 2)
+
+        def forward(self, x):
+            return self.linear(x)
+
+    model = DummyLinearModel()
+    inputs = torch.randn(2, 4)
+    adv_inputs = inputs + 0.05 * torch.randn_like(inputs)
+    labels = torch.tensor([0, 1])
+
+    # Frontend dictionary attack result (simulating get_attack_result())
+    dict_attack_result = {
+        "attack_name": "PGD",
+        "original_inputs": inputs,
+        "adversarial_examples": adv_inputs,
+        "labels": labels,
+        "total_samples": 2,
+    }
+
+    res = explain_assessment(
+        model=model,
+        attack_result=dict_attack_result,
+        domain="tabular",
+        technique="saliency",
+    )
+    assert res is not None
+    # Should not crash with "'dict' object has no attribute 'original_inputs'"
+    assert res.get("status") in ("success", "valid", "unsupported", "unavailable")
+
+
+def test_timeseries_sequence_length_alignment_on_attack():
+    """Verify that execute_configured_attack aligns mismatched sequence lengths to model config."""
+    import torch.nn as nn
+    from frontend.services.attack_service import execute_configured_attack
+
+    class DummyTSModel(nn.Module):
+        def __init__(self, seq_len=32, channels=1):
+            super().__init__()
+            self.expected_seq_len = seq_len
+            self.fc = nn.Linear(seq_len * channels, 2)
+            # Simulate a config object with sequence_length
+            class DummyConfig:
+                sequence_length = seq_len
+                num_input_channels = channels
+            self.config = DummyConfig()
+
+        def forward(self, x):
+            if x.shape[1] != self.expected_seq_len:
+                raise ValueError(
+                    f"Input sequence length ({x.shape[1]}) doesn't match model configuration ({self.expected_seq_len})."
+                )
+            return self.fc(x.view(x.size(0), -1))
+
+    model = DummyTSModel(seq_len=32, channels=1)
+    # Inputs have sequence length 14 (mismatched)
+    mismatched_inputs = torch.randn(4, 14, 1)
+    labels = torch.tensor([0, 1, 0, 1])
+
+    res = execute_configured_attack(
+        model=model,
+        attack_name="pgd",
+        inputs=mismatched_inputs,
+        labels=labels,
+        epsilon=0.1,
+    )
+    assert res is not None
+    assert "asr_percentage" in res
+    assert res["attack_name"] == "PGD"
+    assert "_attack_result_obj" in res
+    assert "original_inputs" in res
+
+
 
 
 

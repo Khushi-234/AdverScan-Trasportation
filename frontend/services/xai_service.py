@@ -13,6 +13,7 @@ from app.explainability.aggregate import aggregate_explanations
 from app.explainability.techniques.registry import technique_registry
 from app.explainability.modality import Modality
 from app.explainability.domain_profiles import get_domain_profile
+from app.attack_engine.models import AttackResult as BackendAttackResult, AttackMetadata
 
 
 TECHNIQUE_DISPLAY_NAMES: Dict[str, str] = {
@@ -132,9 +133,71 @@ def explain_assessment(
             assessment_obj = vulnerability_result.get("_assessment_obj") or vulnerability_result.get("assessment")
             scoring_obj = vulnerability_result.get("_scoring_obj") or vulnerability_result.get("scoring")
 
+        target_attack_obj: Any = None
+        if isinstance(attack_result, dict):
+            cached_obj = attack_result.get("_attack_result_obj")
+            if cached_obj is not None and isinstance(cached_obj, BackendAttackResult):
+                target_attack_obj = cached_obj
+            else:
+                clean_in = attack_result.get("original_inputs")
+                if clean_in is None:
+                    clean_in = attack_result.get("_clean_inputs")
+                if clean_in is None:
+                    clean_in = attack_result.get("_original_inputs")
+                if clean_in is None:
+                    clean_in = kwargs.get("clean_inputs")
+
+                adv_in = attack_result.get("adversarial_examples")
+                if adv_in is None:
+                    adv_in = attack_result.get("_adversarial_examples")
+                if adv_in is None:
+                    adv_in = kwargs.get("adversarial_inputs")
+
+                labels = attack_result.get("labels")
+                if labels is None:
+                    labels = attack_result.get("_clean_labels")
+                if labels is None:
+                    labels = attack_result.get("_labels")
+                if labels is None:
+                    labels = kwargs.get("labels")
+                raw_atk_name = (
+                    attack_result.get("attack_name")
+                    or attack_result.get("name")
+                    or kwargs.get("attack_name", "adversarial_attack")
+                )
+                meta_obj = AttackMetadata(
+                    name=str(raw_atk_name),
+                    category=attack_result.get("category", "gradient"),
+                    attack_type=attack_result.get("threat_model", "white_box"),
+                )
+                target_attack_obj = BackendAttackResult(
+                    adversarial_examples=adv_in,
+                    original_inputs=clean_in,
+                    labels=labels,
+                    metadata=meta_obj,
+                    attack_name=str(raw_atk_name),
+                    original_predictions=attack_result.get("original_predictions"),
+                    adversarial_predictions=attack_result.get("adversarial_predictions"),
+                    perturbation_metrics=attack_result.get("perturbation_metrics") or {},
+                )
+        else:
+            target_attack_obj = attack_result
+
+        # Fallback to active assessment session if original_inputs is still None
+        if target_attack_obj is not None and getattr(target_attack_obj, "original_inputs", None) is None:
+            try:
+                from frontend.utils.session_state import get_active_assessment
+                act_data = get_active_assessment()
+                if act_data and act_data.get("test_inputs") is not None:
+                    target_attack_obj.original_inputs = act_data["test_inputs"]
+                    if getattr(target_attack_obj, "labels", None) is None:
+                        target_attack_obj.labels = act_data.get("test_labels")
+            except Exception:
+                pass
+
         exp_output = explainer.explain_attack_result(
             model=model,
-            attack_result=attack_result,
+            attack_result=target_attack_obj,
             assessment_result=assessment_obj,
             scoring_result=scoring_obj,
             technique=resolved_technique,
