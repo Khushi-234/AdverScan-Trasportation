@@ -96,7 +96,7 @@ DEFENSE_CAPABILITIES: Dict[str, Dict[str, Any]] = {
     "randomized_smoothing": {
         "defense_type": "smoothing",
         "defense_family": "smoothing",
-        "supported_domains": ["image", "tabular", "audio"],
+        "supported_domains": ["image", "tabular", "audio", "time_series", "timeseries", "sequence"],
         "requires_retraining": False,
         "latency_cost": 40.0,
         "training_cost": 0.0,

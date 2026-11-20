@@ -612,6 +612,26 @@ def _execute_attack_batched(
     )
 
 
+def _extract_model_logits(outputs: Any) -> Any:
+    """Extract classification logits tensor from model outputs across frameworks and output types."""
+    if hasattr(outputs, "logits") and outputs.logits is not None:
+        return outputs.logits
+    if hasattr(outputs, "prediction_logits") and outputs.prediction_logits is not None:
+        return outputs.prediction_logits
+    if hasattr(outputs, "prediction_outputs") and outputs.prediction_outputs is not None:
+        return outputs.prediction_outputs
+    if hasattr(outputs, "last_hidden_state") and outputs.last_hidden_state is not None:
+        return outputs.last_hidden_state
+    if isinstance(outputs, (tuple, list)) and len(outputs) > 0:
+        return outputs[0]
+    if hasattr(outputs, "get") and callable(getattr(outputs, "get")):
+        for k in ("logits", "prediction_logits", "prediction_outputs"):
+            val = outputs.get(k)
+            if val is not None:
+                return val
+    return outputs
+
+
 def execute_configured_attack(
     model: Any,
     attack_name: str,
@@ -659,12 +679,40 @@ def execute_configured_attack(
             clean_params["vae"] = SimpleTabularVAE(in_features=in_f).to(device)
 
     # Build backend AttackConfig
+    # For non-image domains or tensors whose natural range extends outside [0, 1] (e.g. standardized time series/audio),
+    # an explicit clip of [0.0, 1.0] will corrupt negative values to 0.0.
+    if isinstance(inputs, torch.Tensor) and clip_min == 0.0 and clip_max == 1.0:
+        if (inputs.min() < -1e-4) or (inputs.max() > 1.0 + 1e-4):
+            clip_min = None
+            clip_max = None
+
     config = AttackConfig(
         epsilon=float(epsilon),
         clip_min=float(clip_min) if clip_min is not None else None,
         clip_max=float(clip_max) if clip_max is not None else None,
         params=clean_params,
     )
+
+    # Auto-align time-series sequence length and channels to model configuration if needed
+    if isinstance(inputs, torch.Tensor) and inputs.ndim == 3:
+        raw_m = getattr(model, "get_model", lambda: model)()
+        cfg = getattr(raw_m, "config", None)
+        if cfg is not None:
+            exp_seq_len = getattr(cfg, "context_length", None) or getattr(cfg, "sequence_length", None)
+            if exp_seq_len is not None and inputs.shape[1] != exp_seq_len:
+                if inputs.shape[1] < exp_seq_len:
+                    pad_len = exp_seq_len - inputs.shape[1]
+                    inputs = torch.cat([inputs, inputs[:, -1:, :].expand(-1, pad_len, -1)], dim=1)
+                else:
+                    inputs = inputs[:, :exp_seq_len, :]
+
+            exp_channels = getattr(cfg, "num_input_channels", None) or getattr(cfg, "num_channels", None)
+            if exp_channels is not None and inputs.shape[2] != exp_channels:
+                if inputs.shape[2] < exp_channels:
+                    pad_c = exp_channels - inputs.shape[2]
+                    inputs = torch.cat([inputs, inputs[:, :, -1:].expand(-1, -1, pad_c)], dim=2)
+                else:
+                    inputs = inputs[:, :, :exp_channels]
 
     # Clean cache before launching attack
     if torch.cuda.is_available():
@@ -715,49 +763,51 @@ def execute_configured_attack(
             with torch.no_grad():
                 raw_model.eval()
 
-                # Clean confidences
+                # Clean confidences & predictions
                 if isinstance(inputs, dict) or hasattr(inputs, "items"):
                     batch_in = {k: (v.to(device) if isinstance(v, torch.Tensor) else v) for k, v in inputs.items()}
-                    out_c = raw_model(**batch_in)
-                    if hasattr(out_c, "logits"):
-                        out_c = out_c.logits
+                    out_c = _extract_model_logits(raw_model(**batch_in))
                     clean_confs = F.softmax(out_c, dim=-1).max(dim=-1).values.cpu()
                     if orig_preds is None:
                         orig_preds = out_c.argmax(dim=-1).cpu()
                 elif isinstance(inputs, torch.Tensor):
                     eval_bs = 32 if inputs.dim() >= 4 else 64
                     conf_c_list = []
+                    pred_c_list = []
                     for b_i in range(0, inputs.size(0), eval_bs):
                         b_in = inputs[b_i : b_i + eval_bs].to(device)
-                        out_c = raw_model(b_in)
-                        if hasattr(out_c, "logits"):
-                            out_c = out_c.logits
+                        out_c = _extract_model_logits(raw_model(b_in))
                         conf_c_list.append(F.softmax(out_c, dim=-1).max(dim=-1).values.cpu())
+                        if orig_preds is None:
+                            pred_c_list.append(out_c.argmax(dim=-1).cpu())
                     if conf_c_list:
                         clean_confs = torch.cat(conf_c_list, dim=0)
+                    if orig_preds is None and pred_c_list:
+                        orig_preds = torch.cat(pred_c_list, dim=0)
 
-                # Adversarial confidences
+                # Adversarial confidences & predictions
                 if attack_res.adversarial_examples is not None:
                     adv_tensor_all = attack_res.adversarial_examples
                     if isinstance(adv_tensor_all, dict) or hasattr(adv_tensor_all, "items"):
                         batch_adv = {k: (v.to(device) if isinstance(v, torch.Tensor) else v) for k, v in adv_tensor_all.items()}
-                        out_a = raw_model(**batch_adv)
-                        if hasattr(out_a, "logits"):
-                            out_a = out_a.logits
+                        out_a = _extract_model_logits(raw_model(**batch_adv))
                         adv_confs = F.softmax(out_a, dim=-1).max(dim=-1).values.cpu()
                         if adv_preds is None:
                             adv_preds = out_a.argmax(dim=-1).cpu()
                     elif isinstance(adv_tensor_all, torch.Tensor):
                         eval_bs = 32 if adv_tensor_all.dim() >= 4 else 64
                         conf_a_list = []
+                        pred_a_list = []
                         for b_i in range(0, adv_tensor_all.size(0), eval_bs):
                             b_in = adv_tensor_all[b_i : b_i + eval_bs].to(device)
-                            out_a = raw_model(b_in)
-                            if hasattr(out_a, "logits"):
-                                out_a = out_a.logits
+                            out_a = _extract_model_logits(raw_model(b_in))
                             conf_a_list.append(F.softmax(out_a, dim=-1).max(dim=-1).values.cpu())
+                            if adv_preds is None:
+                                pred_a_list.append(out_a.argmax(dim=-1).cpu())
                         if conf_a_list:
                             adv_confs = torch.cat(conf_a_list, dim=0)
+                        if adv_preds is None and pred_a_list:
+                            adv_preds = torch.cat(pred_a_list, dim=0)
         except Exception:
             pass
         finally:
@@ -961,6 +1011,10 @@ def execute_configured_attack(
         "original_predictions": orig_preds.tolist() if isinstance(orig_preds, torch.Tensor) else orig_preds,
         "adversarial_predictions": adv_preds.tolist() if isinstance(adv_preds, torch.Tensor) else adv_preds,
         "has_adversarial_tensor": attack_res.adversarial_examples is not None,
+        "_attack_result_obj": attack_res,
+        "original_inputs": inputs,
+        "adversarial_examples": attack_res.adversarial_examples,
+        "labels": labels,
         "_adversarial_examples": attack_res.adversarial_examples,
         "_clean_inputs": inputs,
         "_clean_labels": labels,

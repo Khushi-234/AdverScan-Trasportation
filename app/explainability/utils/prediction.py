@@ -10,7 +10,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 
-from app.explainability.utils.conversions import to_numpy, to_tensor, unwrap_model
+from app.explainability.utils.conversions import extract_logits, to_numpy, to_tensor, unwrap_model
 
 
 def configure_cpu_threads(num_threads: Optional[int] = None) -> None:
@@ -108,8 +108,7 @@ def predict_batched(
                     else:
                         out = unwrapped(chunk)
 
-                    if hasattr(out, "logits"):
-                        out = out.logits
+                    out = extract_logits(out)
                     outs.append(out)
             return torch.cat(outs, dim=0) if outs else torch.empty((0,), device=dev)
 
@@ -149,11 +148,7 @@ def predict_batched(
                     k: (v[i : i + batch_size].to(dev) if isinstance(v, torch.Tensor) else (torch.as_tensor(v[i : i + batch_size], device=dev) if isinstance(v, (list, tuple, np.ndarray)) else v))
                     for k, v in x.items()
                 }
-                out = unwrapped(**chunk)
-                if hasattr(out, "logits"):
-                    out = out.logits
-                elif hasattr(out, "prediction_logits"):
-                    out = out.prediction_logits
+                out = extract_logits(unwrapped(**chunk))
                 outs.append(out)
         return torch.cat(outs, dim=0) if outs else torch.empty((0,), device=dev)
 
@@ -172,9 +167,7 @@ def predict_batched(
         with torch.inference_mode():
             for i in range(0, n_samples, batch_size):
                 chunk = tensor_x[i : i + batch_size].to(dev)
-                out = unwrapped(chunk)
-                if hasattr(out, "logits"):
-                    out = out.logits
+                out = extract_logits(unwrapped(chunk))
                 outs.append(out)
         res = torch.cat(outs, dim=0) if outs else torch.empty((0,), device=dev)
         return res[0] if was_single and res.ndim > 1 and res.shape[0] == 1 else res
@@ -193,9 +186,7 @@ def predict_batched(
             for i in range(0, n_samples, batch_size):
                 chunk_np = x_np[i : i + batch_size]
                 chunk_t = to_tensor(chunk_np, device=dev)
-                out = unwrapped(chunk_t)
-                if hasattr(out, "logits"):
-                    out = out.logits
+                out = extract_logits(unwrapped(chunk_t))
                 outs_np.append(to_numpy(out, dtype=np.float64))
         return np.concatenate(outs_np, axis=0) if outs_np else np.empty((0,))
 

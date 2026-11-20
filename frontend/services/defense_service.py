@@ -20,6 +20,26 @@ from app.hardening.defenses import DEFENSE_REGISTRY, get_defense_class
 from app.retest.threshold import RetestThresholds
 
 
+def _extract_model_logits(outputs: Any) -> Any:
+    """Extract classification logits tensor from model outputs across frameworks and output types."""
+    if hasattr(outputs, "logits") and outputs.logits is not None:
+        return outputs.logits
+    if hasattr(outputs, "prediction_logits") and outputs.prediction_logits is not None:
+        return outputs.prediction_logits
+    if hasattr(outputs, "prediction_outputs") and outputs.prediction_outputs is not None:
+        return outputs.prediction_outputs
+    if hasattr(outputs, "last_hidden_state") and outputs.last_hidden_state is not None:
+        return outputs.last_hidden_state
+    if isinstance(outputs, (tuple, list)) and len(outputs) > 0:
+        return outputs[0]
+    if hasattr(outputs, "get") and callable(getattr(outputs, "get")):
+        for k in ("logits", "prediction_logits", "prediction_outputs"):
+            val = outputs.get(k)
+            if val is not None:
+                return val
+    return outputs
+
+
 # Comprehensive defense catalog per domain with interactive metadata
 DOMAIN_DEFENSE_CATALOG: Dict[str, List[Dict[str, Any]]] = {
     "image": [
@@ -333,9 +353,7 @@ def execute_configured_defense(
         with torch.no_grad():
             # 1. Clean accuracy
             inp_clean = test_inputs.to(device) if isinstance(test_inputs, torch.Tensor) else test_inputs
-            logits_clean = candidate_model(inp_clean)
-            if hasattr(logits_clean, "logits"):
-                logits_clean = logits_clean.logits
+            logits_clean = _extract_model_logits(candidate_model(inp_clean))
             if not isinstance(logits_clean, torch.Tensor):
                 logits_clean = torch.as_tensor(logits_clean)
             c_preds = logits_clean.argmax(dim=-1).cpu()
@@ -344,9 +362,7 @@ def execute_configured_defense(
 
             # 2. Defended accuracy on adversarial examples
             inp_adv = adv_tensor.to(device) if isinstance(adv_tensor, torch.Tensor) else adv_tensor
-            logits_adv = candidate_model(inp_adv)
-            if hasattr(logits_adv, "logits"):
-                logits_adv = logits_adv.logits
+            logits_adv = _extract_model_logits(candidate_model(inp_adv))
             if not isinstance(logits_adv, torch.Tensor):
                 logits_adv = torch.as_tensor(logits_adv)
             a_preds = logits_adv.argmax(dim=-1).cpu()
@@ -403,7 +419,12 @@ def execute_configured_defense(
         attack_name=attack_name,
         risk_level=base_risk,
         vulnerability_score=base_vuln,
-        input_domain="image" if domain in ("image", "vision") else ("tabular" if domain == "tabular" else "nlp"),
+        input_domain=(
+            "image" if domain in ("image", "vision")
+            else ("tabular" if domain in ("tabular", "csv")
+            else ("time_series" if domain in ("time-series", "timeseries", "sequence")
+            else "nlp"))
+        ),
         eval_fn=eval_fn,
         baseline_metrics=base_metrics,
         candidate_defenses=candidate_defenses,
@@ -421,9 +442,7 @@ def execute_configured_defense(
         defended_model.eval()
     with torch.no_grad():
         inp_c = test_inputs.to(device) if isinstance(test_inputs, torch.Tensor) else test_inputs
-        logits_c = defended_model(inp_c)
-        if hasattr(logits_c, "logits"):
-            logits_c = logits_c.logits
+        logits_c = _extract_model_logits(defended_model(inp_c))
         if not isinstance(logits_c, torch.Tensor):
             logits_c = torch.as_tensor(logits_c)
         probs_c = F.softmax(logits_c, dim=-1)
@@ -431,9 +450,7 @@ def execute_configured_defense(
         def_clean_confs = probs_c.max(dim=-1).values.cpu()
 
         inp_a = adv_tensor.to(device) if isinstance(adv_tensor, torch.Tensor) else adv_tensor
-        logits_a = defended_model(inp_a)
-        if hasattr(logits_a, "logits"):
-            logits_a = logits_a.logits
+        logits_a = _extract_model_logits(defended_model(inp_a))
         if not isinstance(logits_a, torch.Tensor):
             logits_a = torch.as_tensor(logits_a)
         probs_a = F.softmax(logits_a, dim=-1)

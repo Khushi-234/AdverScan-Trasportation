@@ -86,9 +86,19 @@ def execute_attack(
                         out_orig = raw_model(**batch_in)
                     else:
                         out_orig = raw_model(inputs.to(device))
+                    if isinstance(inputs, dict):
+                        batch_in = {k: (v.to(device) if isinstance(v, torch.Tensor) else v) for k, v in inputs.items()}
+                        out_orig = raw_model(**batch_in)
+                    else:
+                        out_orig = raw_model(inputs.to(device))
                     logits_orig = attack_instance._extract_logits(out_orig)
                     orig_preds = logits_orig.argmax(dim=-1).cpu()
 
+                    if isinstance(adv_inputs, dict):
+                        batch_adv = {k: (v.to(device) if isinstance(v, torch.Tensor) else v) for k, v in adv_inputs.items()}
+                        out_adv = raw_model(**batch_adv)
+                    else:
+                        out_adv = raw_model(adv_inputs.to(device))
                     if isinstance(adv_inputs, dict):
                         batch_adv = {k: (v.to(device) if isinstance(v, torch.Tensor) else v) for k, v in adv_inputs.items()}
                         out_adv = raw_model(**batch_adv)

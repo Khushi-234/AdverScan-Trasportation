@@ -17,6 +17,9 @@ from app.hardening.exceptions import DefenseNotFoundError, HardeningConfiguratio
 from app.retest.threshold import RetestThresholds, Thresholds
 
 
+from app.retest.threshold import RetestThresholds, Thresholds
+
+
 
 
 class HardeningEngine:
@@ -24,6 +27,8 @@ class HardeningEngine:
     Main coordinator engine for model hardening and defensive reinforcement.
 
     Accepts target PyTorch models, input/label tensors, and vulnerability profiles to select,
+    instantiate, execute, and evaluate defenses, supporting both single-defense application
+    and iterative defense selection against configurable acceptance thresholds.
     instantiate, execute, and evaluate defenses, supporting both single-defense application
     and iterative defense selection against configurable acceptance thresholds.
     """

@@ -129,8 +129,45 @@ def compute_perturbation_metrics(
     )
 
     mae_mean = float(delta.mean().item())
+    batch_size = x_orig.size(0)
+    delta_flat = delta.view(batch_size, -1)
+
+    linf_per_sample = torch.max(delta_flat, dim=1)[0]
+    linf_mean = float(linf_per_sample.mean().item())
+    linf_max = float(linf_per_sample.max().item())
+    linf_min = float(linf_per_sample.min().item())
+
+    l2_per_sample = torch.norm(delta_flat, p=2, dim=1)
+    l2_mean = float(l2_per_sample.mean().item())
+    l2_max = float(l2_per_sample.max().item())
+    l2_min = float(l2_per_sample.min().item())
+
+    total_elem = delta_flat.size(1)
+    l0_counts = (delta_flat > 1e-5).float().sum(dim=1)
+    l0_mean_count = float(l0_counts.mean().item())
+    l0_mean_pct = (
+        float((l0_counts / max(1, total_elem) * 100.0).mean().item())
+        if total_elem > 0
+        else 0.0
+    )
+
+    mae_mean = float(delta.mean().item())
 
     return {
+        "linf": linf_mean,
+        "linf_mean": linf_mean,
+        "linf_max": linf_max,
+        "linf_min": linf_min,
+        "l2": l2_mean,
+        "l2_mean": l2_mean,
+        "l2_max": l2_max,
+        "l2_min": l2_min,
+        "l0": l0_mean_count,
+        "l0_mean_count": l0_mean_count,
+        "l0_mean_pct": l0_mean_pct,
+        "l0_pct": l0_mean_pct,
+        "mean_abs_error": mae_mean,
+        "mae_mean": mae_mean,
         "linf": linf_mean,
         "linf_mean": linf_mean,
         "linf_max": linf_max,
