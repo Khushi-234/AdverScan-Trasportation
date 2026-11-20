@@ -59,9 +59,9 @@ class ExplanationResult:
     technique: str
     clean_prediction: Any
     adversarial_prediction: Any
-    clean_confidence: Union[float, np.floating[Any]]
-    adversarial_confidence: Union[float, np.floating[Any]]
-    prediction_changed: bool
+    clean_confidence: Optional[Union[float, np.floating[Any]]] = None
+    adversarial_confidence: Optional[Union[float, np.floating[Any]]] = None
+    prediction_changed: Optional[bool] = None
     true_label: Optional[Any] = None
     attack_caused_failure: Optional[bool] = None
     attribution: Dict[str, Any] = field(default_factory=dict)
@@ -110,10 +110,12 @@ class ExplanationResult:
         Produce a concise, human-readable summary of the security explanation.
         All numerical claims are directly traceable to computed result metrics.
         """
+        c_conf_str = f"{float(self.clean_confidence):.4f}" if self.clean_confidence is not None else "N/A"
+        a_conf_str = f"{float(self.adversarial_confidence):.4f}" if self.adversarial_confidence is not None else "N/A"
         lines = [
             f"=== AdverScan XAI Security Assessment [{self.attack_name}] ===",
             f"Technique: {self.technique.upper()} | Modality: {self.modality} | Domain: {self.domain}",
-            f"Prediction Outcome: Clean={self.clean_prediction} (conf: {float(self.clean_confidence):.4f}) -> Adv={self.adversarial_prediction} (conf: {float(self.adversarial_confidence):.4f})",
+            f"Prediction Outcome: Clean={self.clean_prediction} (conf: {c_conf_str}) -> Adv={self.adversarial_prediction} (conf: {a_conf_str})",
             f"Prediction Flip: {self.prediction_changed} | Attack Caused Failure: {self.attack_caused_failure}",
         ]
 

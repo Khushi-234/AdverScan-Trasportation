@@ -363,8 +363,15 @@ def extract_prediction_and_confidence(
         val = float(arr.ravel()[0]) if arr.size > 0 else 0.0
         return val, 1.0
 
+    # Flatten N-D model outputs (e.g. image modality handler may return (B,1,1,C))
+    # into standard 2D (batch_size, num_classes) before class extraction.
+    if arr.ndim > 2:
+        # Collapse all spatial/channel dims into one flat per-sample vector
+        arr = arr.reshape(arr.shape[0], -1)
+        # If the final dim is multi-class, use it; otherwise fall through to 2D logic below.
+
     if arr.ndim >= 2:
-        # Check if single output (N, 1)
+        # Check if single output (N, 1) — binary sigmoid output
         if arr.shape[1] == 1:
             val = float(arr[0, 0])
             pred_class = int(val >= 0.5)

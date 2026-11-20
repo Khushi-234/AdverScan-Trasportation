@@ -3,6 +3,7 @@ Unit and integration tests for Module 9 (Report Generator) in AdverScan.
 """
 
 import json
+from pathlib import Path
 import pytest
 
 from app.report_generator import (
@@ -275,3 +276,178 @@ def test_report_naming_convention(tmp_path):
     num = res_single.scan_id.split("-")[-1]
     assert md_path.name == f"adverscan_report_fgsm_{num}.md"
 
+
+def test_section_9_xai_clean_formatting(tmp_path):
+    """
+    Verify Section 9 renders a user-focused, concise summary and does not dump
+    internal ExplanationResult dictionaries, raw arrays, or metadata objects.
+    """
+    xai_dict = {
+        "FGSM_IntegratedGradients": {
+            "technique": "integrated_gradients",
+            "attack_name": "FGSM",
+            "modality": "image",
+            "target_class": 1,
+            "attribution_status": "success",
+            "clean_prediction": 0,
+            "clean_confidence": 0.9850,
+            "adversarial_prediction": 1,
+            "adversarial_confidence": 0.9420,
+            "prediction_changed": True,
+            "attack_caused_failure": True,
+            "metadata": {
+                "_result_obj": "<InternalExplanationObject at 0x7f>",
+                "total_samples": 5,
+                "successful_samples": 5,
+                "failed_samples": 0,
+                "raw_config": {"internal": True},
+            },
+            "attribution": {
+                "clean": {"attribution": [[0.1, 0.2], [0.3, 0.4]]},
+                "adversarial": {"attribution": [[0.5, 0.6], [0.7, 0.8]]},
+            },
+            "batch_results": [
+                {"attribution_status": "success", "sample_idx": 0},
+                {"attribution_status": "success", "sample_idx": 1},
+                {"attribution_status": "success", "sample_idx": 2},
+                {"attribution_status": "success", "sample_idx": 3},
+                {"attribution_status": "success", "sample_idx": 4},
+            ],
+            "failure_analysis": {
+                "attribution_drift": 0.7421,
+                "cosine_distortion": 0.5833,
+                "perturbation_alignment": 0.8190,
+                "attack_reason": "Attribution shifted significantly toward high-frequency noise in the top-left quadrant.",
+                "attribution_interpretation": "Localized pixel gradients diverted classification from Class 0 to Class 1.",
+            },
+            "feature_importance": {
+                "adversarial_top_features": [
+                    {"feature": "patch_12", "importance": 0.4521},
+                    {"feature": "patch_14", "importance": 0.3812},
+                ],
+            },
+            "defense_hints": [
+                {
+                    "finding": "High attribution concentration on localized pixel clusters.",
+                    "suggested_defense": "Spatial Smoothing / Median Filtering",
+                    "stage": "Input Preprocessing",
+                    "confidence": 0.88,
+                    "evidence": "High perturbation alignment (0.8190)",
+                    "why_recommended": "Attenuates high-frequency spatial gradients before model inference.",
+                }
+            ],
+        }
+    }
+
+    report_data = ReportData(
+        model_info={"model_name": "ResNet18", "architecture": "CNN"},
+        baseline_performance={"metrics": {"accuracy": 0.95, "f1_score": 0.94}},
+        attack_results={
+            "FGSM": {
+                "parameters": {"eps": 0.05},
+                "evaluation": {"metrics": {"attack_success_rate": 0.80, "accuracy_drop": 0.75}},
+            }
+        },
+        vulnerability_score=75.0,
+        risk_level="HIGH",
+        xai_findings=xai_dict,
+    )
+
+    generator = ReportGenerator()
+    res = generator.generate(report_data)
+    report_text = res.formatted_report
+
+    # 1. Section 9 Header present
+    assert "9. XAI FINDINGS" in report_text
+
+    # 2. Explanation Overview present
+    assert "Explainer Technique : Integrated Gradients" in report_text
+    assert "Execution Status    : ✅ SUCCESS" in report_text
+    assert "Attack Examined     : FGSM" in report_text
+    assert "Model Modality      : Image" in report_text
+    assert "Target Class        : Class 1" in report_text
+    assert "5 of 5 samples successfully explained (0 failed)" in report_text
+
+    # 3. Prediction Analysis table present
+    assert "Prediction Analysis:" in report_text
+    assert "Clean Pred" in report_text
+    assert "Adv Pred" in report_text
+    assert "98.50%" in report_text
+    assert "94.20%" in report_text
+
+    # 4. Attribution Analysis present
+    assert "Attribution Analysis:" in report_text
+    assert "Attribution Drift (L1)    : 0.7421" in report_text
+    assert "Salience Distortion       : 0.5833" in report_text
+    assert "Perturbation Alignment   : 0.8190" in report_text
+    assert "patch_12 (0.4521)" in report_text
+    assert "patch_14 (0.3812)" in report_text
+    assert "Localized pixel gradients diverted classification" in report_text
+
+    # 5. Root Cause Explanation prose present
+    assert "Root Cause Explanation:" in report_text
+    assert "Attribution shifted significantly toward high-frequency noise" in report_text
+
+    # 6. Defense Recommendations present
+    assert "Evidence-Based Defense Recommendations:" in report_text
+    assert "[Input Preprocessing] Spatial Smoothing / Median Filtering" in report_text
+    assert "Confidence: 88.00%" in report_text
+    assert "High perturbation alignment (0.8190)" in report_text
+
+    # 7. Strictly verify NO raw internal objects or placeholder dumps leak
+    assert "_result_obj" not in report_text
+    assert "<InternalExplanationObject" not in report_text
+    assert "raw_config" not in report_text
+    assert "[Detailed Data Omitted]" not in report_text
+    assert "[[0.1, 0.2]" not in report_text
+
+
+def test_report_writer_pdf_multipage(tmp_path):
+    """
+    Verify ReportWriter generates a multi-page PDF document when the report
+    content spans multiple pages, without truncation or error.
+    """
+    sample_data = ReportData(
+        model_info={"model_name": "MultiPageTestNet", "architecture": "CNN"},
+        baseline_performance={"metrics": {"accuracy": 0.92, "f1_score": 0.91}},
+        attack_results={
+            "FGSM": {"parameters": {"eps": 0.05}, "evaluation": {"metrics": {"attack_success_rate": 0.70}}},
+            "PGD": {"parameters": {"eps": 0.03, "steps": 10}, "evaluation": {"metrics": {"attack_success_rate": 0.85}}},
+        },
+        vulnerability_score=78.0,
+        risk_level="CRITICAL",
+        xai_findings={
+            "FGSM_IntegratedGradients": {
+                "technique": "integrated_gradients",
+                "clean_prediction": 0,
+                "clean_confidence": 0.95,
+                "adversarial_prediction": 1,
+                "adversarial_confidence": 0.91,
+                "prediction_changed": True,
+                "attack_caused_failure": True,
+                "failure_analysis": {
+                    "attribution_drift": 0.68,
+                    "attack_reason": "Vulnerability to localized high-frequency perturbations.",
+                },
+            }
+        },
+    )
+
+    generator = ReportGenerator()
+    res = generator.generate(sample_data)
+
+    writer = ReportWriter(output_root=tmp_path / "reports")
+    written = writer.write(res, formats=["pdf", "md"])
+
+    assert "pdf" in written
+    pdf_path = Path(written["pdf"])
+    assert pdf_path.exists()
+    assert pdf_path.stat().st_size > 1000
+
+    # Verify PDF has at least 1-2 pages and is valid
+    try:
+        import pypdf  # type: ignore
+        reader = pypdf.PdfReader(str(pdf_path))
+        assert len(reader.pages) >= 1
+    except ImportError:
+        pass

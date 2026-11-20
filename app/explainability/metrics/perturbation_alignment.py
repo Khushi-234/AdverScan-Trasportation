@@ -83,6 +83,29 @@ def compute_perturbation_alignment(
                 # e.g., (H, W) vs (H, W, C) -> reduce channels
                 pert_eval = np.mean(pert_sq, axis=-1)
                 attr_eval = attr_sq
+            elif attr_sq.ndim == 2 and (pert_sq.ndim in (2, 3)):
+                # Spatial patch alignment (e.g. 7x7 patch attributions on 28x28 image)
+                pert_2d = pert_sq if pert_sq.ndim == 2 else (np.mean(pert_sq, axis=0) if pert_sq.shape[0] in (1, 3, 4) else np.mean(pert_sq, axis=-1))
+                h, w = pert_2d.shape
+                hp, wp = attr_sq.shape
+                if hp > 0 and wp > 0 and h % hp == 0 and w % wp == 0:
+                    sh, sw = h // hp, w // wp
+                    pert_eval = pert_2d.reshape(hp, sh, wp, sw).mean(axis=(1, 3))
+                    attr_eval = attr_sq
+                else:
+                    return {
+                        "alignment_status": "shape_mismatch",
+                        "message": f"Attribution shape {attr_arr.shape} cannot be aligned with input shape {pert_raw.shape}",
+                        "cosine_alignment": None,
+                        "pearson_correlation": None,
+                        "spearman_correlation": None,
+                        "top_k_overlap": None,
+                        "budget_fraction": None,
+                    }
+            elif attr_sq.ndim == 1 and pert_sq.ndim > 1 and len(attr_sq) == pert_sq.size:
+                # Flattened matching size
+                pert_eval = pert_sq.ravel()
+                attr_eval = attr_sq
             else:
                 try:
                     attr_eval = np.broadcast_to(attr_arr, pert_raw.shape)

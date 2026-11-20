@@ -354,75 +354,143 @@ def compute_defense_hints(
         if shift_share <= 0.0 or shift_share > 1.0:
             shift_share = 0.85
 
-        pert_align_val = round(float(perturbation_alignment if perturbation_alignment is not None else 0.71), 2)
+        evidence_dict: Dict[str, Any] = {
+            f"top{top_k}_attribution_share": top_attr_share,
+        }
+        if perturbation_alignment is not None:
+            evidence_dict["perturbation_alignment"] = round(float(perturbation_alignment), 4)
+
+        conf_str = f"High ({int(top_attr_share * 100)}% Attribution Share)" if top_attr_share >= 0.70 else f"Medium ({int(top_attr_share * 100)}% Attribution Share)"
+
+        if mod == "image":
+            tech_name = "Adversarial Training (PGD-AT / TRADES) with Spatial Regularization"
+            fam_name = "Robust Optimization & Regularization"
+            why_rec = f"Top {top_k} spatial regions capture {int(top_attr_share * 100)}% of adversarial attribution, indicating high vulnerability concentration in localized receptive fields."
+            exp_ben = "Smooths the loss landscape around dominant feature coordinates, neutralizing adversarial gradient directions."
+            lim_text = "Requires validation in Module M4; robust training increases training time and may incur a slight nominal accuracy tradeoff."
+        elif mod in ("timeseries", "time_series"):
+            tech_name = "Temporal Coherence Regularization & Rolling Smoothing"
+            fam_name = "Temporal Regularization & Smoothing"
+            why_rec = f"Top {top_k} timesteps/sensors carry {int(top_attr_share * 100)}% of attribution shift, exposing temporal vulnerability spikes."
+            exp_ben = "Preserves macroscopic waveform structure while damping localized sensor oscillations."
+            lim_text = "Candidate mitigation requiring temporal dynamic consistency verification."
+        elif mod == "text":
+            tech_name = "Adversarial Token Retraining & Attention Masking"
+            fam_name = "Attention Regularization"
+            why_rec = f"Top {top_k} lexical tokens hold {int(top_attr_share * 100)}% of attribution weight, exposing critical attention heads."
+            exp_ben = "Reduces token substitution sensitivity by regularizing attention dispersion."
+            lim_text = "Candidate mitigation requiring validation against semantic drift."
+        else:  # tabular
+            tech_name = "Constrained Adversarial Training (TRADES) & Range Clamping"
+            fam_name = "Constrained Adversarial Training"
+            why_rec = f"Top {top_k} tabular features hold {int(top_attr_share * 100)}% of attribution, exposing primary decision-boundary coordinates."
+            exp_ben = "Bounds sensitivity to coordinate-level perturbations while enforcing domain-valid feature ranges."
+            lim_text = "Candidate mitigation requiring empirical robustness validation in Module M4."
 
         hints.append({
             "finding": f"{top_k} features hold {int(top_attr_share * 100)}% of attribution and carry {int(shift_share * 100)}% of the perturbation",
-            "evidence": {
-                f"top{top_k}_attribution_share": top_attr_share,
-                "perturbation_alignment": pert_align_val,
-            },
-            "suggested_family": "constrained_adversarial_training" if mod in ("tabular", "image") else "feature_level",
+            "recommended_technique": tech_name,
+            "suggested_family": fam_name,
+            "defense_stage": "Model Stage",
             "stage": "training",
-            "confidence": "high" if top_attr_share >= 0.70 else "medium",
+            "confidence": conf_str,
+            "evidence": evidence_dict,
+            "why_recommended": why_rec,
+            "expected_benefit": exp_ben,
+            "limitations": lim_text,
+            "rationale": f"{why_rec} {exp_ben} ({lim_text})",
         })
 
     # 2. Perturbation Characteristics Finding
     if mod == "image":
         hints.append({
-            "finding": "perturbation is high-frequency, low-magnitude",
+            "finding": "Perturbation exhibits high-frequency spatial noise across pixel dimensions",
+            "recommended_technique": "Spatial Squeezing & Median Blur Denoising",
+            "suggested_family": "Input Transformation & Denoising",
+            "defense_stage": "Input Stage",
+            "stage": "preprocessing",
+            "confidence": "Medium (Spatial Noise Characteristic)",
             "evidence": {
                 "modality": "image",
                 "attack": attack_name or "gradient_attack",
                 "spatial_frequency": "high",
             },
-            "suggested_family": "input_preprocessing",
-            "stage": "post_training",
+            "why_recommended": "Micro-perturbations target high-frequency pixel dimensions to evade human visual detection.",
+            "expected_benefit": "Suppresses high-frequency gradient artifacts before input tensors reach convolution layers.",
+            "limitations": "Extreme bit-depth reduction or blur may degrade subtle visual indicators.",
+            "rationale": "Suppresses high-frequency gradient artifacts before input tensors reach convolution layers.",
         })
     elif mod in ("timeseries", "time_series"):
         hints.append({
-            "finding": "perturbation exhibits high-frequency localized sensor oscillations",
+            "finding": "Perturbation exhibits high-frequency localized sensor oscillations",
+            "recommended_technique": "Discrete Wavelet Transform (DWT) Filtering & Smoothing",
+            "suggested_family": "Frequency-Domain Denoising",
+            "defense_stage": "Input Stage",
+            "stage": "preprocessing",
+            "confidence": "Medium (Spectral Spike Signature)",
             "evidence": {
                 "modality": "timeseries",
                 "attack": attack_name or "temporal_attack",
                 "filtering_target": "high_frequency_wavelet_bands",
             },
-            "suggested_family": "input_preprocessing",
-            "stage": "post_training",
+            "why_recommended": "Adversary injects high-frequency oscillations across specific sensor channels.",
+            "expected_benefit": "Thresholds high-frequency wavelet sub-bands where perturbation energy is concentrated.",
+            "limitations": "Filter cutoff frequencies must be tuned to avoid damping genuine physical dynamics.",
+            "rationale": "Thresholds high-frequency wavelet sub-bands where perturbation energy is concentrated.",
         })
     elif mod == "text":
         hints.append({
-            "finding": "perturbation targets high-attention token substitutions with low edit distance",
+            "finding": "Perturbation targets high-attention lexical tokens with low edit distance",
+            "recommended_technique": "Input Normalization & Perplexity-Based Token Filtering",
+            "suggested_family": "Input Normalization & Filtering",
+            "defense_stage": "Input Stage",
+            "stage": "preprocessing",
+            "confidence": "Medium (Lexical Token Sensitivity)",
             "evidence": {
                 "modality": "text",
                 "attack": attack_name or "token_attack",
                 "target_layer": "word_embeddings",
             },
-            "suggested_family": "input_preprocessing",
-            "stage": "post_training",
+            "why_recommended": "Perturbations introduce low edit-distance token swaps that degrade sequence perplexity.",
+            "expected_benefit": "Filters out perturbed token sequences before encoder embedding lookup.",
+            "limitations": "May flag rare or specialized domain terminology if reference corpus is unrepresentative.",
+            "rationale": "Filters out perturbed token sequences before encoder embedding lookup.",
         })
     else:  # tabular
         hints.append({
-            "finding": "perturbation is high-frequency, low-magnitude",
+            "finding": "Perturbation targets coordinate-level feature boundaries",
+            "recommended_technique": "Feature Squeezing & Range Clamping (Quantization)",
+            "suggested_family": "Input Squeezing & Validation",
+            "defense_stage": "Input Stage",
+            "stage": "preprocessing",
+            "confidence": "Medium (Coordinate Jitter Characteristic)",
             "evidence": {
                 "modality": "tabular",
                 "attack": attack_name or "tabular_attack",
             },
-            "suggested_family": "input_preprocessing",
-            "stage": "post_training",
+            "why_recommended": "Micro-perturbations target numerical boundaries beyond expected standard deviations.",
+            "expected_benefit": "Eliminates low-magnitude adversarial jitter by projecting features into quantized buckets.",
+            "limitations": "Quantization step size must be calibrated against nominal clean precision.",
+            "rationale": "Eliminates low-magnitude adversarial jitter by projecting features into quantized buckets.",
         })
 
     # 3. Anomaly / Boundary Finding
     if prediction_changed:
         hints.append({
-            "finding": "adversarial sample induces anomalous attribution shifts detectable prior to scoring",
+            "finding": "Adversarial sample induces anomalous attribution shifts detectable prior to scoring",
+            "recommended_technique": "Mahalanobis Distance OOD Anomaly Filter",
+            "suggested_family": "Anomaly Detection & OOD Gating",
+            "defense_stage": "Post-processing Stage",
+            "stage": "detection",
+            "confidence": "Medium (Decision Flip Detected)",
             "evidence": {
                 "prediction_changed": True,
                 "detection_strategy": "mahalanobis_ood_or_reconstruction_filter",
             },
-            "suggested_family": "detection",
-            "stage": "detection",
-            "confidence": "medium",
+            "why_recommended": "Adversarial input forces intermediate activations outside the nominal manifold.",
+            "expected_benefit": "Detects and flags inputs with anomalous feature covariance prior to downstream decision consumption.",
+            "limitations": "Requires clean validation set to compute class-conditional covariance centroids.",
+            "rationale": "Detects and flags inputs with anomalous feature covariance prior to downstream decision consumption.",
         })
 
     return hints
@@ -672,6 +740,7 @@ def analyze_failure(
     attack_name: Optional[str] = None,
     clean_confidence: Optional[float] = None,
     adversarial_confidence: Optional[float] = None,
+    perturbation_alignment: Optional[float] = None,
 ) -> Dict[str, Any]:
     """
     Perform deterministic analysis on prediction changes, failure modes, and feature contributions.
@@ -700,9 +769,12 @@ def analyze_failure(
     Returns:
         Dictionary containing failure mode, contributing features, shifts, attack reasoning, and defenses.
     """
-    prediction_changed = not _is_equal(clean_prediction, adversarial_prediction)
-    clean_correct = is_prediction_correct(clean_prediction, true_label)
-    adversarial_correct = is_prediction_correct(adversarial_prediction, true_label)
+    if clean_prediction is not None and adversarial_prediction is not None:
+        prediction_changed = not _is_equal(clean_prediction, adversarial_prediction)
+    else:
+        prediction_changed = None
+    clean_correct = is_prediction_correct(clean_prediction, true_label) if clean_prediction is not None else None
+    adversarial_correct = is_prediction_correct(adversarial_prediction, true_label) if adversarial_prediction is not None else None
 
     clean_pred_val = _to_clean_value(clean_prediction)
     adv_pred_val = _to_clean_value(adversarial_prediction)
@@ -710,9 +782,12 @@ def analyze_failure(
 
     # Determine attack objective and failure causation
     attack_objective = "targeted" if target_class is not None else "untargeted"
-    targeted_success = bool(_is_equal(adversarial_prediction, target_class)) if target_class is not None else None
+    targeted_success = bool(_is_equal(adversarial_prediction, target_class)) if (target_class is not None and adversarial_prediction is not None) else None
 
-    if true_label is None:
+    if clean_prediction is None or adversarial_prediction is None:
+        attack_caused_failure = None
+        failure_mode = "indeterminate_predictions"
+    elif true_label is None:
         if attack_objective == "targeted":
             attack_caused_failure = targeted_success
             failure_mode = "targeted_attack_success" if targeted_success else "targeted_attack_failed"
@@ -724,7 +799,7 @@ def analyze_failure(
                 failure_mode = "prediction_unchanged_unknown_correctness"
     else:
         if attack_objective == "targeted":
-            attack_caused_failure = bool(clean_correct is True and targeted_success)
+            attack_caused_failure = bool(clean_correct is True and targeted_success) if clean_correct is not None else None
             if clean_correct is True:
                 failure_mode = "clean_correct_to_targeted_success" if targeted_success else "clean_correct_targeted_failed"
             else:
@@ -903,6 +978,7 @@ def analyze_failure(
         sensor_importance=sensor_importance,
         clean_attribution=clean_attribution,
         adv_attribution=adv_attribution,
+        perturbation_alignment=perturbation_alignment,
     )
 
     out: Dict[str, Any] = {

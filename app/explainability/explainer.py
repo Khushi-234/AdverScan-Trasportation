@@ -340,14 +340,17 @@ class XAIExplainer:
         total_model_queries = clean_stats.num_model_queries + adv_stats.num_model_queries
 
         # Attribution status propagation
+        attr_err_msg = None
         if is_fallback:
             attribution_status = "timeout_fallback"
         else:
             attribution_status = clean_attr_result.get("status", "success")
             if clean_attr_result.get("status") in ("error", "unavailable"):
                 attribution_status = clean_attr_result.get("status")
+                attr_err_msg = clean_attr_result.get("message")
             elif adv_attr_result.get("status") in ("error", "unavailable"):
                 attribution_status = adv_attr_result.get("status")
+                attr_err_msg = adv_attr_result.get("message")
 
         # Resolve device
         device = "cpu"
@@ -458,7 +461,31 @@ class XAIExplainer:
             comp_data["relative_change"] = float(rel_change)
             comp_data["threshold_crossed"] = pred_changed
 
-        # 10. Perform failure analysis
+        # 10. Perturbation alignment calculation (fast metric, does not query model)
+        from app.explainability.metrics.perturbation_alignment import compute_perturbation_alignment
+        pert_align_val: Optional[float] = None
+        try:
+            attr_for_alignment = adv_attr if adv_attr is not None else clean_attr
+            pert_align_result = compute_perturbation_alignment(
+                clean_input,
+                adversarial_input,
+                attr_for_alignment,
+                top_k=kwargs.get("top_k", 5),
+                background_std=kwargs.get("background_std"),
+            )
+            comp_data["perturbation_alignment"] = pert_align_result
+            if isinstance(pert_align_result, dict):
+                cos_val = pert_align_result.get("cosine_alignment")
+                if cos_val is not None:
+                    pert_align_val = float(cos_val)
+        except Exception as e:
+            comp_data["perturbation_alignment"] = {
+                "alignment_status": f"error: {str(e)}",
+                "cosine_alignment": None,
+                "message": f"Unavailable: {str(e)}",
+            }
+
+        # 11. Perform failure analysis
         fail_data = analyze_failure(
             clean_prediction=clean_pred,
             adversarial_prediction=adv_pred,
@@ -475,21 +502,14 @@ class XAIExplainer:
             attack_name=attack_name,
             clean_confidence=clean_conf,
             adversarial_confidence=adv_conf,
+            perturbation_alignment=pert_align_val,
         )
 
-        # 11. Optional metrics (Perturbation Alignment, Faithfulness, Stability)
+        # 12. Optional heavy metrics (Faithfulness, Stability)
         if compute_metrics:
             from app.explainability.metrics.faithfulness import compute_faithfulness
-            from app.explainability.metrics.perturbation_alignment import compute_perturbation_alignment
             from app.explainability.metrics.stability import compute_stability
 
-            comp_data["perturbation_alignment"] = compute_perturbation_alignment(
-                clean_input,
-                adversarial_input,
-                clean_attr,
-                top_k=kwargs.get("top_k", 5),
-                background_std=kwargs.get("background_std"),
-            )
             comp_data["faithfulness"] = compute_faithfulness(
                 model=model,
                 inputs=clean_input,
@@ -578,6 +598,7 @@ class XAIExplainer:
             "domain": domain_prof.name if domain_prof else str(domain_name),
             "config": cfg.to_dict(),
             "explain_seconds": round(total_explain_seconds, 6),
+            "execution_time_seconds": round(total_explain_seconds, 6),
             "num_model_queries": int(total_model_queries),
             "clean_explain_seconds": round(clean_stats.explain_seconds, 6),
             "clean_num_model_queries": int(clean_stats.num_model_queries),
@@ -585,6 +606,8 @@ class XAIExplainer:
             "adversarial_num_model_queries": int(adv_stats.num_model_queries),
             "xai_decision": xai_decision,
         }
+        if attr_err_msg:
+            meta["error"] = attr_err_msg
         if assessment_result is not None:
             if hasattr(assessment_result, "to_dict"):
                 meta["assessment_result"] = assessment_result.to_dict()
@@ -807,13 +830,13 @@ class XAIExplainer:
                 return ExplanationResult(
                     attack_name=attack_name,
                     technique=technique or "unknown",
-                    clean_prediction=0,
-                    adversarial_prediction=0,
-                    clean_confidence=0.0,
-                    adversarial_confidence=0.0,
-                    prediction_changed=False,
+                    clean_prediction=None,
+                    adversarial_prediction=None,
+                    clean_confidence=None,
+                    adversarial_confidence=None,
+                    prediction_changed=None,
                     true_label=None,
-                    attack_caused_failure=False,
+                    attack_caused_failure=None,
                     attribution_status="error",
                     metadata={"error": "AttackResult missing clean inputs for XAI explainability."},
                 )
@@ -824,13 +847,13 @@ class XAIExplainer:
                 return ExplanationResult(
                     attack_name=attack_name,
                     technique=technique or "unknown",
-                    clean_prediction=0,
-                    adversarial_prediction=0,
-                    clean_confidence=0.0,
-                    adversarial_confidence=0.0,
-                    prediction_changed=False,
+                    clean_prediction=None,
+                    adversarial_prediction=None,
+                    clean_confidence=None,
+                    adversarial_confidence=None,
+                    prediction_changed=None,
                     true_label=None,
-                    attack_caused_failure=False,
+                    attack_caused_failure=None,
                     attribution_status="error",
                     metadata={"error": "AttackResult contains no adversarial examples for XAI explainability."},
                 )

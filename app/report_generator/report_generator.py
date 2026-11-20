@@ -581,11 +581,20 @@ class ReportGenerator:
         if report_data.baseline_performance:
             metrics = report_data.baseline_performance.get("metrics") or {}
             source = metrics if metrics else report_data.baseline_performance
-            ignored_keys = {"per_class_metrics", "confusion_matrix"}
+            ignored_keys = {
+                "per_class_metrics", "confusion_matrix", "classification_report",
+                "detailed_metrics", "raw_data", "samples", "predictions", "labels",
+                "confidences", "history", "roc_curve", "pr_curve", "feature_importance"
+            }
+            # Prioritize standard scalar metrics
+            for k in ("accuracy", "precision", "recall", "f1_score", "f1", "loss", "auc"):
+                if k in source and not isinstance(source[k], (dict, list)):
+                    lines.append(f"  - {k:<20}: {pct(source[k])}")
             for k, v in source.items():
-                if k in ignored_keys:
+                if k in ignored_keys or k.lower() in ("accuracy", "precision", "recall", "f1_score", "f1", "loss", "auc"):
                     continue
-                lines.append(f"  - {k}: {pct(v)}")
+                if isinstance(v, (int, float, str, bool)):
+                    lines.append(f"  - {k:<20}: {pct(v)}")
         else:
             lines.append("  No baseline performance data.")
         lines.append("")
@@ -742,16 +751,207 @@ class ReportGenerator:
         # ── 9. XAI Findings ───────────────────────────────────────────────────
         lines += ["9. XAI FINDINGS", DIV]
         if report_data.xai_findings:
-            for tech, xv in report_data.xai_findings.items():
-                lines.append(f"  ▶ Technique: {tech}")
-                if isinstance(xv, dict):
-                    for k, v in xv.items():
-                        if k in ("heatmap", "attribution_map", "clean_prediction", "adversarial_prediction", "true_label", "metadata"):
-                            continue
-                        if isinstance(v, (list, dict)) and len(str(v)) > 100:
-                            lines.append(f"    - {k}: [Detailed Data Omitted]")
+            xf = report_data.xai_findings
+            findings_items: List[Tuple[str, Dict[str, Any]]] = []
+            if isinstance(xf, dict):
+                if any(k in xf for k in ("technique", "attribution_status", "clean_prediction", "failure_analysis", "feature_importance", "modality")):
+                    tech_name = xf.get("technique") or xf.get("attack_name") or "attribution"
+                    findings_items = [(str(tech_name), xf)]
+                else:
+                    for k, v in xf.items():
+                        if isinstance(v, dict):
+                            findings_items.append((str(k), v))
                         else:
-                            lines.append(f"    - {k}: {v}")
+                            findings_items.append((str(k), {"value": v}))
+
+            for item_key, xv in findings_items:
+                if not isinstance(xv, dict):
+                    lines.append(f"  ▶ Finding: {item_key} = {xv}")
+                    lines.append("")
+                    continue
+
+                tech_val = xv.get("technique") or item_key
+                status_raw = str(xv.get("attribution_status") or xv.get("status") or ("SUCCESS" if xv.get("executed") is not False else "FAILED"))
+                status_icon = "✅ SUCCESS" if status_raw.lower() == "success" else f"⚠️ {status_raw.upper()}"
+
+                atk_val = xv.get("attack_name")
+                if not atk_val and "_" in item_key:
+                    atk_val = item_key.split("_")[0]
+
+                meta_d = xv.get("metadata") if isinstance(xv.get("metadata"), dict) else {}
+                modality_val = xv.get("modality") or meta_d.get("modality") or meta_d.get("data_domain")
+                target_cls = xv.get("target_class")
+                if target_cls is None and meta_d.get("target_class") is not None:
+                    target_cls = meta_d.get("target_class")
+
+                # Explanation Coverage
+                batch_res = xv.get("batch_results")
+                if isinstance(batch_res, list) and batch_res:
+                    tot_s = len(batch_res)
+                    succ_s = sum(1 for b in batch_res if isinstance(b, dict) and str(b.get("attribution_status") or b.get("status") or "").lower() == "success")
+                    fail_s = tot_s - succ_s
+                    coverage_str = f"{succ_s} of {tot_s} samples successfully explained ({fail_s} failed)"
+                elif meta_d.get("total_samples") is not None:
+                    tot_s = int(meta_d.get("total_samples", 1))
+                    succ_s = int(meta_d.get("successful_samples", tot_s))
+                    fail_s = int(meta_d.get("failed_samples", 0))
+                    coverage_str = f"{succ_s} of {tot_s} samples successfully explained ({fail_s} failed)"
+                elif status_raw.lower() == "success":
+                    coverage_str = "1 of 1 samples successfully explained"
+                else:
+                    coverage_str = f"Execution status: {status_raw.upper()}"
+
+                lines.append(f"  ▶ Technique: {tech_val}")
+                lines.append(f"    - Explainer Technique : {str(tech_val).replace('_', ' ').title()}")
+                lines.append(f"    - Execution Status    : {status_icon}")
+                if atk_val:
+                    lines.append(f"    - Attack Examined     : {str(atk_val).upper()}")
+                if modality_val:
+                    lines.append(f"    - Model Modality      : {str(modality_val).title()}")
+                if target_cls is not None:
+                    lines.append(f"    - Target Class        : Class {target_cls}")
+                lines.append(f"    - Explanation Coverage: {coverage_str}")
+
+                # Prediction Analysis table
+                clean_pred = xv.get("clean_prediction")
+                clean_conf = xv.get("clean_confidence")
+                adv_pred = xv.get("adversarial_prediction")
+                adv_conf = xv.get("adversarial_confidence")
+                pred_changed = xv.get("prediction_changed")
+                attack_caused_failure = xv.get("attack_caused_failure")
+
+                has_pred_info = any(v is not None for v in (clean_pred, adv_pred, clean_conf, adv_conf, pred_changed, attack_caused_failure))
+                if has_pred_info:
+                    c_str = str(clean_pred) if clean_pred is not None else "N/A"
+                    a_str = str(adv_pred) if adv_pred is not None else "N/A"
+                    c_conf_str = pct(clean_conf) if clean_conf is not None else "N/A"
+                    a_conf_str = pct(adv_conf) if adv_conf is not None else "N/A"
+                    p_flip_str = "Yes" if pred_changed is True else ("No" if pred_changed is False else "N/A")
+                    f_cause_str = "Yes" if attack_caused_failure is True else ("No" if attack_caused_failure is False else "N/A")
+
+                    lines.append("")
+                    lines.append("    • Prediction Analysis:")
+                    lines.append("      | Clean Pred | Clean Conf | Adv Pred | Adv Conf | Pred Changed | Attack Failure |")
+                    lines.append("      |---|---|---|---|---|---|")
+                    lines.append(f"      | {c_str:<10} | {c_conf_str:<10} | {a_str:<8} | {a_conf_str:<8} | {p_flip_str:<12} | {f_cause_str:<14} |")
+
+                # Attribution Analysis
+                fa = xv.get("failure_analysis") if isinstance(xv.get("failure_analysis"), dict) else {}
+                comp = xv.get("comparison") if isinstance(xv.get("comparison"), dict) else {}
+
+                drift = fa.get("attribution_drift") if fa.get("attribution_drift") is not None else comp.get("attribution_drift", xv.get("attribution_drift"))
+                if drift is None and isinstance(xv.get("local_explanation"), dict):
+                    drift = xv["local_explanation"].get("attribution_drift")
+
+                salience = fa.get("cosine_distortion") if fa.get("cosine_distortion") is not None else fa.get("feature_salience_distortion")
+                if salience is None:
+                    salience = comp.get("cosine_distortion", comp.get("feature_salience_distortion", xv.get("feature_salience_distortion")))
+                if salience is None and isinstance(xv.get("local_explanation"), dict):
+                    salience = xv["local_explanation"].get("feature_salience_distortion")
+
+                align = fa.get("perturbation_alignment") if fa.get("perturbation_alignment") is not None else xv.get("perturbation_alignment")
+
+                # Top Contributing Features
+                fi = xv.get("feature_importance") if isinstance(xv.get("feature_importance"), dict) else {}
+                top_raw = fi.get("adversarial_top_features") or fi.get("clean_top_features") or fi.get("diagnostic_shifts") or xv.get("top_features") or []
+                feat_items: List[str] = []
+                if isinstance(top_raw, list):
+                    for f in top_raw[:5]:
+                        if isinstance(f, dict):
+                            fn = f.get("feature") or f.get("name") or f.get("feature_name") or "Feature"
+                            sc = f.get("importance") or f.get("score") or f.get("shift")
+                            sc_str = f"{float(sc):.4f}" if isinstance(sc, (int, float)) and not math.isnan(sc) else str(sc)
+                            feat_items.append(f"{fn} ({sc_str})")
+                        elif isinstance(f, (str, int, float)):
+                            feat_items.append(str(f))
+                elif isinstance(top_raw, dict):
+                    for fn, sc in list(top_raw.items())[:5]:
+                        sc_str = f"{float(sc):.4f}" if isinstance(sc, (int, float)) and not math.isnan(sc) else str(sc)
+                        feat_items.append(f"{fn} ({sc_str})")
+
+                if not feat_items and xv.get("top_feature"):
+                    tf_name = xv.get("top_feature")
+                    tf_sum = xv.get("attribution_sum") or xv.get("attribution_mean")
+                    if tf_sum is not None:
+                        feat_items.append(f"{tf_name} ({float(tf_sum):.4f})")
+                    else:
+                        feat_items.append(str(tf_name))
+
+                interp = fa.get("attribution_interpretation") or xv.get("attribution_interpretation")
+
+                drift_fmt = f"{float(drift):.4f}" if isinstance(drift, (int, float)) and not math.isnan(drift) else None
+                salience_fmt = f"{float(salience):.4f}" if isinstance(salience, (int, float)) and not math.isnan(salience) else None
+                align_fmt = f"{float(align):.4f}" if isinstance(align, (int, float)) and not math.isnan(align) else None
+
+                if drift_fmt or salience_fmt or align_fmt or feat_items or interp:
+                    lines.append("")
+                    lines.append("    • Attribution Analysis:")
+                    if drift_fmt:
+                        lines.append(f"      - Attribution Drift (L1)    : {drift_fmt}")
+                    if salience_fmt:
+                        lines.append(f"      - Salience Distortion       : {salience_fmt}")
+                    if align_fmt:
+                        lines.append(f"      - Perturbation Alignment   : {align_fmt}")
+                    if feat_items:
+                        lines.append(f"      - Top Salient Features      : {', '.join(feat_items)}")
+                    if interp:
+                        lines.append(f"      - Shift Interpretation      : {interp}")
+
+                # Root Cause Explanation
+                attack_reason = fa.get("attack_reason") or xv.get("attack_reason") or xv.get("root_cause")
+                if attack_reason:
+                    lines.append("")
+                    lines.append("    • Root Cause Explanation:")
+                    lines.append(f"      {attack_reason}")
+
+                # Defense Recommendations
+                defense_list = xv.get("defense_hints") or fa.get("defense_recommendations") or xv.get("defense_recommendations") or []
+                if isinstance(defense_list, list) and defense_list:
+                    lines.append("")
+                    lines.append("    • Evidence-Based Defense Recommendations:")
+                    for rec in defense_list[:3]:
+                        if not isinstance(rec, dict):
+                            continue
+                        r_def = rec.get("suggested_defense") or rec.get("defense_technique") or rec.get("technique") or "Adversarial Defense"
+                        r_stage = rec.get("stage") or rec.get("defense_stage") or "Defense Pipeline"
+                        r_finding = rec.get("finding")
+                        r_conf = rec.get("confidence")
+                        r_conf_str = pct(r_conf) if isinstance(r_conf, (int, float)) else (str(r_conf) if r_conf is not None else None)
+                        r_evid = rec.get("evidence")
+                        r_why = rec.get("why_recommended") or rec.get("rationale") or rec.get("description")
+
+                        lines.append(f"      - [{str(r_stage).title()}] {r_def}")
+                        if r_finding:
+                            lines.append(f"        Finding   : {r_finding}")
+                        if r_conf_str:
+                            lines.append(f"        Confidence: {r_conf_str}")
+                        if r_evid:
+                            lines.append(f"        Evidence  : {r_evid}")
+                        if r_why:
+                            lines.append(f"        Rationale : {r_why}")
+
+                # Fallback for simple legacy test key-values without dumping internal keys
+                ignored_simple = {
+                    "_result_obj", "metadata", "attribution", "raw_attribution", "attribution_map",
+                    "heatmap", "batch_results", "config", "assessment_result", "scoring_result",
+                    "clean_prediction", "adversarial_prediction", "clean_confidence", "adversarial_confidence",
+                    "prediction_changed", "attack_caused_failure", "technique", "status", "executed",
+                    "attribution_status", "failure_analysis", "feature_importance", "defense_hints",
+                    "defense_recommendations", "prediction_analysis", "attack_transformation",
+                    "attribution_validation", "defense_pipeline", "xai_decision", "target_class",
+                    "modality", "domain", "attack_name", "top_feature", "top_features", "attribution_sum",
+                    "attribution_mean", "attribution_drift", "cosine_distortion", "feature_salience_distortion",
+                    "perturbation_alignment", "attack_reason", "attribution_interpretation", "root_cause",
+                    "local_explanation"
+                }
+                simple_extras = [
+                    (k, v) for k, v in xv.items()
+                    if k not in ignored_simple and not isinstance(v, (list, dict))
+                ]
+                if simple_extras and not has_pred_info and not drift_fmt and not feat_items:
+                    for sk, sv in simple_extras:
+                        val_str = pct(sv) if isinstance(sv, float) else str(sv)
+                        lines.append(f"    - {sk:<26}: {val_str}")
                 lines.append("")
         else:
             lines.append("  No XAI findings generated.")
@@ -760,8 +960,11 @@ class ReportGenerator:
         # ── 10. Hardening ─────────────────────────────────────────────────────
         lines += ["10. HARDENING", DIV]
         if report_data.hardening_results:
+            ignored_hardening = {"weights", "state_dict", "model", "model_obj", "history", "raw_data", "arrays", "optimizer"}
             for k, v in report_data.hardening_results.items():
-                lines.append(f"  - {k}: {v}")
+                if k in ignored_hardening or isinstance(v, (list, dict)):
+                    continue
+                lines.append(f"  - {k:<20}: {pct(v) if isinstance(v, float) else v}")
         else:
             lines.append("  No hardening actions recorded.")
         lines.append("")
@@ -938,7 +1141,9 @@ class ReportGenerator:
         # ── 15. Final Security Summary ─────────────────────────────────────────
         lines += ["15. FINAL SECURITY SUMMARY", DIV]
         for k, v in final_summary.items():
-            lines.append(f"  - {k}: {pct(v) if isinstance(v, float) else v}")
+            if isinstance(v, (list, dict)):
+                continue
+            lines.append(f"  - {k:<24}: {pct(v) if isinstance(v, float) else v}")
         lines.append("")
 
         lines.append(SEP)

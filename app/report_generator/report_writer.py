@@ -177,6 +177,11 @@ class ReportWriter:
             textobject = c.beginText(40, 750)
             textobject.setFont("Courier", 8)
             for line in result.formatted_report.splitlines():
+                if textobject.getY() <= 45:
+                    c.drawText(textobject)
+                    c.showPage()
+                    textobject = c.beginText(40, 750)
+                    textobject.setFont("Courier", 8)
                 textobject.textLine(line[:95])
             c.drawText(textobject)
             c.showPage()

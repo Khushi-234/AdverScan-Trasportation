@@ -2310,7 +2310,10 @@ elif stage == "attack_results":
                         )
                         set_xai_result(res_xai)
                         set_report_result(None)
-                        st.success(f"Generated {expander_tech.upper()} explanation successfully!")
+                        if res_xai.get("executed", False):
+                            st.success(f"Generated {expander_tech.upper()} explanation successfully!")
+                        else:
+                            st.error(f"XAI {expander_tech.upper()} Generation Failed: {res_xai.get('message', 'Attribution error')}")
                     except Exception as e:
                         st.error(f"XAI Execution Failed: {e}")
 
@@ -2436,30 +2439,13 @@ elif stage == "xai_analysis":
 
     # Optional Collapsible Advanced Settings (Keeps screen clean and uncluttered)
     with st.expander("⚙️ Advanced Parameters (Optional)", expanded=False):
-        adv_col1, adv_col2 = st.columns(2)
-        with adv_col1:
-            selected_mode = st.selectbox(
-                "Evaluation Mode",
-                ["standard", "fast", "thorough"],
-                index=0,
-                help="Fast uses fewer evaluation steps; thorough maximizes sampling / IG integration steps.",
-                key="xai_mode_select",
-            )
-        with adv_col2:
-            tot_eval_samples = attack_res.get("total_samples", 1)
-            eval_orig = attack_res.get("_original_inputs")
-            if eval_orig is not None and hasattr(eval_orig, "__len__"):
-                try:
-                    tot_eval_samples = len(eval_orig)
-                except Exception:
-                    pass
-            sample_options = ["First Sample (Index 0)"] + [f"Sample {i}" for i in range(1, min(10, tot_eval_samples))]
-            selected_sample_label = st.selectbox(
-                "Sample Target",
-                sample_options,
-                index=0,
-                key="xai_sample_selector",
-            )
+        selected_mode = st.selectbox(
+            "Evaluation Mode",
+            ["standard", "fast", "thorough"],
+            index=0,
+            help="Fast uses fewer evaluation steps; thorough maximizes sampling / IG integration steps.",
+            key="xai_mode_select",
+        )
 
     st.markdown("</div>", unsafe_allow_html=True)
 
@@ -2477,7 +2463,10 @@ elif stage == "xai_analysis":
                 set_xai_result(xai_res)
                 set_report_result(None)
                 cached_xai = xai_res
-                st.success(f"Successfully generated {selected_tech.upper()} explainability diagnostics!")
+                if xai_res.get("executed", False):
+                    st.success(f"Successfully generated {selected_tech.upper()} explainability diagnostics!")
+                else:
+                    st.error(f"{selected_tech.upper()} Explainer Error: {xai_res.get('message', 'Attribution generation failed.')}")
             except Exception as e:
                 st.error(f"XAI Generation Failed: {e}")
 
@@ -2515,7 +2504,10 @@ elif stage == "xai_analysis":
                         )
                         set_defense_xai_result(post_xai_res)
                         set_report_result(None)
-                        st.success("Post-defense XAI attribution profile computed successfully!")
+                        if post_xai_res.get("executed", False):
+                            st.success("Post-defense XAI attribution profile computed successfully!")
+                        else:
+                            st.error(f"Post-Defense XAI Failed: {post_xai_res.get('message', 'Attribution error')}")
                         st.rerun()
                     except Exception as e:
                         st.error(f"Post-Defense XAI Generation Failed: {e}")
@@ -3372,11 +3364,21 @@ elif stage == "report":
                             st.markdown(f"- `{f.get('feature', 'feat')}`: {f.get('weight', 0.0):.4f}")
 
             if global_exp:
-                st.markdown("##### 🌐 Global Feature Importance (Dataset Level)")
-                glob_top = global_exp.get("global_top_features", [])
-                if glob_top:
-                    for g in glob_top[:5]:
-                        st.markdown(f"- **{g.get('feature', 'feat')}**: vulnerability frequency `{g.get('frequency', 0)}`")
+                glob_imp = global_exp.get("global_feature_importance", [])
+                vuln_freq = global_exp.get("vulnerability_frequency", []) or global_exp.get("global_top_features", [])
+
+                if glob_imp:
+                    st.markdown("##### 🌐 Global Feature Importance (Aggregated SHAP / Attribution)")
+                    for g in glob_imp[:5]:
+                        imp_val = g.get("mean_abs_importance", g.get("importance", 0.0))
+                        st.markdown(f"- **{g.get('feature', 'feat')}**: mean |attribution| `{imp_val:.4f}` (sample coverage: {g.get('sample_count', 0)})")
+
+                if vuln_freq:
+                    st.markdown("##### 🎯 Adversarial Vulnerability Frequency")
+                    for g in vuln_freq[:5]:
+                        succ_f = g.get("success_frequency", g.get("frequency", 0))
+                        tot_f = g.get("frequency", g.get("total_frequency", 0))
+                        st.markdown(f"- **{g.get('feature', 'feat')}**: exploited in `{succ_f}` attacks (total occurrences: `{tot_f}`)")
 
             st.json(xai_info)
         else:

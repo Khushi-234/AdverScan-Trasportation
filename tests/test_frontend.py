@@ -14,6 +14,7 @@ from frontend.services.defense_service import (
     execute_configured_defense,
     get_available_defenses_for_domain,
 )
+from frontend.services.xai_service import explain_assessment
 from frontend.services.report_service import generate_security_report
 from frontend.utils.session_state import (
     get_workflow_stage,
@@ -1372,7 +1373,952 @@ def test_xai_model_output_prediction_outputs_unwrapping():
     assert xai_res.get("status") == "success"
 
 
+def test_xai_frontend_single_sample_isolation():
+    """Verify sample_index isolates target sample and generates valid ExplanationResult."""
+    class SimpleCNN(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.conv = nn.Conv2d(3, 4, kernel_size=3, padding=1)
+            self.pool = nn.AdaptiveAvgPool2d((1, 1))
+            self.fc = nn.Linear(4, 2)
 
+        def forward(self, x):
+            h = torch.relu(self.conv(x))
+            h = self.pool(h).flatten(1)
+            return self.fc(h)
+
+    model = SimpleCNN()
+    clean = torch.randn(3, 3, 16, 16)
+    adv = clean + 0.05 * torch.randn_like(clean)
+    atk = {
+        "attack_name": "fgsm",
+        "original_inputs": clean,
+        "adversarial_examples": adv,
+        "labels": torch.tensor([0, 1, 0]),
+        "original_predictions": [0, 1, 0],
+        "adversarial_predictions": [1, 1, 0],
+    }
+
+    res_single = explain_assessment(
+        model=model,
+        attack_result=atk,
+        domain="image",
+        technique="saliency",
+        mode="fast",
+        sample_index=1,
+    )
+
+    assert res_single["executed"] is True
+    assert res_single["status"] == "success"
+    assert res_single["clean_prediction"] is not None
+    assert res_single["adversarial_prediction"] is not None
+    assert res_single["clean_attribution"] is not None
+    assert res_single["adversarial_attribution"] is not None
+    assert res_single["target_class"] is not None
+
+    from frontend.components.xai_visualizer import render_spatial_heatmaps
+    assert render_spatial_heatmaps(res_single) is True
+
+
+def test_xai_frontend_batch_and_temporal_visualization():
+    """Verify batch and temporal time-series results comply with visualization rendering contracts."""
+    class TSModel(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.gru = nn.GRU(input_size=4, hidden_size=8, batch_first=True)
+            self.fc = nn.Linear(8, 2)
+
+        def forward(self, x):
+            out, _ = self.gru(x)
+            return self.fc(out[:, -1, :])
+
+    model = TSModel()
+    clean = torch.randn(2, 8, 4)
+    adv = clean + 0.05 * torch.randn_like(clean)
+    atk = {
+        "attack_name": "fgsm",
+        "original_inputs": clean,
+        "adversarial_examples": adv,
+        "labels": torch.tensor([0, 1]),
+    }
+
+    res_ts = explain_assessment(
+        model=model,
+        attack_result=atk,
+        domain="timeseries",
+        technique="integrated_gradients",
+        mode="fast",
+    )
+
+    assert res_ts["executed"] is True
+    assert res_ts["clean_prediction"] is not None
+    assert res_ts["clean_confidence"] is not None
+
+    from frontend.components.xai_visualizer import render_temporal_attribution_curve
+    assert render_temporal_attribution_curve(res_ts) is True
+
+
+def test_xai_frontend_report_section_9_integration():
+    """Verify M6 XAI findings seamlessly pass to M9 ReportData and render Section 9 cleanly."""
+    from app.report_generator.report_generator import ReportGenerator
+    from app.report_generator.report_data import ReportData
+
+    sample_xai = {
+        "status": "success",
+        "executed": True,
+        "technique": "saliency",
+        "clean_prediction": 0,
+        "adversarial_prediction": 1,
+        "clean_confidence": 0.95,
+        "adversarial_confidence": 0.88,
+        "prediction_changed": True,
+        "local_explanation": {
+            "clean_top_features": [{"feature": "feat_0", "weight": 0.42}],
+            "adversarial_top_features": [{"feature": "feat_1", "weight": 0.77}],
+        },
+    }
+
+    rep_data = ReportData(
+        model_info={"model_name": "eval_model", "framework": "pytorch"},
+        dataset_config={"dataset_name": "eval_dataset", "domain": "image", "total_samples": 2},
+        baseline_performance={"accuracy": 0.95},
+        attack_results={"fgsm": {"success": True, "evaluation": {"metrics": {"asr": 0.8}}}},
+        vulnerability_metrics={},
+        vulnerability_score=80.0,
+        risk_level="HIGH",
+        xai_findings=sample_xai,
+    )
+
+    gen = ReportGenerator()
+    res = gen.generate(rep_data)
+    report_text = res.formatted_report
+
+    assert "9. XAI FINDINGS" in report_text
+    assert "▶ Technique: saliency" in report_text
+    assert "▶ Technique: status" not in report_text
+    assert "▶ Technique: executed" not in report_text
+
+
+def test_xai_metrics_summary_na_handling():
+    """Verify that render_xai_metrics_summary displays N/A for missing predictions, indeterminate consistency, and missing drift."""
+    from frontend.components.xai_visualizer import render_xai_metrics_summary
+
+    # Case 1: Missing predictions -> Indeterminate consistency, N/A drift
+    xai_missing = {
+        "technique": "shap",
+        "clean_prediction": None,
+        "adversarial_prediction": None,
+        "prediction_changed": None,
+        "attribution_drift": None,
+        "feature_salience_distortion": None,
+    }
+    # Should not raise exception
+    render_xai_metrics_summary(xai_missing)
+
+    # Case 2: Numerical drift and distortion present
+    xai_valid = {
+        "technique": "shap",
+        "clean_prediction": 1,
+        "adversarial_prediction": 0,
+        "prediction_changed": True,
+        "clean_confidence": 0.92,
+        "adversarial_confidence": 0.78,
+        "attribution_drift": 0.3541,
+        "feature_salience_distortion": 0.2819,
+    }
+    render_xai_metrics_summary(xai_valid)
+
+
+def test_xai_drift_and_distortion_math():
+    """Verify mathematical definitions of attribution drift and salience distortion in comparison module."""
+    import numpy as np
+    from app.explainability.comparison import compare_attributions, compare_explanations
+
+    # Unit vectors with known cosine similarity:
+    # A_clean = [1, 0], A_adv = [0.6, 0.8] -> cosine_sim = 0.6
+    # Salience distortion = 1 - 0.6 = 0.4
+    # Clean L1 norm = 1.0, Adv L1 norm = 1.4 -> normed A_clean = [1, 0], normed A_adv = [0.6/1.4, 0.8/1.4] = [3/7, 4/7]
+    # L1 drift = |1 - 3/7| + |0 - 4/7| = 4/7 + 4/7 = 8/7 ~ 1.142857
+    clean_vec = np.array([1.0, 0.0])
+    adv_vec = np.array([0.6, 0.8])
+
+    comp = compare_attributions(clean_vec, adv_vec)
+    assert comp["attribution_comparison_status"] == "success"
+    assert abs(comp["feature_salience_distortion"] - 0.4) < 1e-5
+    assert abs(comp["attribution_drift"] - (8.0 / 7.0)) < 1e-5
+
+    # Prediction consistency must be None when either prediction is None
+    exp_comp_none = compare_explanations(
+        clean_prediction=None,
+        adversarial_prediction=1,
+        clean_attribution=clean_vec,
+        adv_attribution=adv_vec,
+    )
+    assert exp_comp_none["prediction_changed"] is None
+    assert exp_comp_none["prediction_analysis"]["prediction_consistency"] is None
+    assert abs(exp_comp_none["feature_salience_distortion"] - 0.4) < 1e-5
+    assert abs(exp_comp_none["attribution_drift"] - (8.0 / 7.0)) < 1e-5
+
+
+def test_global_shap_importance_vs_vulnerability_frequency():
+    """Verify separation of global mean absolute SHAP importance from adversarial vulnerability frequency."""
+    from app.explainability.aggregate import aggregate_explanations
+    from app.explainability.explanation_result import ExplanationResult
+
+    # Sample 1: feature_A = 2.0, feature_B = -1.0
+    r1 = ExplanationResult(
+        attack_name="fgsm",
+        technique="shap",
+        clean_prediction=0,
+        adversarial_prediction=1,
+        clean_confidence=0.9,
+        adversarial_confidence=0.8,
+        prediction_changed=True,
+        attack_caused_failure=True,
+        attribution={
+            "clean": {
+                "feature_importance_map": {"feature_A": 2.0, "feature_B": -1.0},
+            }
+        },
+        feature_importance={
+            "clean_top_features": [
+                {"feature": "feature_A", "importance": 2.0},
+                {"feature": "feature_B", "importance": -1.0},
+            ]
+        },
+        failure_analysis={
+            "clean_correct": True,
+            "contributing_features": [{"feature": "feature_B", "importance_shift": 1.5}],
+        },
+    )
+
+    # Sample 2: feature_A = 0.0, feature_B = 3.0, feature_C = 4.0
+    r2 = ExplanationResult(
+        attack_name="pgd",
+        technique="shap",
+        clean_prediction=0,
+        adversarial_prediction=0,
+        clean_confidence=0.85,
+        adversarial_confidence=0.80,
+        prediction_changed=False,
+        attack_caused_failure=False,
+        attribution={
+            "clean": {
+                "feature_importance_map": {"feature_A": 0.0, "feature_B": 3.0, "feature_C": 4.0},
+            }
+        },
+        feature_importance={
+            "clean_top_features": [
+                {"feature": "feature_B", "importance": 3.0},
+                {"feature": "feature_C", "importance": 4.0},
+            ]
+        },
+        failure_analysis={
+            "clean_correct": True,
+            "contributing_features": [],
+        },
+    )
+
+    agg = aggregate_explanations([r1, r2])
+
+    assert "global_feature_importance" in agg
+    assert "vulnerability_frequency" in agg
+    assert "global_top_features" in agg
+
+    # Global SHAP feature importance: mean absolute attribution across all N=2 samples
+    # feature_B: (| -1.0 | + | 3.0 |) / 2 = 2.0
+    # feature_C: (0.0 + | 4.0 |) / 2 = 2.0
+    # feature_A: (| 2.0 | + 0.0) / 2 = 1.0
+    g_map = {item["feature"]: item["mean_abs_importance"] for item in agg["global_feature_importance"]}
+    assert abs(g_map["feature_B"] - 2.0) < 1e-5
+    assert abs(g_map["feature_C"] - 2.0) < 1e-5
+    assert abs(g_map["feature_A"] - 1.0) < 1e-5
+
+    # Vulnerability frequency: feature_B contributed to successful attack failure in sample 1,
+    # and was present in sample 2 (unsuccessful attack); feature_C was only present in sample 2.
+    v_succ_map = {item["feature"]: item["success_frequency"] for item in agg["vulnerability_frequency"]}
+    v_tot_map = {item["feature"]: item["frequency"] for item in agg["vulnerability_frequency"]}
+    assert v_succ_map.get("feature_B") == 1
+    assert v_tot_map.get("feature_B") == 2
+    assert v_succ_map.get("feature_C") == 0
+    assert "feature_A" not in v_tot_map
+
+
+def test_xai_feature_names_metadata_propagation():
+    """Verify feature names from metadata are propagated and returned in XAI results."""
+    import numpy as np
+    import torch
+    import torch.nn as nn
+    from frontend.services.xai_service import explain_assessment
+
+    class DummyModel(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.linear = nn.Linear(4, 2)
+            self.feature_names_in_ = np.array(["income", "credit_score", "debt_ratio", "age"])
+
+        def forward(self, x):
+            if isinstance(x, np.ndarray):
+                x = torch.from_numpy(x).float()
+            return self.linear(x.float())
+
+    attack_res = {
+        "technique": "pgd",
+        "original_inputs": torch.tensor([[1000.0, 750.0, 0.25, 35.0]], dtype=torch.float32),
+        "adversarial_examples": torch.tensor([[1000.0, 600.0, 0.25, 35.0]], dtype=torch.float32),
+        "labels": torch.tensor([0]),
+        "original_predictions": [0],
+        "adversarial_predictions": [1],
+        "metadata": {
+            "feature_names": ["income", "credit_score", "debt_ratio", "age"],
+        },
+    }
+
+    res = explain_assessment(
+        model=DummyModel(),
+        attack_result=attack_res,
+        technique="saliency",
+        domain="tabular",
+    )
+    assert res["status"] == "success"
+    assert res["feature_names"] == ["income", "credit_score", "debt_ratio", "age"]
+    assert res["clean_prediction"] is not None
+    assert res["adversarial_prediction"] is not None
+    assert res["attribution_drift"] is not None
+
+
+def test_mathematical_edge_cases_zero_norm_and_bounds():
+    """Verify attribution comparison behavior under zero-norm vectors and verify drift remains in [0, 2]."""
+    import numpy as np
+    from app.explainability.comparison import compare_attributions
+
+    # Case A: Both zero-norm vectors
+    zero_vec = np.zeros(5)
+    res_both_zero = compare_attributions(zero_vec, zero_vec)
+    assert res_both_zero["attribution_comparison_status"] == "success"
+    assert res_both_zero["attribution_validity"]["status"] == "near_zero"
+    assert res_both_zero["attribution_drift"] == 0.0
+    assert res_both_zero["attribution_cosine_similarity"] == 1.0
+    assert res_both_zero["feature_salience_distortion"] == 0.0
+
+    # Case B: Clean zero-norm, Adv non-zero
+    non_zero_vec = np.array([1.0, 2.0, 3.0, 4.0, 5.0])
+    res_one_zero = compare_attributions(zero_vec, non_zero_vec)
+    assert res_one_zero["attribution_drift"] == 1.0
+    assert res_one_zero["attribution_cosine_similarity"] == 0.0
+    assert res_one_zero["feature_salience_distortion"] == 1.0
+
+    # Case C: Clean non-zero, Adv zero-norm
+    res_adv_zero = compare_attributions(non_zero_vec, zero_vec)
+    assert res_adv_zero["attribution_drift"] == 1.0
+    assert res_adv_zero["attribution_cosine_similarity"] == 0.0
+    assert res_adv_zero["feature_salience_distortion"] == 1.0
+
+    # Case D: Identical vectors -> Drift = 0.0, Distortion = 0.0
+    res_identical = compare_attributions(non_zero_vec, non_zero_vec)
+    assert abs(res_identical["attribution_drift"] - 0.0) < 1e-6
+    assert abs(res_identical["feature_salience_distortion"] - 0.0) < 1e-6
+
+    # Case E: Completely opposite vectors -> Drift = 2.0, Distortion = 2.0
+    opposite_vec = -non_zero_vec
+    res_opposite = compare_attributions(non_zero_vec, opposite_vec)
+    assert 0.0 <= res_opposite["attribution_drift"] <= 2.0
+    assert abs(res_opposite["attribution_drift"] - 2.0) < 1e-6
+    assert abs(res_opposite["feature_salience_distortion"] - 2.0) < 1e-6
+
+
+def test_mathematical_edge_cases_nan_inf_and_mismatch():
+    """Verify NaN, Inf, and dimension mismatch handling."""
+    import numpy as np
+    from app.explainability.comparison import compare_attributions
+
+    # Case A: NaN values
+    nan_vec = np.array([1.0, np.nan, 3.0])
+    valid_vec = np.array([1.0, 2.0, 3.0])
+    res_nan = compare_attributions(nan_vec, valid_vec)
+    assert res_nan["attribution_comparison_status"] == "non_finite_attributions"
+    assert res_nan["attribution_drift"] is None
+    assert res_nan["feature_salience_distortion"] is None
+
+    # Case B: Inf values
+    inf_vec = np.array([1.0, np.inf, 3.0])
+    res_inf = compare_attributions(valid_vec, inf_vec)
+    assert res_inf["attribution_comparison_status"] == "non_finite_attributions"
+    assert res_inf["attribution_drift"] is None
+
+    # Case C: 1D dimension mismatch -> padded and aligned
+    v1 = np.array([1.0, 2.0])
+    v2 = np.array([1.0, 2.0, 3.0, 4.0])
+    res_pad = compare_attributions(v1, v2)
+    assert res_pad["attribution_comparison_status"] == "aligned_with_padding"
+    assert 0.0 <= res_pad["attribution_drift"] <= 2.0
+
+    # Case D: 2D dimension mismatch -> shape_mismatch status, metrics None
+    m1 = np.zeros((2, 3))
+    m2 = np.zeros((4, 5))
+    res_shape = compare_attributions(m1, m2)
+    assert res_shape["attribution_comparison_status"] == "shape_mismatch"
+    assert res_shape["attribution_drift"] is None
+
+
+def test_global_aggregation_denominator_excludes_failed_explanations():
+    """Verify that failed/invalid explanations are excluded from global feature importance denominators."""
+    from app.explainability.aggregate import aggregate_explanations
+    from app.explainability.explanation_result import ExplanationResult
+
+    # Sample 1: Valid explanation with feature_A = 4.0
+    r1 = ExplanationResult(
+        attack_name="fgsm",
+        technique="shap",
+        clean_prediction=0,
+        adversarial_prediction=1,
+        clean_confidence=0.9,
+        adversarial_confidence=0.8,
+        prediction_changed=True,
+        attribution_status="success",
+        attribution={
+            "clean": {
+                "feature_importance_map": {"feature_A": 4.0},
+            }
+        },
+        feature_importance={
+            "clean_top_features": [{"feature": "feature_A", "importance": 4.0}]
+        },
+    )
+
+    # Sample 2: Failed explanation (e.g. attribution error)
+    r2 = ExplanationResult(
+        attack_name="fgsm",
+        technique="shap",
+        clean_prediction=0,
+        adversarial_prediction=0,
+        clean_confidence=0.8,
+        adversarial_confidence=0.8,
+        prediction_changed=False,
+        attribution_status="error",
+        attribution={},
+    )
+
+    agg = aggregate_explanations([r1, r2])
+    assert agg["total_samples"] == 2
+    assert agg["valid_samples_count"] == 1
+    assert agg["explanation_failure_count"] == 1
+    assert agg["explanation_failure_rate"] == 0.5
+
+    # Mean absolute importance of feature_A should be 4.0 / 1 (valid sample), NOT diluted to 4.0 / 2
+    g_imp = {item["feature"]: item["mean_abs_importance"] for item in agg["global_feature_importance"]}
+    assert abs(g_imp["feature_A"] - 4.0) < 1e-5
+
+
+def test_multiclass_shap_extraction_and_sample_index_matching():
+    """Verify multi-class 3D SHAP extraction and sample index slicing integrity."""
+    import numpy as np
+    from app.explainability.techniques.shap_explainer import SHAPExplainer
+
+    explainer = SHAPExplainer()
+
+    # 3D SHAP values: (batch_size=1, num_features=4, num_classes=3)
+    shap_vals = np.zeros((1, 4, 3))
+    # Target class 2 has distinct attributions: [0.1, 0.2, 0.3, 0.4]
+    shap_vals[0, :, 2] = np.array([0.1, 0.2, 0.3, 0.4])
+
+    extracted = explainer._extract_target_attribution(shap_vals, target_class=2, batch_size=1)
+    assert extracted.shape == (1, 4)
+    assert np.allclose(extracted[0], [0.1, 0.2, 0.3, 0.4])
+
+
+def test_xai_status_message_consistency_on_error():
+    """Verify that when explainer reports attribution_status='error', xai_service returns
+    status='error', executed=False, and a non-contradictory failure message.
+    """
+    from unittest.mock import MagicMock, patch
+    from app.explainability.explanation_result import ExplanationResult
+
+    mock_error_result = ExplanationResult(
+        attack_name="fgsm",
+        technique="shap",
+        clean_prediction=0,
+        adversarial_prediction=1,
+        attribution_status="error",
+        attribution={
+            "clean": {"status": "error", "message": "KernelSHAP failed to compute background summary."},
+            "adversarial": {"status": "error", "message": "KernelSHAP failed to compute background summary."},
+        },
+        metadata={"target_class": 1, "error": "KernelSHAP failed to compute background summary."},
+    )
+
+    dummy_model = nn.Linear(4, 2)
+    dummy_atk = {
+        "attack_name": "fgsm",
+        "original_inputs": torch.randn(2, 4),
+        "adversarial_examples": torch.randn(2, 4),
+        "labels": torch.tensor([0, 1]),
+    }
+
+    with patch("frontend.services.xai_service.XAIExplainer") as mock_explainer_cls:
+        mock_instance = MagicMock()
+        mock_instance.explain.return_value = mock_error_result
+        mock_explainer_cls.return_value = mock_instance
+    with patch("frontend.services.xai_service.XAIExplainer") as mock_explainer_cls:
+        mock_instance = MagicMock()
+        mock_instance.explain.return_value = mock_error_result
+        mock_instance.explain_attack_result.return_value = mock_error_result
+        mock_explainer_cls.return_value = mock_instance
+
+        res = explain_assessment(
+            model=dummy_model,
+            attack_result=dummy_atk,
+            domain="tabular",
+            technique="shap",
+            target_class=1,
+        )
+
+        assert res["executed"] is False
+        assert res["status"] == "error"
+        # Must NOT claim successful generation when explainer status is error
+        assert "Generated SHAP explanation for class 1." not in res["message"]
+        assert "KernelSHAP failed" in res["message"] or "failed with status" in res["message"]
+
+
+def test_xai_diagnostic_controls_default_sample_behavior():
+    """Verify explain_assessment operates with standard default sample behavior when sample_index is omitted."""
+    dummy_model = nn.Linear(4, 2)
+    dummy_atk = {
+        "attack_name": "fgsm",
+        "original_inputs": torch.randn(3, 4),
+        "adversarial_examples": torch.randn(3, 4),
+        "labels": torch.tensor([0, 1, 0]),
+        "original_predictions": [0, 1, 0],
+        "adversarial_predictions": [1, 1, 0],
+    }
+
+    res = explain_assessment(
+        model=dummy_model,
+        attack_result=dummy_atk,
+        domain="tabular",
+        technique="saliency",
+        mode="fast",
+        sample_index=None,  # default behavior without UI sample selector
+    )
+
+    assert res["executed"] is True
+    assert res["status"] == "success"
+    assert res["clean_prediction"] is not None
+
+
+def test_batch_shap_success_and_attribution_table():
+    """Verify batch SHAP execution produces valid results, drift, and renders attribution table."""
+    import torch
+    import torch.nn as nn
+    from frontend.services.xai_service import explain_assessment
+    from frontend.components.xai_visualizer import render_clean_vs_adversarial_attribution_table
+
+    class TabularNet(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.fc = nn.Linear(6, 2)
+
+        def forward(self, x):
+            return self.fc(x)
+
+    model = TabularNet()
+    clean = torch.randn(3, 6)
+    adv = clean + 0.05 * torch.randn_like(clean)
+    atk = {
+        "attack_name": "fgsm",
+        "original_inputs": clean,
+        "adversarial_examples": adv,
+        "labels": torch.tensor([0, 1, 0]),
+        "original_predictions": [0, 1, 0],
+        "adversarial_predictions": [1, 1, 0],
+    }
+
+    res = explain_assessment(
+        model=model,
+        attack_result=atk,
+        domain="tabular",
+        technique="shap",
+        mode="fast",
+    )
+
+    assert res["executed"] is True
+    assert res["status"] == "success"
+    assert "Generated batch SHAP explanations (3 samples)." in res["message"]
+    assert res["clean_prediction"] is not None
+    assert res["adversarial_prediction"] is not None
+    assert res["attribution_drift"] is not None
+
+    local_exp = res.get("local_explanation", {})
+    clean_top = local_exp.get("clean_top_features", [])
+    adv_top = local_exp.get("adversarial_top_features", [])
+    assert len(clean_top) > 0
+    assert len(adv_top) > 0
+
+    # Test that clean vs adversarial attribution table renders cleanly
+    rendered = render_clean_vs_adversarial_attribution_table(res)
+    assert rendered is True
+
+
+def test_batch_shap_partial_and_error_preservation():
+    """Verify that when samples fail in a batch, original errors and failed sample indices are preserved."""
+    from unittest.mock import MagicMock, patch
+    from app.explainability.explanation_result import ExplanationResult
+    from frontend.services.xai_service import explain_assessment
+
+    succ_exp = ExplanationResult(
+        attack_name="fgsm",
+        technique="shap",
+        clean_prediction=0,
+        adversarial_prediction=0,
+        attribution_status="success",
+        attribution={"clean": {"status": "success"}, "adversarial": {"status": "success"}},
+        feature_importance={"clean_top_features": [{"feature": "f1", "importance": 0.5}]},
+    )
+    fail_exp = ExplanationResult(
+        attack_name="fgsm",
+        technique="shap",
+        clean_prediction=1,
+        adversarial_prediction=0,
+        attribution_status="error",
+        attribution={"clean": {"status": "error", "message": "KernelSHAP: singular matrix error"}, "adversarial": {"status": "error"}},
+        metadata={"error": "KernelSHAP: singular matrix error"},
+    )
+
+    dummy_model = nn.Linear(4, 2)
+    dummy_atk = {
+        "attack_name": "fgsm",
+        "original_inputs": torch.randn(2, 4),
+        "adversarial_examples": torch.randn(2, 4),
+        "labels": torch.tensor([0, 1]),
+    }
+
+    with patch("frontend.services.xai_service.XAIExplainer") as mock_explainer_cls:
+        mock_instance = MagicMock()
+        # Case A: Partial batch (sample 0 succeeded, sample 1 failed)
+        mock_instance.explain_attack_result.return_value = [succ_exp, fail_exp]
+        mock_explainer_cls.return_value = mock_instance
+
+        res_partial = explain_assessment(
+            model=dummy_model,
+            attack_result=dummy_atk,
+            domain="tabular",
+            technique="shap",
+        )
+        assert res_partial["status"] == "partial"
+        assert res_partial["executed"] is True
+        assert "1/2 succeeded" in res_partial["message"]
+        assert "KernelSHAP: singular matrix error" in res_partial["message"]
+
+        # Case B: All failed
+        mock_instance.explain_attack_result.return_value = [fail_exp, fail_exp]
+        res_fail = explain_assessment(
+            model=dummy_model,
+            attack_result=dummy_atk,
+            domain="tabular",
+            technique="shap",
+        )
+        assert res_fail["status"] == "error"
+        assert res_fail["executed"] is False
+        assert "failed on sample 0: KernelSHAP: singular matrix error" in res_fail["message"]
+
+
+def test_shap_effective_evals_for_wide_tabular():
+    """Verify that wide tabular data (e.g. 30 features) does not crash with max_evals too low."""
+    from app.explainability.techniques.shap_explainer import SHAPExplainer
+
+    explainer = SHAPExplainer()
+    # 30 features model
+    model = nn.Linear(30, 2)
+    inputs = torch.randn(1, 30)
+    bg = torch.zeros(1, 30)
+
+    # Calling with shap_max_evals=50 on 30 features would crash without effective_max_evals adjustment
+    res = explainer.explain(
+        model=model,
+        inputs=inputs,
+        background_inputs=bg,
+        shap_max_evals=50,
+        output_mode="classification",
+    )
+    assert res["status"] == "success"
+    assert res["executed"] is True
+    assert res["attribution"] is not None
+
+
+def test_clean_vs_adversarial_attribution_table_alignment_and_no_spurious_na():
+    """Verify that full attribution arrays and contributing features eliminate spurious N/A in the attribution table."""
+    import numpy as np
+    import streamlit as st
+    from frontend.components.xai_visualizer import render_clean_vs_adversarial_attribution_table
+
+    # 1. Test with contributing_features (both clean and adv present)
+    xai_contrib = {
+        "contributing_features": [
+            {
+                "feature": "patch_(1,1)",
+                "clean_importance": 0.45,
+                "adversarial_importance": 0.95,
+                "importance_shift": 0.50,
+            },
+            {
+                "feature": "patch_(0,2)",
+                "clean_importance": 0.10,
+                "adversarial_importance": 0.60,
+                "importance_shift": 0.50,
+            },
+        ]
+    }
+    rendered = render_clean_vs_adversarial_attribution_table(xai_contrib)
+    assert rendered is True
+
+    # 2. Test with full clean and adversarial vectors (image/tabular)
+    xai_vectors = {
+        "clean_attribution": np.array([0.1, 0.5, 0.2, 0.0]),
+        "adversarial_attribution": np.array([0.9, 0.4, 0.3, 0.1]),
+        "feature_names": ["feat_A", "feat_B", "feat_C", "feat_D"],
+    }
+    rendered_vec = render_clean_vs_adversarial_attribution_table(xai_vectors)
+    assert rendered_vec is True
+
+    # 3. Test with disjoint top features where full vectors resolve missing values
+    xai_disjoint = {
+        "local_explanation": {
+            "clean_top_features": [{"feature": "f0", "importance": 0.8}],
+            "adversarial_top_features": [{"feature": "f1", "importance": 0.9}],
+        },
+        "clean_attribution": np.array([0.8, 0.1]),
+        "adversarial_attribution": np.array([0.2, 0.9]),
+        "feature_names": ["f0", "f1"],
+    }
+    rendered_disjoint = render_clean_vs_adversarial_attribution_table(xai_disjoint)
+    assert rendered_disjoint is True
+
+
+def test_root_cause_and_attack_impact_dashboard_cards():
+    """Verify Section D (Root Cause) and Section E (Attack Impact) render structured backend results."""
+    from frontend.components.xai_visualizer import (
+        render_root_cause_analysis_card,
+        render_attack_impact_and_vulnerability_card,
+    )
+
+    xai_data = {
+        "clean_prediction": 0,
+        "adversarial_prediction": 1,
+        "clean_confidence": 0.98,
+        "adversarial_confidence": 0.87,
+        "prediction_changed": True,
+        "attack_caused_failure": True,
+        "attack_name": "PGD",
+        "attack_reason": "Adversarial gradient alignment concentrated in high-frequency spatial frequencies.",
+        "perturbation_metrics": {"linf": 0.0313, "l2": 0.542},
+        "perturbation_alignment": 0.784,
+        "failure_analysis": {
+            "failure_mode": "clean_correct_to_adversarial_incorrect",
+            "attack_objective": "untargeted",
+        },
+    }
+
+    render_root_cause_analysis_card(xai_data)
+    render_attack_impact_and_vulnerability_card(xai_data)
+
+
+def test_defense_recommendations_and_technical_diagnostics_sections():
+    """Verify Section F (Candidate Defense Recommendations) and Section G (Technical Diagnostics)."""
+    from frontend.components.xai_visualizer import (
+        render_defense_recommendations_section,
+        render_technical_diagnostics_section,
+        render_dynamic_xai_dashboard,
+    )
+
+    xai_data = {
+        "technique": "shap",
+        "modality": "vision",
+        "status": "success",
+        "executed": True,
+        "clean_prediction": 2,
+        "adversarial_prediction": 7,
+        "clean_confidence": 0.95,
+        "adversarial_confidence": 0.89,
+        "prediction_changed": True,
+        "attack_caused_failure": True,
+        "attribution_drift": 0.654,
+        "feature_salience_distortion": 0.432,
+        "defense_hints": [
+            {
+                "finding": "High attribution drift concentrated in spatial patches",
+                "recommended_technique": "Spatial Squeezing & Median Blur Denoising",
+                "suggested_family": "Input Transformation & Denoising",
+                "defense_stage": "Input Stage",
+                "confidence": "High (88% Attribution Share)",
+                "evidence": {"attribution_drift": 0.654, "perturbation_alignment": 0.7854},
+                "why_recommended": "High-frequency adversarial noise can be attenuated via spatial smoothing.",
+                "expected_benefit": "Reduces high-frequency gradient exploitability.",
+                "limitations": "May slightly blur fine visual details.",
+            }
+        ],
+        "defense_pipeline": {
+            "1_preprocessing": {
+                "stage": "1. Preprocessing",
+                "techniques": ["Bit-depth reduction", "Spatial normalization"],
+            },
+            "2_transformation": {
+                "stage": "2. Transformation",
+                "techniques": ["Discrete Cosine Transform (DCT)"],
+            },
+            "3_detection": {
+                "stage": "3. Detection",
+                "techniques": ["Autoencoder reconstruction filter"],
+            },
+            "6_ensemble": {
+                "stage": "6. Ensemble",
+                "techniques": ["Adversarial Training (PGD-AT)"],
+            },
+        },
+        "metadata": {
+            "execution_time_seconds": 1.42,
+            "explain_seconds": 1.42,
+            "total_pipeline_seconds": 1.55,
+            "device": "cpu",
+            "routing_decision": "Selected SHAP permutation explainer for model-agnostic feature importance.",
+        },
+        "batch_counts": {"total": 5, "succeeded": 5, "failed": 0},
+    }
+
+    render_defense_recommendations_section(xai_data)
+    render_technical_diagnostics_section(xai_data)
+    # Ensure full dashboard orchestration runs smoothly
+    render_dynamic_xai_dashboard(xai_data)
+
+
+def test_perturbation_alignment_computation_and_patch_pooling():
+    """Verify perturbation alignment handles valid matching vectors, spatial patches, and incompatible shapes."""
+    import numpy as np
+    from app.explainability.metrics.perturbation_alignment import compute_perturbation_alignment
+
+    # 1. 1D matching inputs
+    clean_1d = np.array([1.0, 2.0, 3.0, 4.0])
+    adv_1d = np.array([1.1, 2.5, 3.0, 4.8])
+    attr_1d = np.array([0.1, 0.5, 0.0, 0.8])
+    res_1d = compute_perturbation_alignment(clean_1d, adv_1d, attr_1d)
+    assert res_1d["alignment_status"] == "success"
+    assert res_1d["cosine_alignment"] is not None
+    assert 0.0 <= res_1d["cosine_alignment"] <= 1.0
+
+    # 2. 2D patch-pooled alignment (28x28 image vs 7x7 patch attributions)
+    clean_img = np.ones((1, 28, 28))
+    adv_img = np.ones((1, 28, 28))
+    adv_img[:, :4, :4] += 0.5  # Perturb top-left 4x4 patch
+    attr_patch = np.zeros((7, 7))
+    attr_patch[0, 0] = 1.0  # Top-left patch is most important
+    res_patch = compute_perturbation_alignment(clean_img, adv_img, attr_patch)
+    assert res_patch["alignment_status"] == "success"
+    assert res_patch["cosine_alignment"] is not None
+    assert res_patch["cosine_alignment"] > 0.9
+
+    # 3. Incompatible dimensions
+    attr_mismatch = np.zeros((5, 5))  # 5 does not divide 28
+    res_mismatch = compute_perturbation_alignment(clean_img, adv_img, attr_mismatch)
+    assert res_mismatch["alignment_status"] == "shape_mismatch"
+    assert res_mismatch["cosine_alignment"] is None
+    assert "cannot be aligned" in res_mismatch["message"]
+
+    # 4. Missing inputs
+    res_missing = compute_perturbation_alignment(None, adv_img, attr_patch)
+    assert res_missing["alignment_status"] == "unavailable"
+    assert res_missing["cosine_alignment"] is None
+
+
+def test_attack_impact_card_rendering_and_status_descriptions():
+    """Verify Section E renders perturbation alignment value, mismatch reasons, and missing values cleanly."""
+    from frontend.components.xai_visualizer import render_attack_impact_and_vulnerability_card
+
+    # Alignment as scalar
+    render_attack_impact_and_vulnerability_card({
+        "attack_name": "PGD",
+        "perturbation_alignment": 0.8123,
+        "perturbation_metrics": {"linf": 0.03, "l2": 0.45},
+    })
+
+    # Alignment as dict with success
+    render_attack_impact_and_vulnerability_card({
+        "attack_name": "FGSM",
+        "perturbation_alignment": {"alignment_status": "success", "cosine_alignment": 0.654},
+        "perturbation_metrics": {"linf": 0.05},
+    })
+
+    # Alignment as dict with shape mismatch
+    render_attack_impact_and_vulnerability_card({
+        "attack_name": "HopSkipJump",
+        "perturbation_alignment": {
+            "alignment_status": "shape_mismatch",
+            "message": "Attribution features (10) != perturbation features (20)",
+            "cosine_alignment": None,
+        },
+    })
+
+    # Missing alignment
+    render_attack_impact_and_vulnerability_card({
+        "attack_name": "Boundary",
+        "perturbation_alignment": None,
+    })
+
+
+def test_defense_recommendations_no_raw_html_and_empty_descriptions():
+    """Verify Section F renders clean formatting without raw HTML when fields are empty or structured."""
+    from frontend.components.xai_visualizer import render_defense_recommendations_section
+
+    # Test with empty descriptions and missing rationale
+    xai_sparse = {
+        "modality": "tabular",
+        "defense_hints": [
+            {
+                "finding": "Coordinate shift on features",
+                "recommended_technique": "Feature Squeezing & Range Clamping",
+                "suggested_family": "Input Squeezing & Validation",
+                "defense_stage": "Input Stage",
+                "confidence": None,
+                "evidence": {},
+                "why_recommended": "",
+                "expected_benefit": "",
+                "limitations": "",
+                "rationale": "",
+            }
+        ],
+        "recommended_defenses": [],
+        "defense_pipeline": {},
+    }
+    render_defense_recommendations_section(xai_sparse)
+
+
+def test_execution_time_propagation_in_service_and_diagnostics():
+    """Verify execution time is measured, propagated, and formatted without N/A."""
+    from frontend.components.xai_visualizer import render_technical_diagnostics_section
+
+    # With measured time
+    xai_timed = {
+        "metadata": {
+            "execution_time_seconds": 0.842,
+            "total_pipeline_seconds": 0.912,
+            "device": "cpu",
+            "routing_decision": "Model-agnostic KernelSHAP explainer.",
+        },
+        "batch_counts": {"total": 1, "succeeded": 1, "failed": 0},
+    }
+    render_technical_diagnostics_section(xai_timed)
+
+    # With explain_seconds
+    xai_explain_sec = {
+        "metadata": {
+            "explain_seconds": 1.234,
+            "device": "cuda",
+        },
+        "batch_counts": {"total": 2, "succeeded": 2, "failed": 0},
+    }
+    render_technical_diagnostics_section(xai_explain_sec)
+
+    # Missing metadata
+    xai_no_meta = {}
+    render_technical_diagnostics_section(xai_no_meta)
 
 
 
