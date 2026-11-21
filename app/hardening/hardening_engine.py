@@ -162,6 +162,40 @@ class HardeningEngine:
         if vulnerability_score is not None and "vulnerability_score" not in base_metrics and "vuln_score" not in base_metrics:
             base_metrics["vulnerability_score"] = float(vulnerability_score)
 
+        # Early short-circuit: if baseline ASR is 0.0%, model is already robust; defense is not needed
+        base_asr_val = (
+            base_metrics.get("asr")
+            if base_metrics.get("asr") is not None
+            else base_metrics.get("attack_success_rate", base_metrics.get("asr_percentage"))
+        )
+        if base_asr_val is not None and float(base_asr_val) <= 0.0:
+            return HardeningResult(
+                hardened_model=model,
+                metadata=HardeningMetadata(
+                    defense_name="none",
+                    defense_type="none",
+                    parameters={},
+                    extra_metadata={
+                        "reason": "Baseline ASR is 0.0%. Model is already robust against this attack vector; defense hardening is not needed.",
+                        "selection_outcome": "already_robust",
+                    },
+                ),
+                success=True,
+                selected_defense=None,
+                defense_attempts=[],
+                num_attempts=0,
+                is_improved=False,
+                improvement_sufficient=False,
+                status="not_needed",
+                thresholds=thresh_obj.to_dict(),
+                metrics_before=base_metrics,
+                metrics_after=base_metrics,
+                recommendations=[
+                    "Baseline Attack Success Rate (ASR) is 0.0%. The model is already fully robust against this attack vector. "
+                    "No defense hardening is required, as applying transformations risks degrading clean accuracy without providing additional security benefit."
+                ],
+            )
+
         attempts: List[DefenseAttemptResult] = []
         any_improved: bool = False
         after_metrics: Dict[str, Any] = {}
@@ -284,9 +318,10 @@ class HardeningEngine:
                     ),
                 )
                 has_positive_gain = (
-                    (best_attempt.vuln_score_improvement is not None and best_attempt.vuln_score_improvement > 0)
-                    or (best_attempt.asr_reduction is not None and best_attempt.asr_reduction > 0)
-                    or (best_attempt.clean_accuracy_drop is not None and best_attempt.clean_accuracy_drop <= 0.05)
+                    (best_attempt.vuln_score_improvement is not None and best_attempt.vuln_score_improvement > 0.0)
+                    or (best_attempt.asr_reduction is not None and best_attempt.asr_reduction > 0.0)
+                ) and (
+                    best_attempt.clean_accuracy_drop is None or best_attempt.clean_accuracy_drop <= 0.10
                 )
                 if has_positive_gain:
                     try:
@@ -455,6 +490,40 @@ class HardeningEngine:
 
         if vulnerability_score is not None and "vulnerability_score" not in metrics_before and "vuln_score" not in metrics_before:
             metrics_before["vulnerability_score"] = float(vulnerability_score)
+
+        # Early short-circuit: if baseline ASR is 0.0%, model is already robust; defense is not needed
+        base_asr_val = (
+            metrics_before.get("asr")
+            if metrics_before.get("asr") is not None
+            else metrics_before.get("attack_success_rate", metrics_before.get("asr_percentage"))
+        )
+        if base_asr_val is not None and float(base_asr_val) <= 0.0:
+            return HardeningResult(
+                hardened_model=model,
+                metadata=HardeningMetadata(
+                    defense_name="none",
+                    defense_type="none",
+                    parameters={},
+                    extra_metadata={
+                        "reason": "Baseline ASR is 0.0%. Model is already robust against this attack vector; defense hardening is not needed.",
+                        "selection_outcome": "already_robust",
+                    },
+                ),
+                success=True,
+                selected_defense=None,
+                defense_attempts=[],
+                num_attempts=0,
+                is_improved=False,
+                improvement_sufficient=False,
+                status="not_needed",
+                thresholds=thresh_obj.to_dict(),
+                metrics_before=metrics_before,
+                metrics_after=metrics_before,
+                recommendations=[
+                    "Baseline Attack Success Rate (ASR) is 0.0%. The model is already fully robust against this attack vector. "
+                    "No defense hardening is required, as applying transformations risks degrading clean accuracy without providing additional security benefit."
+                ],
+            )
 
         # Resolve Defense instance
         if isinstance(defense, BaseDefense):
