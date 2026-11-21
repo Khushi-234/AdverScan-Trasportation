@@ -304,3 +304,127 @@ def test_assessment_comparison_parameter_variations_and_time(clean_storage_and_s
     assert diffs["steps"]["comparison"] == 40
 
 
+def test_multiple_attacks_and_vulnerabilities_persistence(clean_storage_and_state):
+    """Verify that multiple attacks and M5 vulnerability findings are correctly stored and retrieved."""
+    repo = clean_storage_and_state
+
+    # 1. Create scan
+    scan = repo.create_assessment(
+        scan_id="SCAN-MULTI",
+        assessment_name="Multi-Attack Scan",
+        model_info={"model_name": "ResNet-50", "domain": "image", "architecture": "ResNet", "framework": "PyTorch"},
+        dataset_info={"dataset_name": "ImageNet-Subset", "number_of_samples": 50},
+        modality="image",
+    )
+    sid = scan["scan_id"]
+
+    # 2. Record Attack 1 (FGSM)
+    atk1 = repo.record_attack_execution(
+        scan_id=sid,
+        attack_result={
+            "attack_name": "FGSM",
+            "clean_accuracy": 90.0,
+            "adversarial_accuracy": 30.0,
+            "accuracy_drop": 60.0,
+            "asr_percentage": 66.7,
+            "execution_time_seconds": 1.2,
+            "total_samples": 50,
+        },
+        attack_params={"epsilon": 0.03, "clip_min": 0.0, "clip_max": 1.0},
+    )
+
+    # 3. Record Attack 2 (PGD)
+    atk2 = repo.record_attack_execution(
+        scan_id=sid,
+        attack_result={
+            "attack_name": "PGD",
+            "clean_accuracy": 90.0,
+            "adversarial_accuracy": 10.0,
+            "accuracy_drop": 80.0,
+            "asr_percentage": 88.9,
+            "execution_time_seconds": 4.5,
+            "total_samples": 50,
+        },
+        attack_params={"epsilon": 0.03, "steps": 40, "alpha": 0.01},
+    )
+
+    # 4. Record Vulnerabilities from M5 result
+    m5_result = {
+        "vulnerability_score": 78.5,
+        "risk_level": "HIGH",
+        "sub_scores": {
+            "asr_score": 88.9,
+            "degradation_score": 80.0,
+            "stealth_score": 55.0,
+        },
+        "description": "Critical vulnerability identified across gradient attack vectors.",
+    }
+    repo.record_vulnerabilities(scan_id=sid, vuln_result=m5_result, attack_run_id=atk2["attack_run_id"])
+
+    # 5. Retrieve scan details
+    detail = get_scan_detail(sid)
+    assert detail is not None
+    assert len(detail["attacks"]) == 2
+    assert detail["attacks"][0]["attack_name"] == "FGSM"
+    assert detail["attacks"][1]["attack_name"] == "PGD"
+    assert detail["attacks"][0]["attack_parameters"]["epsilon"] == 0.03
+    assert detail["attacks"][1]["attack_parameters"]["steps"] == 40
+
+    # Verify vulnerabilities were recorded
+    assert len(detail["vulnerabilities"]) >= 3
+    vuln_names = [v["vulnerability_name"] for v in detail["vulnerabilities"]]
+    assert any("Adversarial Perturbation Sensitivity" in n for n in vuln_names)
+    assert any("Attack Success Susceptibility" in n for n in vuln_names)
+    assert any("Confidence & Margin Degradation" in n for n in vuln_names)
+
+
+def test_defense_execution_detail_and_display_structure(clean_storage_and_state):
+    """Verify that applied defense techniques, family, configuration, and before/after metrics are persisted."""
+    repo = clean_storage_and_state
+
+    repo.create_assessment(
+        scan_id="SCAN-DEF",
+        assessment_name="Defense Evaluation Scan",
+        model_info={"model_name": "ViT", "domain": "image"},
+        modality="image",
+    )
+
+    def_result = {
+        "defense_name": "spatial_smoothing",
+        "defense_family": "Spatial Domain Filtering",
+        "defense_stage": "Pre-inference Transformation",
+        "parameters": {"window_size": 3, "kernel": "median"},
+        "success": True,
+        "execution_time_seconds": 0.45,
+        "before_clean_accuracy": 95.0,
+        "after_clean_accuracy": 93.5,
+        "clean_accuracy_drop": 1.5,
+        "before_adv_accuracy": 20.0,
+        "after_adv_accuracy": 82.0,
+        "before_asr": 80.0,
+        "after_asr": 18.0,
+        "asr_reduction_percentage": 62.0,
+        "accuracy_recovery": 62.0,
+        "robustness_status": "High Robustness",
+        "is_improved": True,
+        "status": "accepted",
+    }
+    repo.record_defense_execution(scan_id="SCAN-DEF", defense_result=def_result)
+
+    detail = get_scan_detail("SCAN-DEF")
+    assert detail is not None
+    assert len(detail["defenses"]) == 1
+    d = detail["defenses"][0]
+    assert d["defense_name"] == "spatial_smoothing"
+    assert d["defense_family"] == "Spatial Domain Filtering"
+    assert d["defense_stage"] == "Pre-inference Transformation"
+    assert d["defense_configuration"]["window_size"] == 3
+    assert d["clean_accuracy_before"] == 95.0
+    assert d["clean_accuracy_after"] == 93.5
+    assert d["adv_accuracy_before"] == 20.0
+    assert d["adv_accuracy_after"] == 82.0
+    assert d["asr_reduction"] == 62.0
+    assert d["accuracy_recovery"] == 62.0
+
+
+

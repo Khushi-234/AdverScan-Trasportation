@@ -406,12 +406,79 @@ def render_assessment_detail_drawer(scan_id: str) -> None:
             st.info("No defenses applied for this assessment.")
         else:
             for d in defenses:
-                def_name = d.get("defense_name", "Defense")
-                with st.expander(f"🛡️ {def_name} (Status: {d.get('robustness_status', 'Evaluated')})", expanded=True):
-                    c1, c2, c3 = st.columns(3)
-                    c1.metric("ASR Before / After", f"{d.get('asr_before', 0.0):.1f}% → {d.get('asr_after', 0.0):.1f}%")
-                    c2.metric("ASR Reduction", f"{d.get('asr_reduction', 0.0):.1f}%")
-                    c3.metric("Accuracy Recovery", f"{d.get('accuracy_recovery', 0.0):.1f}%")
+                raw_name = d.get("defense_name", "defense")
+                formatted_name = raw_name.replace("_", " ").title()
+                family = d.get("defense_family") or "Preprocessing"
+                stage_str = d.get("defense_stage") or "Inference Transformation"
+                rob_status = d.get("robustness_status") or ("Improved" if d.get("is_improved") else "Evaluated")
+                val_status = str(d.get("validation_status") or "Accepted").upper()
+
+                with st.expander(f"🛡️ {formatted_name} — [{family}] ({rob_status})", expanded=True):
+                    # Header badges
+                    st.markdown(
+                        f"""
+                        <div style="display: flex; gap: 0.5rem; flex-wrap: wrap; margin-bottom: 0.75rem;">
+                            <span class="info-badge">Applied Technique: <strong>{formatted_name}</strong></span>
+                            <span class="info-badge">Family: <strong>{family}</strong></span>
+                            <span class="info-badge">Stage: <strong>{stage_str}</strong></span>
+                            <span class="info-badge">Status: <strong>{val_status}</strong></span>
+                        </div>
+                        """,
+                        unsafe_allow_html=True,
+                    )
+
+                    # 4-column metric grid
+                    c1, c2, c3, c4 = st.columns(4)
+                    c_before = d.get("clean_accuracy_before", 0.0)
+                    c_after = d.get("clean_accuracy_after", 0.0)
+                    c_drop = d.get("clean_accuracy_drop", 0.0)
+                    c1.metric(
+                        "Clean Accuracy",
+                        f"{c_before:.1f}% → {c_after:.1f}%",
+                        f"-{c_drop:.1f}% drop" if c_drop else None,
+                        delta_color="inverse",
+                    )
+
+                    a_before = d.get("adv_accuracy_before", 0.0)
+                    a_after = d.get("adv_accuracy_after", 0.0)
+                    a_rec = d.get("accuracy_recovery", 0.0)
+                    c2.metric(
+                        "Adversarial Accuracy",
+                        f"{a_before:.1f}% → {a_after:.1f}%",
+                        f"+{a_rec:.1f}%" if a_rec else None,
+                    )
+
+                    asr_b = d.get("asr_before", 0.0)
+                    asr_a = d.get("asr_after", 0.0)
+                    asr_red = d.get("asr_reduction", 0.0)
+                    c3.metric(
+                        "Attack Success Rate (ASR)",
+                        f"{asr_b:.1f}% → {asr_a:.1f}%",
+                        f"-{asr_red:.1f}%" if asr_red else None,
+                        delta_color="inverse",
+                    )
+
+                    c4.metric(
+                        "ASR Suppression",
+                        f"{asr_red:.1f}%",
+                        f"Recovery: +{a_rec:.1f}%",
+                    )
+
+                    # Configuration Hyperparameters
+                    params = d.get("defense_configuration") or {}
+                    st.markdown("**⚙️ Configured Defense Hyperparameters:**")
+                    if params:
+                        p_items = " • ".join([f"<code>{k}: {v}</code>" for k, v in params.items()])
+                        st.markdown(f"<div style='font-size: 0.85rem; margin-bottom: 0.5rem;'>{p_items}</div>", unsafe_allow_html=True)
+                    else:
+                        st.caption("Standard / Default hyperparameters applied")
+
+                    # Performance telemetry
+                    exec_s = d.get("execution_time_seconds", 0.0)
+                    if exec_s:
+                        st.caption(f"⏱️ Defense Execution Time: `{exec_s:.2f}s`")
+                    if d.get("hardened_samples_path"):
+                        st.caption(f"💾 Hardened Artifact: `{d.get('hardened_samples_path')}`")
 
     with tab_xai:
         xais = detail.get("xai_results", [])
@@ -433,18 +500,49 @@ def render_assessment_detail_drawer(scan_id: str) -> None:
         if not vulns and not recs:
             st.info("No vulnerability findings recorded.")
         else:
-            st.markdown("#### Diagnostic Findings")
-            for v in vulns:
-                st.write(f"• **{v.get('vulnerability_name')}** [{v.get('severity')}] - Score: `{v.get('vulnerability_score')}`")
-                if v.get("description"):
-                    st.caption(v.get("description"))
+            if vulns:
+                st.markdown("#### 🚨 Diagnostic Vulnerability Findings")
+                for v in vulns:
+                    sev = str(v.get("severity", "Medium")).upper()
+                    sev_colors = {"CRITICAL": "#ef4444", "HIGH": "#f97316", "MEDIUM": "#eab308", "LOW": "#22c55e"}
+                    col_bar = sev_colors.get(sev, "#3b82f6")
+                    v_score = v.get("vulnerability_score", 0.0)
+
+                    st.markdown(
+                        f"""
+                        <div style="border-left: 4px solid {col_bar}; padding: 0.6rem 0.8rem; background: var(--card-bg, rgba(255,255,255,0.03)); border-radius: 4px; margin-bottom: 0.6rem;">
+                            <div style="display: flex; justify-content: space-between; align-items: center;">
+                                <strong style="font-size: 0.95rem;">{v.get('vulnerability_name')}</strong>
+                                <span style="font-size: 0.8rem; padding: 2px 8px; border-radius: 4px; background: {col_bar}22; color: {col_bar}; font-weight: 700;">{sev} • {v_score:.1f}/100</span>
+                            </div>
+                            <div style="font-size: 0.85rem; color: var(--text-secondary); margin-top: 0.25rem;">
+                                {v.get('description') or 'Diagnostic vulnerability finding identified during adversarial testing.'}
+                            </div>
+                            {f"<div style='font-size: 0.8rem; color: var(--text-muted); margin-top: 0.2rem;'>Region: <code>{v.get('affected_feature_or_region')}</code></div>" if v.get('affected_feature_or_region') else ''}
+                        </div>
+                        """,
+                        unsafe_allow_html=True,
+                    )
 
             if recs:
-                st.markdown("#### Hardening Recommendations")
+                st.markdown("#### 🛡️ Actionable Hardening Recommendations")
                 for r in recs:
-                    st.write(f"• **{r.get('recommended_technique')}** (Family: {r.get('defense_family')}, Confidence: {r.get('confidence')})")
-                    if r.get("rationale"):
-                        st.caption(r.get("rationale"))
+                    fam = r.get("defense_family") or "Mitigation"
+                    conf = r.get("confidence")
+                    conf_str = f" • Confidence: {conf * 100:.0f}%" if isinstance(conf, float) and 0 < conf <= 1.0 else (f" • Confidence: {conf}%" if conf else "")
+                    st.markdown(
+                        f"""
+                        <div style="border-left: 4px solid #10b981; padding: 0.6rem 0.8rem; background: var(--card-bg, rgba(255,255,255,0.03)); border-radius: 4px; margin-bottom: 0.6rem;">
+                            <div style="font-weight: 700; font-size: 0.95rem; color: var(--text-primary);">
+                                💡 {r.get('recommended_technique', 'Defense Hardening')} <span style="font-size: 0.8rem; font-weight: 500; color: var(--text-secondary);">[{fam}{conf_str}]</span>
+                            </div>
+                            <div style="font-size: 0.85rem; color: var(--text-secondary); margin-top: 0.25rem;">
+                                {r.get('rationale') or 'Apply this mitigation to restore adversarial robustness.'}
+                            </div>
+                        </div>
+                        """,
+                        unsafe_allow_html=True,
+                    )
 
     with tab_report:
         reports = detail.get("reports", [])

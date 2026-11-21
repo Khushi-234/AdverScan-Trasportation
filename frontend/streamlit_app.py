@@ -112,6 +112,68 @@ set_state("theme", current_theme)
 render_sidebar_session()
 
 
+def ensure_active_scan_id() -> str:
+    """Ensure an active scan ID exists in SQLite and session state, creating one if missing."""
+    sid = get_active_scan_id()
+    if sid:
+        return sid
+
+    active_data = get_active_assessment() or {}
+    meta = active_data.get("metadata")
+    telemetry = active_data.get("telemetry", {})
+    m_name = (
+        active_data.get("model_name")
+        or getattr(meta, "model_name", None)
+        or getattr(meta, "name", None)
+        or get_state("active_model_name")
+        or "evaluation-model"
+    )
+    d_name = (
+        active_data.get("dataset_name")
+        or getattr(meta, "dataset_name", None)
+        or "evaluation-dataset"
+    )
+    dom = (
+        active_data.get("domain")
+        or getattr(meta, "domain", None)
+        or get_state("active_model_domain")
+        or "image"
+    )
+
+    try:
+        repo = get_storage_repository()
+        m_info = {
+            "model_id": getattr(meta, "model_id", None) or m_name,
+            "model_name": m_name,
+            "architecture": getattr(meta, "model_architecture", None) or telemetry.get("architecture"),
+            "framework": getattr(meta, "framework", None) or telemetry.get("framework") or "PyTorch",
+            "modality": dom,
+            "total_parameters": telemetry.get("total_parameters"),
+            "trainable_parameters": telemetry.get("trainable_parameters"),
+            "num_classes": telemetry.get("num_classes"),
+        }
+        d_info = {
+            "dataset_id": d_name,
+            "dataset_name": d_name,
+            "modality": dom,
+            "number_of_samples": telemetry.get("total_dataset_samples") or (len(active_data.get("test_inputs")) if active_data.get("test_inputs") is not None else None),
+            "data_split": "test",
+        }
+        scan_rec = repo.create_assessment(
+            model_info=m_info,
+            dataset_info=d_info,
+            modality=dom,
+        )
+        sid = scan_rec["scan_id"]
+        set_active_scan_id(sid)
+        return sid
+    except Exception as err:
+        import uuid
+        fallback_sid = f"SCAN-{uuid.uuid4().hex[:8].upper()}"
+        set_active_scan_id(fallback_sid)
+        return fallback_sid
+
+
 stage = get_workflow_stage()
 
 
@@ -1583,22 +1645,46 @@ elif stage == "attack_config":
             set_attack_result(attack_result)
 
             # Persist attack execution & findings to SQLite database
-            active_sid = get_active_scan_id()
-            if active_sid:
+            try:
+                active_sid = ensure_active_scan_id()
+                repo = get_storage_repository()
+                full_attack_params = {
+                    "epsilon": epsilon,
+                    "clip_min": clip_min,
+                    "clip_max": clip_max,
+                    **(params_dict or {}),
+                }
+                if not attack_result.get("total_samples") and eval_inputs is not None:
+                    attack_result["total_samples"] = len(eval_inputs)
+
+                atk_rec = repo.record_attack_execution(
+                    scan_id=active_sid,
+                    attack_result=attack_result,
+                    attack_params=full_attack_params,
+                    adversarial_examples=attack_result.get("adversarial_examples"),
+                )
+                repo.record_vulnerabilities(
+                    scan_id=active_sid,
+                    vuln_result=vuln_result,
+                    attack_run_id=atk_rec.get("attack_run_id") if atk_rec else None,
+                )
                 try:
-                    repo = get_storage_repository()
-                    repo.record_attack_execution(
-                        scan_id=active_sid,
-                        attack_result=attack_result,
-                        attack_params=configured_params,
-                        adversarial_examples=attack_result.get("adversarial_examples"),
+                    recs = generate_vulnerability_recommendations(
+                        domain=domain,
+                        attack_name=str(attack_result.get("attack_name", "attack")),
+                        vuln_score=attack_result.get("vulnerability_score", 50.0),
+                        risk_level=attack_result.get("risk_level", "Medium"),
+                        asr=attack_result.get("asr_percentage", 0.0),
                     )
-                    repo.record_vulnerabilities(
-                        scan_id=active_sid,
-                        vuln_result=vuln_result,
-                    )
-                except Exception:
-                    pass
+                    if recs:
+                        repo.record_recommendations(
+                            scan_id=active_sid,
+                            recommendations=recs,
+                        )
+                except Exception as rec_err:
+                    print(f"[AdverScan Database] Notice generating recommendations: {rec_err}")
+            except Exception as persist_err:
+                print(f"[AdverScan Database] Error recording attack: {persist_err}")
             set_workflow_stage("attack_results")
             st.rerun()
         except Exception as exc:
@@ -2431,8 +2517,8 @@ elif stage == "attack_results":
                         )
                         set_xai_result(res_xai)
                         set_report_result(None)
-                        active_sid = get_active_scan_id()
-                        if active_sid and res_xai.get("executed", False):
+                        active_sid = ensure_active_scan_id()
+                        if res_xai.get("executed", False):
                             try:
                                 repo = get_storage_repository()
                                 repo.record_xai_result(
@@ -2440,8 +2526,8 @@ elif stage == "attack_results":
                                     xai_result=res_xai,
                                     raw_attributions=res_xai.get("attribution"),
                                 )
-                            except Exception:
-                                pass
+                            except Exception as xai_err:
+                                print(f"[AdverScan Database] Error saving XAI: {xai_err}")
                         if res_xai.get("executed", False):
                             st.success(f"Generated {expander_tech.upper()} explanation successfully!")
                         else:
@@ -2602,6 +2688,16 @@ elif stage == "xai_analysis":
                 )
                 set_xai_result(xai_res)
                 set_report_result(None)
+                try:
+                    active_sid = ensure_active_scan_id()
+                    repo = get_storage_repository()
+                    repo.record_xai_result(
+                        scan_id=active_sid,
+                        xai_result=xai_res,
+                        raw_attributions=xai_res.get("attribution"),
+                    )
+                except Exception as xai_persist_err:
+                    print(f"[AdverScan Database] Error recording XAI: {xai_persist_err}")
                 cached_xai = xai_res
                 if xai_res.get("executed", False):
                     st.success(f"Successfully generated {selected_tech.upper()} explainability diagnostics!")
@@ -2905,16 +3001,38 @@ elif stage == "defense_config":
             set_defense_result(defense_res)
 
             # Persist defense execution to SQLite database
-            active_sid = get_active_scan_id()
-            if active_sid:
-                try:
-                    repo = get_storage_repository()
-                    repo.record_defense_execution(
+            try:
+                active_sid = ensure_active_scan_id()
+                repo = get_storage_repository()
+                if "accuracy_recovery" not in defense_res:
+                    base_adv = defense_res.get("before_adv_accuracy", 0.0)
+                    after_adv = defense_res.get("after_adv_accuracy", 0.0)
+                    defense_res["accuracy_recovery"] = round(after_adv - base_adv, 2)
+
+                chosen_opt = defense_options.get(selected_defense_id) or defense_options.get(defense_res.get("defense_name")) or {}
+                if not defense_res.get("defense_family"):
+                    defense_res["defense_family"] = chosen_opt.get("family") or defense_res.get("defense_type") or "Preprocessing"
+                if not defense_res.get("defense_stage"):
+                    defense_res["defense_stage"] = chosen_opt.get("stage") or "preprocessing"
+                if "parameters" not in defense_res:
+                    defense_res["parameters"] = custom_params or {}
+
+                detail_scan = repo.get_assessment(active_sid)
+                atk_runs = (detail_scan.get("attacks") if detail_scan else []) or []
+                latest_atk_run_id = atk_runs[-1]["attack_run_id"] if atk_runs else None
+
+                repo.record_defense_execution(
+                    scan_id=active_sid,
+                    defense_result=defense_res,
+                    attack_run_id=latest_atk_run_id,
+                )
+                if defense_res.get("recommendations"):
+                    repo.record_recommendations(
                         scan_id=active_sid,
-                        defense_result=defense_res,
+                        recommendations=defense_res["recommendations"],
                     )
-                except Exception:
-                    pass
+            except Exception as def_persist_err:
+                print(f"[AdverScan Database] Error recording defense: {def_persist_err}")
             set_workflow_stage("defense_results")
             st.rerun()
         except Exception as exc:
@@ -3354,7 +3472,7 @@ elif stage == "report":
     )
 
     # Persist report and update assessment status to completed
-    active_sid = get_active_scan_id()
+    active_sid = ensure_active_scan_id()
     if active_sid:
         try:
             repo = get_storage_repository()

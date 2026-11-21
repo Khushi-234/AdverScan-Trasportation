@@ -463,9 +463,9 @@ class StorageRepository:
                 scan_id=scan_id,
                 attack_run_id=attack_run_id,
                 defense_name=def_name,
-                defense_family=defense_result.get("defense_family") or defense_result.get("defense_type"),
+                defense_family=defense_result.get("defense_family") or defense_result.get("defense_type") or "Preprocessing",
                 defense_stage=defense_result.get("defense_stage", "preprocessing"),
-                defense_configuration=defense_result.get("parameters") or {},
+                defense_configuration=defense_result.get("parameters") or defense_result.get("defense_configuration") or defense_result.get("custom_params") or {},
                 execution_status="completed" if defense_result.get("success", True) else "failed",
                 execution_time_seconds=float(defense_result.get("execution_time_seconds", 0.0)),
                 clean_accuracy_before=float(defense_result.get("before_clean_accuracy", 0.0)),
@@ -558,16 +558,49 @@ class StorageRepository:
     ) -> List[Dict[str, Any]]:
         """Record diagnostic findings produced by Module 5."""
         out = []
-        findings = vuln_result.get("vulnerabilities", [])
-        if not findings and "score" in vuln_result:
-            # Single composite vulnerability finding
+        findings = vuln_result.get("vulnerabilities") or vuln_result.get("findings") or []
+        if not findings and ("vulnerability_score" in vuln_result or "score" in vuln_result or "risk_level" in vuln_result or "sub_scores" in vuln_result):
+            score_val = float(vuln_result.get("vulnerability_score") if vuln_result.get("vulnerability_score") is not None else vuln_result.get("score", 0.0))
+            risk_val = str(vuln_result.get("risk_level") or vuln_result.get("severity", "Medium")).upper()
+            v_type = vuln_result.get("vulnerability_type") or "Adversarial Perturbation Sensitivity"
+
             findings = [{
-                "name": vuln_result.get("vulnerability_type", "Adversarial Sensitivity"),
-                "severity": vuln_result.get("severity", "Medium"),
-                "score": vuln_result.get("score", 50.0),
-                "description": vuln_result.get("description", "Vulnerability detected under perturbation"),
-                "evidence": vuln_result,
+                "name": f"{v_type} [{risk_val}]",
+                "severity": risk_val.capitalize(),
+                "score": score_val,
+                "description": vuln_result.get("description") or f"Model exhibits {risk_val} adversarial sensitivity with composite vulnerability score of {score_val:.1f}/100.",
+                "evidence": vuln_result.get("metric_explanations") or {"score": score_val, "risk_level": risk_val},
+                "affected_region": "Input feature space / Decision boundary",
             }]
+
+            sub_scores = vuln_result.get("sub_scores") or {}
+            if sub_scores.get("asr_score") is not None:
+                findings.append({
+                    "name": "Attack Success Susceptibility (ASR)",
+                    "severity": "High" if float(sub_scores["asr_score"]) >= 50.0 else ("Medium" if float(sub_scores["asr_score"]) >= 20.0 else "Low"),
+                    "score": float(sub_scores["asr_score"]),
+                    "description": "Susceptibility to misclassification when inputs are subjected to targeted or untargeted perturbations.",
+                    "evidence": {"sub_score": sub_scores["asr_score"], "weight": 0.50},
+                    "affected_region": "Prediction logits",
+                })
+            if sub_scores.get("degradation_score") is not None:
+                findings.append({
+                    "name": "Confidence & Margin Degradation",
+                    "severity": "High" if float(sub_scores["degradation_score"]) >= 40.0 else ("Medium" if float(sub_scores["degradation_score"]) >= 15.0 else "Low"),
+                    "score": float(sub_scores["degradation_score"]),
+                    "description": "Significant loss of prediction margin and softmax probability degradation under adversarial attack.",
+                    "evidence": {"sub_score": sub_scores["degradation_score"], "weight": 0.35},
+                    "affected_region": "Softmax margin",
+                })
+            if sub_scores.get("stealth_score") is not None:
+                findings.append({
+                    "name": "Perturbation Stealth & Distortion Vulnerability",
+                    "severity": "High" if float(sub_scores["stealth_score"]) >= 50.0 else ("Medium" if float(sub_scores["stealth_score"]) >= 20.0 else "Low"),
+                    "score": float(sub_scores["stealth_score"]),
+                    "description": "Perturbation magnitude remains within allowable human imperceptibility bounds.",
+                    "evidence": {"sub_score": sub_scores["stealth_score"], "weight": 0.15},
+                    "affected_region": "High-frequency features",
+                })
 
         with get_db_session(self.db_path) as session:
             for item in findings:
