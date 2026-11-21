@@ -11,6 +11,8 @@ from frontend.components.sidebar import (
     render_sidebar_branding,
     render_sidebar_session,
 )
+from frontend.components.comparison_view import render_comparison_view
+from frontend.components.history_view import render_history_view
 from frontend.components.status import (
     render_empty_state,
     render_phase_placeholder,
@@ -31,5 +33,7 @@ __all__ = [
     "render_sidebar",
     "render_sidebar_branding",
     "render_sidebar_session",
+    "render_history_view",
+    "render_comparison_view",
 ]
 

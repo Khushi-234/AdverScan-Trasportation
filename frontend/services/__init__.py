@@ -24,6 +24,15 @@ from frontend.services.xai_service import (
     explain_assessment,
     get_available_xai_techniques,
 )
+from frontend.services.assessment_history_service import (
+    delete_scan,
+    get_database_status,
+    get_scan_detail,
+    get_scan_history,
+    get_scans_for_selection,
+    get_storage_repository,
+)
+from frontend.services.assessment_comparison_service import compare_assessments
 
 __all__ = [
     "load_model_and_dataset",
@@ -38,4 +47,10 @@ __all__ = [
     "get_available_defenses_for_domain",
     "execute_configured_defense",
     "generate_security_report",
+    "get_scan_history",
+    "get_scan_detail",
+    "delete_scan",
+    "get_database_status",
+    "get_scans_for_selection",
+    "compare_assessments",
 ]

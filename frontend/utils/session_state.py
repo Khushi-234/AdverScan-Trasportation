@@ -15,6 +15,7 @@ DEFAULT_SESSION_STATE: Dict[str, Any] = {
     "workflow_stage": "dashboard",  # dashboard, ingestion, attack_config, attack_results
     "theme": "Dark",
     "is_assessment_active": False,
+    "active_scan_id": None,
     "active_model_name": None,
     "active_model_domain": None,
     "active_model_framework": None,
@@ -86,12 +87,26 @@ def set_workflow_stage(stage: str) -> None:
         "defense_config",
         "defense_results",
         "report",
+        "history",
+        "comparison",
     )
     if stage not in valid_stages:
         raise ValueError(
             f"Invalid workflow stage '{stage}'. Must be one of {valid_stages}"
         )
     st.session_state["workflow_stage"] = stage
+
+
+def get_active_scan_id() -> Optional[str]:
+    """Get the current active database assessment scan identifier (e.g. SCAN-XXXXXXXX)."""
+    init_session_state()
+    return st.session_state.get("active_scan_id")
+
+
+def set_active_scan_id(scan_id: Optional[str]) -> None:
+    """Set the current active database assessment scan identifier."""
+    init_session_state()
+    st.session_state["active_scan_id"] = scan_id
 
 
 def set_active_assessment(data: Dict[str, Any]) -> None:

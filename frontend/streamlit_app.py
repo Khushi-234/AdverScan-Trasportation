@@ -40,10 +40,13 @@ from frontend.components.sidebar import (
     render_sidebar_branding,
     render_sidebar_session,
 )
+from frontend.components.history_view import render_history_view
+from frontend.components.comparison_view import render_comparison_view
 from frontend.components.xai_visualizer import (
     render_dynamic_xai_dashboard,
     render_pre_post_defense_comparison,
 )
+from frontend.services.assessment_history_service import get_storage_repository
 from frontend.services.attack_service import (
     execute_configured_attack,
     get_class_labels_mapping,
@@ -71,6 +74,7 @@ from frontend.services.xai_service import (
 )
 from frontend.utils.session_state import (
     get_active_assessment,
+    get_active_scan_id,
     get_attack_result,
     get_defense_result,
     get_defense_xai_result,
@@ -82,6 +86,7 @@ from frontend.utils.session_state import (
     init_session_state,
     reset_workflow_state,
     set_active_assessment,
+    set_active_scan_id,
     set_attack_result,
     set_defense_result,
     set_defense_xai_result,
@@ -386,6 +391,104 @@ elif stage == "ingestion":
                 time.sleep(0.08)
 
                 set_active_assessment(res_data)
+
+                # Initialize persistent SQLite record for this assessment run
+                try:
+                    repo = get_storage_repository()
+                    metadata_obj = res_data.get("metadata")
+                    telemetry_obj = res_data.get("telemetry", {})
+                    meta_dict = res_data.get("metadata_dict", {})
+
+                    res_model_name = (
+                        res_data.get("model_name")
+                        or getattr(metadata_obj, "model_name", None)
+                        or getattr(metadata_obj, "name", None)
+                        or meta_dict.get("Model Name")
+                        or model_identifier
+                    )
+                    res_arch = (
+                        res_data.get("model_architecture")
+                        or telemetry_obj.get("architecture")
+                        or getattr(metadata_obj, "model_architecture", None)
+                        or getattr(metadata_obj, "architecture", None)
+                        or meta_dict.get("Architecture")
+                    )
+                    res_framework = (
+                        telemetry_obj.get("framework")
+                        or getattr(metadata_obj, "framework", None)
+                        or meta_dict.get("Framework")
+                        or default_framework
+                    )
+                    res_total_params = (
+                        res_data.get("total_parameters")
+                        or telemetry_obj.get("total_parameters")
+                        or getattr(metadata_obj, "total_parameters", None)
+                    )
+                    res_trainable_params = (
+                        res_data.get("trainable_parameters")
+                        or telemetry_obj.get("trainable_parameters")
+                        or getattr(metadata_obj, "trainable_parameters", None)
+                    )
+                    res_num_classes = (
+                        res_data.get("num_classes")
+                        or telemetry_obj.get("num_classes")
+                        or getattr(metadata_obj, "num_classes", None)
+                    )
+                    try:
+                        res_num_classes_int = int(res_num_classes) if res_num_classes is not None and str(res_num_classes).isdigit() else None
+                    except (ValueError, TypeError):
+                        res_num_classes_int = None
+
+                    res_input_shape = (
+                        res_data.get("input_shape")
+                        or telemetry_obj.get("input_shape")
+                        or getattr(metadata_obj, "input_shape", None)
+                    )
+                    res_dataset_name = (
+                        res_data.get("dataset_name")
+                        or telemetry_obj.get("dataset_name")
+                        or getattr(metadata_obj, "dataset_name", None)
+                        or meta_dict.get("Dataset")
+                        or dataset_input
+                        or "evaluation-dataset"
+                    )
+                    res_samples = (
+                        res_data.get("total_dataset_samples")
+                        or telemetry_obj.get("total_dataset_samples")
+                        or res_data.get("sample_size")
+                    )
+                    if res_samples is None and res_data.get("test_inputs") is not None:
+                        res_samples = len(res_data.get("test_inputs"))
+
+                    m_info = {
+                        "model_id": getattr(metadata_obj, "model_id", None) or model_identifier,
+                        "model_name": res_model_name,
+                        "architecture": res_arch,
+                        "framework": str(res_framework).upper(),
+                        "modality": getattr(metadata_obj, "domain", None) or default_domain,
+                        "total_parameters": res_total_params,
+                        "trainable_parameters": res_trainable_params,
+                        "num_classes": res_num_classes_int,
+                        "input_shape": str(res_input_shape) if res_input_shape else None,
+                        "metadata": meta_dict or telemetry_obj,
+                    }
+                    d_info = {
+                        "dataset_id": dataset_input or res_dataset_name,
+                        "dataset_name": res_dataset_name,
+                        "modality": getattr(metadata_obj, "domain", None) or default_domain,
+                        "number_of_samples": res_samples,
+                        "number_of_classes": res_num_classes_int,
+                        "data_split": "test",
+                        "metadata": {"source": res_data.get("dataset_source")},
+                    }
+                    scan_rec = repo.create_assessment(
+                        model_info=m_info,
+                        dataset_info=d_info,
+                        modality=getattr(metadata_obj, "domain", None) or default_domain,
+                    )
+                    set_active_scan_id(scan_rec["scan_id"])
+                except Exception:
+                    pass
 
                 progress_bar.progress(
                     100, text="Model ingestion and validation complete!"
@@ -1478,6 +1581,24 @@ elif stage == "attack_config":
 
             set_vulnerability_result(vuln_result)
             set_attack_result(attack_result)
+
+            # Persist attack execution & findings to SQLite database
+            active_sid = get_active_scan_id()
+            if active_sid:
+                try:
+                    repo = get_storage_repository()
+                    repo.record_attack_execution(
+                        scan_id=active_sid,
+                        attack_result=attack_result,
+                        attack_params=configured_params,
+                        adversarial_examples=attack_result.get("adversarial_examples"),
+                    )
+                    repo.record_vulnerabilities(
+                        scan_id=active_sid,
+                        vuln_result=vuln_result,
+                    )
+                except Exception:
+                    pass
             set_workflow_stage("attack_results")
             st.rerun()
         except Exception as exc:
@@ -2310,6 +2431,17 @@ elif stage == "attack_results":
                         )
                         set_xai_result(res_xai)
                         set_report_result(None)
+                        active_sid = get_active_scan_id()
+                        if active_sid and res_xai.get("executed", False):
+                            try:
+                                repo = get_storage_repository()
+                                repo.record_xai_result(
+                                    scan_id=active_sid,
+                                    xai_result=res_xai,
+                                    raw_attributions=res_xai.get("attribution"),
+                                )
+                            except Exception:
+                                pass
                         if res_xai.get("executed", False):
                             st.success(f"Generated {expander_tech.upper()} explanation successfully!")
                         else:
@@ -2328,7 +2460,7 @@ elif stage == "attack_results":
     st.markdown("<div style='height: 12px;'></div>", unsafe_allow_html=True)
 
     # Workflow Actions
-    col_back, col_xai, col_fwd = st.columns([1, 1, 1])
+    col_back, col_xai, col_comp, col_fwd = st.columns([1, 1, 1, 1])
 
     with col_back:
         if st.button("⬅️ Test Another Attack on this Model", use_container_width=True):
@@ -2338,6 +2470,14 @@ elif stage == "attack_results":
     with col_xai:
         if st.button("🔍 Root-Cause XAI Analysis ➡️", use_container_width=True):
             set_workflow_stage("xai_analysis")
+            st.rerun()
+
+    with col_comp:
+        if st.button("⚖️ Compare Assessment ➡️", use_container_width=True):
+            active_sid = get_active_scan_id()
+            if active_sid:
+                set_state("comparison_baseline_scan_id", active_sid)
+            set_workflow_stage("comparison")
             st.rerun()
 
     with col_fwd:
@@ -2763,6 +2903,18 @@ elif stage == "defense_config":
             progress_bar.empty()
 
             set_defense_result(defense_res)
+
+            # Persist defense execution to SQLite database
+            active_sid = get_active_scan_id()
+            if active_sid:
+                try:
+                    repo = get_storage_repository()
+                    repo.record_defense_execution(
+                        scan_id=active_sid,
+                        defense_result=defense_res,
+                    )
+                except Exception:
+                    pass
             set_workflow_stage("defense_results")
             st.rerun()
         except Exception as exc:
@@ -3201,6 +3353,39 @@ elif stage == "report":
         else json.dumps(report_dict, indent=2)
     )
 
+    # Persist report and update assessment status to completed
+    active_sid = get_active_scan_id()
+    if active_sid:
+        try:
+            repo = get_storage_repository()
+            r_id = report_dict.get("report_id", f"REP-{active_sid}")
+            art_path = repo.artifacts.save_artifact(
+                data=formatted_md,
+                scan_id=active_sid,
+                category="reports",
+                filename_prefix=f"report_{r_id}",
+            )
+            repo.record_report(
+                scan_id=active_sid,
+                report_path=art_path or "storage_data/artifacts/reports",
+                report_name=f"Security_Report_{active_sid}.md",
+                report_format="markdown",
+                summary_metrics={
+                    "risk_level": report_dict.get("risk_level"),
+                    "vulnerability_score": report_dict.get("vulnerability_score"),
+                },
+            )
+            repo.update_assessment_status(
+                scan_id=active_sid,
+                status="completed",
+                overall_summary={
+                    "risk_level": report_dict.get("risk_level"),
+                    "vulnerability_score": report_dict.get("vulnerability_score"),
+                },
+            )
+        except Exception:
+            pass
+
     # 1. Executive Certification Banner
     rep_id = report_dict.get("report_id", "REP-UNKNOWN")
     rep_time = report_dict.get("timestamp", datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
@@ -3528,11 +3713,16 @@ elif stage == "report":
         )
 
     st.markdown("<div style='height: 15px;'></div>", unsafe_allow_html=True)
-    col_nav1, col_nav2 = st.columns([1, 1])
+    col_nav1, col_nav_hist, col_nav2 = st.columns([1, 1, 1])
 
     with col_nav1:
         if st.button("⬅️ Back to Defense Dashboard", use_container_width=True):
             set_workflow_stage("defense_results")
+            st.rerun()
+
+    with col_nav_hist:
+        if st.button("📜 View in Assessment History", use_container_width=True):
+            set_workflow_stage("history")
             st.rerun()
 
     with col_nav2:
@@ -3540,4 +3730,19 @@ elif stage == "report":
             reset_workflow_state()
             set_workflow_stage("dashboard")
             st.rerun()
+
+
+# ==============================================================================
+# STAGE 8: ASSESSMENT HISTORY & AUDIT
+# ==============================================================================
+elif stage == "history":
+    render_history_view()
+
+
+# ==============================================================================
+# STAGE 9: COMPARE ASSESSMENTS
+# ==============================================================================
+elif stage == "comparison":
+    render_comparison_view()
+
 

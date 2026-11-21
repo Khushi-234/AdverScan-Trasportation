@@ -64,8 +64,6 @@ def render_sidebar_session() -> None:
             model_name = get_state("active_model_name") or "Ingested Model"
             domain = get_state("active_model_domain", "Unknown")
             defense_name = get_state("active_defense_name")
-            atk_res = get_attack_result()
-            def_res = get_defense_result()
 
             defense_badge = (
                 f"<div style='font-size: 0.8rem; color: var(--text-secondary); margin-top: 0.2rem;'>Defense: <strong style='color: var(--stat-val-cyan);'>{str(defense_name).replace('_', ' ').title()}</strong></div>"
@@ -85,45 +83,51 @@ def render_sidebar_session() -> None:
                 unsafe_allow_html=True,
             )
 
-            st.markdown("---")
-            st.markdown(
-                "<div class='sidebar-section-title' style='margin-bottom: 0.5rem;'>Pipeline Navigation</div>",
-                unsafe_allow_html=True,
-            )
+        st.markdown("---")
+        st.markdown(
+            "<div class='sidebar-section-title' style='margin-bottom: 0.5rem;'>Pipeline Navigation</div>",
+            unsafe_allow_html=True,
+        )
 
-            pipeline_stages = [
-                ("dashboard", "Dashboard", True),
-                ("ingestion", "1. Model Ingestion", True),
-                ("attack_config", "2. Attack Engine", is_active),
-                ("attack_results", "3. Attack Results", atk_res is not None),
-                ("xai_analysis", "4. XAI Analysis", atk_res is not None),
-                ("defense_config", "5. Defense & Hardening", atk_res is not None),
-                ("defense_results", "6. Defense Results", def_res is not None),
-                ("report", "7. Reports", atk_res is not None),
-            ]
+        atk_res = get_attack_result()
+        def_res = get_defense_result()
 
-            for s_id, s_label, is_unlocked in pipeline_stages:
-                is_current = (stage == s_id)
-                prefix = "● " if is_current else ("✓ " if is_unlocked and s_id != "dashboard" else ("• " if is_unlocked else "🔒 "))
-                btn_type = "primary" if is_current else "secondary"
-                if is_unlocked:
-                    if st.button(
-                        f"{prefix}{s_label}",
-                        key=f"nav_btn_{s_id}",
-                        type=btn_type,
-                        use_container_width=True,
-                    ):
-                        if stage != s_id:
-                            set_workflow_stage(s_id)
-                            st.rerun()
-                else:
-                    st.button(
-                        f"{prefix}{s_label}",
-                        key=f"nav_btn_dis_{s_id}",
-                        disabled=True,
-                        use_container_width=True,
-                    )
+        pipeline_stages = [
+            ("dashboard", "Dashboard", True),
+            ("ingestion", "1. Model Ingestion", True),
+            ("attack_config", "2. Attack Engine", is_active),
+            ("attack_results", "3. Attack Results", atk_res is not None),
+            ("xai_analysis", "4. XAI Analysis", atk_res is not None),
+            ("defense_config", "5. Defense & Hardening", atk_res is not None),
+            ("defense_results", "6. Defense Results", def_res is not None),
+            ("report", "7. Reports", atk_res is not None),
+            ("history", "8. Assessment History", True),
+            ("comparison", "9. Compare Assessments", True),
+        ]
 
+        for s_id, s_label, is_unlocked in pipeline_stages:
+            is_current = (stage == s_id)
+            prefix = "● " if is_current else ("✓ " if is_unlocked and s_id not in ("dashboard", "history", "comparison") else ("• " if is_unlocked else "🔒 "))
+            btn_type = "primary" if is_current else "secondary"
+            if is_unlocked:
+                if st.button(
+                    f"{prefix}{s_label}",
+                    key=f"nav_btn_{s_id}",
+                    type=btn_type,
+                    use_container_width=True,
+                ):
+                    if stage != s_id:
+                        set_workflow_stage(s_id)
+                        st.rerun()
+            else:
+                st.button(
+                    f"{prefix}{s_label}",
+                    key=f"nav_btn_dis_{s_id}",
+                    disabled=True,
+                    use_container_width=True,
+                )
+
+        if is_active:
             st.markdown("---")
             if st.button(
                 "Reset Assessment",
