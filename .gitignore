@@ -21,6 +21,15 @@ env/
 *.log
 logs/
 mlruns/
+*.db
+*.db-wal
+*.db-shm
+
+# Persistent SQLite Storage and Evaluation Artifacts
+storage_data/*
+!storage_data/.gitkeep
+storage_data/artifacts/*
+!storage_data/artifacts/.gitkeep
 
 # Datasets and model checkpoints (large files)
 data/*
