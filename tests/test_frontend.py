@@ -651,6 +651,40 @@ def test_defense_execution_batch_size_alignment():
     assert "threshold_compliance" in res
 
 
+def test_execute_configured_defense_asr_zero_short_circuit():
+    """Verify that when baseline attack ASR is 0.0%, defense hardening is short-circuited."""
+    model = SimpleVisionModel()
+    inputs = torch.randn(4, 3, 16, 16)
+    labels = torch.tensor([0, 1, 0, 1])
+    adv_inputs = inputs + 0.01
+
+    atk_res = {
+        "attack_name": "fgsm",
+        "clean_accuracy": 100.0,
+        "adversarial_accuracy": 100.0,
+        "asr_percentage": 0.0,
+        "total_samples": 4,
+    }
+
+    res = execute_configured_defense(
+        model=model,
+        domain="image",
+        defense_choice="auto",
+        test_inputs=inputs,
+        test_labels=labels,
+        adversarial_examples=adv_inputs,
+        attack_result=atk_res,
+    )
+
+    assert res["success"] is True
+    assert res["status"] == "not_needed"
+    assert res["selected_defense"] == "None (Already Robust)"
+    assert res["before_asr"] == 0.0
+    assert res["after_asr"] == 0.0
+    assert res["clean_accuracy_drop"] == 0.0
+    assert "Model Already Robust" in res["defense_effectiveness"]
+
+
 def test_defense_results_no_unnecessary_charts_and_threshold_compliance():
     """Verify that stage 6 (defense_results) has no st.bar_chart calls and includes threshold compliance."""
     from pathlib import Path

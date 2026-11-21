@@ -343,6 +343,58 @@ def execute_configured_defense(
         deg_pts = max(0.0, (base_clean_acc - base_adv_acc) * 100.0)
         base_vuln = round(0.50 * (base_asr * 100.0) + 0.35 * deg_pts, 2)
 
+    # Early short-circuit: if baseline ASR is 0.0%, model is already robust; defense is not needed
+    if base_asr <= 0.0:
+        return {
+            "success": True,
+            "status": "not_needed",
+            "defense_name": "None (Already Robust)",
+            "selected_defense": "None (Already Robust)",
+            "hardened_model": raw_model,
+            "defense_type": "None",
+            "defense_family": "None",
+            "defense_stage": "none",
+            "is_improved": False,
+            "improvement_sufficient": False,
+            "fallback_used": False,
+            "thresholds": {},
+            "threshold_compliance": [
+                {
+                    "Criterion": "Attack Success Rate (ASR) Baseline Check",
+                    "Baseline (Before)": "0.0%",
+                    "Hardened (Re-Test)": "0.0%",
+                    "Observed Change": "0.0% (Attack Ineffective)",
+                    "Acceptance Bound": "ASR = 0.0%",
+                    "Compliance Verdict": "PASSED (Model Already Robust - No Defense Required)",
+                }
+            ],
+            "defense_effectiveness": "Not Needed (Model Already Robust)",
+            "execution_time_seconds": 0.01,
+            "total_samples": total_samples,
+            "before_clean_accuracy": base_clean_acc * 100.0,
+            "before_adv_accuracy": base_adv_acc * 100.0,
+            "before_asr": 0.0,
+            "before_vulnerability_score": base_vuln,
+            "post_clean_accuracy": base_clean_acc * 100.0,
+            "after_clean_accuracy": base_clean_acc * 100.0,
+            "after_adv_accuracy": base_adv_acc * 100.0,
+            "post_asr": 0.0,
+            "post_asr_defined": True,
+            "after_asr": 0.0,
+            "after_vulnerability_score": base_vuln,
+            "asr_reduction_percentage": 0.0,
+            "vulnerability_improvement": 0.0,
+            "clean_accuracy_drop": 0.0,
+            "candidate_attempts": [],
+            "sample_comparisons": [],
+            "sample_restorations": [],
+            "recommendations": [
+                "Baseline Attack Success Rate is 0.0%. The model is already fully robust against this attack vector. "
+                "Applying defense transformations is not recommended as it risks degrading clean accuracy without providing security benefit."
+            ],
+            "_hardened_model": raw_model,
+        }
+
     base_risk = "HIGH" if base_asr >= 0.6 else ("MEDIUM" if base_asr >= 0.3 else "LOW")
 
     # Build evaluation closure for candidate models
@@ -548,7 +600,16 @@ def execute_configured_defense(
                 }
             )
 
-    selected_defense_name = hard_res.selected_defense or defense_choice
+    if hard_res.status == "not_needed":
+        selected_defense_name = "None (Already Robust)"
+        defense_eff = "Not Needed (Model Already Robust)"
+    elif hard_res.selected_defense:
+        selected_defense_name = hard_res.selected_defense
+    elif is_auto:
+        selected_defense_name = "None (No Defense Accepted)"
+        defense_eff = "Ineffective / No Defense Accepted"
+    else:
+        selected_defense_name = defense_choice
     defense_meta = hard_res.metadata
 
     # Threshold compliance breakdown

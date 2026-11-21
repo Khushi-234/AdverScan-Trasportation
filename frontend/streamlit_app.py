@@ -2844,6 +2844,34 @@ elif stage == "defense_config":
         unsafe_allow_html=True,
     )
 
+    # 1b. Early Notice if model is already robust (ASR <= 0.0%)
+    if asr_pct <= 0.0:
+        st.markdown(
+            """
+            <div class="modern-card card-accent-emerald" style="margin-bottom: 1.25rem;">
+                <div style="font-weight: 700; font-size: 1.05rem; color: #10b981;">
+                    🛡️ Model is Already Robust Against This Attack Vector (ASR: 0.0%)
+                </div>
+                <div style="font-size: 0.88rem; color: var(--text-secondary); margin-top: 0.4rem; line-height: 1.5;">
+                    The evaluated attack caused <strong>0 misclassifications</strong> on clean correct samples (Attack Success Rate is 0.0%).
+                    Defensive hardening is <strong>not required</strong>, as applying input transformations risks degrading clean accuracy
+                    without providing additional security benefit.
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+        col_skip1, col_skip2 = st.columns([1, 1])
+        with col_skip1:
+            if st.button("⬅️ Test Another Attack on this Model", use_container_width=True, key="btn_skip_to_attack"):
+                set_workflow_stage("attack_config")
+                st.rerun()
+        with col_skip2:
+            if st.button("📑 Proceed Directly to Security Report ➡️", type="primary", use_container_width=True, key="btn_skip_to_report"):
+                set_workflow_stage("report")
+                st.rerun()
+        st.markdown("---")
+
     # 2. Defense Catalog & Mode Selection
     available_defenses = get_available_defenses_for_domain(domain)
     defense_options = {d["id"]: d for d in available_defenses}
@@ -3072,6 +3100,10 @@ elif stage == "defense_results":
         status_badge = '<span class="badge-status badge-rose" style="font-size: 0.88rem;">❌ RETEST EXECUTION FAILED</span>'
         status_note = f"Retest execution failed: {def_result.get('error', 'Execution error encountered during retest.')}"
         card_accent = "card-accent-rose"
+    elif def_result.get("status") in ("not_needed", "already_robust") or def_result.get("defense_effectiveness") == "Not Needed (Model Already Robust)":
+        status_badge = '<span class="badge-status badge-cyan" style="font-size: 0.88rem;">🛡️ NOT NEEDED — Model Already Robust</span>'
+        status_note = "Baseline Attack Success Rate (ASR) was 0.0%. The model is already fully robust against this attack vector; no hardening transformation was required."
+        card_accent = "card-accent-cyan"
     elif def_result.get("status") == "inconclusive" or not def_result.get("post_asr_defined", True):
         status_badge = '<span class="badge-status badge-amber" style="font-size: 0.88rem;">⚠️ INCONCLUSIVE RETEST</span>'
         status_note = def_result.get("reason", "Retest was inconclusive due to undefined baseline metrics or zero clean accuracy.")
@@ -3152,7 +3184,7 @@ elif stage == "defense_results":
                 <div style="background: rgba(128, 128, 128, 0.2); border-radius: 9999px; height: 5px; width: 100%; margin: 6px 0; overflow: hidden;">
                     <div style="background: #06b6d4; width: {max(0.0, min(100.0, a_adv)):.1f}%; height: 100%; border-radius: 9999px;"></div>
                 </div>
-                <div class="stat-subtext">Robustness Recovery: <strong style="color: var(--stat-val-cyan);">+{adv_gain:.1f}%</strong></div>
+                <div class="stat-subtext">Robustness Recovery: <strong style="color: var(--stat-val-cyan);">{adv_gain:+.1f}%</strong></div>
             </div>
             """,
             unsafe_allow_html=True,

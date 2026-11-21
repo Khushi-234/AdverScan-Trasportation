@@ -427,6 +427,12 @@ def render_assessment_detail_drawer(scan_id: str) -> None:
                         unsafe_allow_html=True,
                     )
 
+                    # Diagnostic alerts for harmful / robust status
+                    if d.get("clean_accuracy_drop", 0.0) >= 10.0 or "HARMFUL" in str(rob_status).upper():
+                        st.error("⚠️ **Notice: Harmful Defense Outcome.** Clean accuracy dropped significantly (≥10.0%), severely degrading standard model utility.")
+                    elif "ALREADY ROBUST" in formatted_name.upper() or val_status == "NOT_NEEDED":
+                        st.info("🛡️ **Notice: Model Already Robust.** Baseline ASR was 0.0%, meaning the attack was ineffective. No defense transformation was necessary.")
+
                     # 4-column metric grid
                     c1, c2, c3, c4 = st.columns(4)
                     c_before = d.get("clean_accuracy_before", 0.0)
@@ -445,7 +451,7 @@ def render_assessment_detail_drawer(scan_id: str) -> None:
                     c2.metric(
                         "Adversarial Accuracy",
                         f"{a_before:.1f}% → {a_after:.1f}%",
-                        f"+{a_rec:.1f}%" if a_rec else None,
+                        f"{a_rec:+.1f}%" if a_rec else None,
                     )
 
                     asr_b = d.get("asr_before", 0.0)
@@ -461,7 +467,7 @@ def render_assessment_detail_drawer(scan_id: str) -> None:
                     c4.metric(
                         "ASR Suppression",
                         f"{asr_red:.1f}%",
-                        f"Recovery: +{a_rec:.1f}%",
+                        f"Recovery: {a_rec:+.1f}%",
                     )
 
                     # Configuration Hyperparameters

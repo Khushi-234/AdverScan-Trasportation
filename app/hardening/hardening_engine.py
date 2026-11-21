@@ -481,8 +481,8 @@ class HardeningEngine:
             thresh_obj = RetestThresholds()
 
         # Evaluate metrics before hardening if evaluation function is provided
-        metrics_before: Dict[str, Any] = {}
-        if eval_fn is not None and callable(eval_fn):
+        metrics_before: Dict[str, Any] = dict(kwargs.get("baseline_metrics") or {})
+        if eval_fn is not None and callable(eval_fn) and not metrics_before:
             try:
                 metrics_before = eval_fn(model) or {}
             except Exception as e:
