@@ -177,6 +177,10 @@ class AssessmentRecord(Base):
             "baseline_scan_id": self.baseline_scan_id,
         }
         if include_children:
+            if self.model:
+                d["model"] = self.model.to_dict()
+            if self.dataset:
+                d["dataset"] = self.dataset.to_dict()
             d["attacks"] = [a.to_dict() for a in self.attacks]
             d["defenses"] = [df.to_dict() for df in self.defenses]
             d["xai_results"] = [x.to_dict() for x in self.xai_results]

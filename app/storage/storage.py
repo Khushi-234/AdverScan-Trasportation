@@ -223,6 +223,22 @@ class StorageRepository:
                         metadata_json=model_info.get("metadata") or model_info,
                     )
                     session.add(m_rec)
+                else:
+                    if model_info.get("architecture") or model_info.get("model_architecture"):
+                        existing_m.architecture = model_info.get("architecture") or model_info.get("model_architecture")
+                    if model_info.get("framework"):
+                        existing_m.framework = model_info.get("framework")
+                    if model_info.get("total_parameters") is not None:
+                        existing_m.total_parameters = model_info.get("total_parameters")
+                    if model_info.get("trainable_parameters") is not None:
+                        existing_m.trainable_parameters = model_info.get("trainable_parameters")
+                    if model_info.get("num_classes") is not None:
+                        try:
+                            existing_m.num_classes = int(model_info.get("num_classes"))
+                        except (ValueError, TypeError):
+                            pass
+                    if model_info.get("input_shape"):
+                        existing_m.input_shape = str(model_info.get("input_shape"))
 
             # 2. Upsert dataset record if provided
             d_id = None
@@ -244,6 +260,16 @@ class StorageRepository:
                         metadata_json=dataset_info,
                     )
                     session.add(d_rec)
+                else:
+                    if dataset_info.get("number_of_samples") or dataset_info.get("total_samples"):
+                        existing_d.number_of_samples = dataset_info.get("number_of_samples") or dataset_info.get("total_samples")
+                    if dataset_info.get("data_split") or dataset_info.get("split"):
+                        existing_d.data_split = dataset_info.get("data_split") or dataset_info.get("split")
+                    if dataset_info.get("number_of_classes"):
+                        try:
+                            existing_d.number_of_classes = int(dataset_info.get("number_of_classes"))
+                        except (ValueError, TypeError):
+                            pass
 
             # 3. Create AssessmentRecord
             res_modality = modality or (model_info.get("domain") if model_info else None) or "image"
@@ -321,6 +347,56 @@ class StorageRepository:
                 filename_prefix=f"{atk_name.lower()}_adv_samples",
             )
 
+        # Resolve full attack parameters dictionary
+        resolved_params: Dict[str, Any] = {}
+        for candidate in (
+            attack_result.get("parameters"),
+            attack_result.get("attack_parameters"),
+            attack_result.get("hyperparameters"),
+            attack_result.get("config"),
+            attack_params,
+        ):
+            if isinstance(candidate, dict):
+                resolved_params.update(candidate)
+
+        # Ensure explicit epsilon, bounds, and norms are in parameters dictionary
+        eps_val = attack_result.get("epsilon_used") or attack_result.get("epsilon") or resolved_params.get("epsilon")
+        if eps_val is not None:
+            resolved_params["epsilon"] = float(eps_val)
+        if "clip_min" not in resolved_params and attack_result.get("clip_min") is not None:
+            resolved_params["clip_min"] = attack_result.get("clip_min")
+        if "clip_max" not in resolved_params and attack_result.get("clip_max") is not None:
+            resolved_params["clip_max"] = attack_result.get("clip_max")
+        if "norm" not in resolved_params and attack_result.get("norm"):
+            resolved_params["norm"] = attack_result.get("norm")
+
+        # Resolve execution time in seconds
+        exec_time = float(
+            attack_result.get("execution_time")
+            or attack_result.get("execution_time_seconds")
+            or attack_result.get("duration")
+            or attack_result.get("time_taken")
+            or 0.0
+        )
+
+        # Resolve total evaluated samples
+        tot_samples = int(
+            attack_result.get("total_samples")
+            or attack_result.get("sample_count")
+            or attack_result.get("num_samples")
+            or attack_result.get("evaluated_samples")
+            or (len(adv_obj) if hasattr(adv_obj, "__len__") and not isinstance(adv_obj, (dict, str)) else 0)
+        )
+
+        # Resolve perturbation metrics
+        pert_metrics = attack_result.get("perturbation_metrics") or {}
+        if not isinstance(pert_metrics, dict):
+            pert_metrics = {}
+        if "ms_per_sample" not in pert_metrics and attack_result.get("ms_per_sample"):
+            pert_metrics["ms_per_sample"] = float(attack_result["ms_per_sample"])
+        elif "ms_per_sample" not in pert_metrics and tot_samples > 0 and exec_time > 0:
+            pert_metrics["ms_per_sample"] = round((exec_time * 1000.0) / tot_samples, 2)
+
         with get_db_session(self.db_path) as session:
             rec = AttackExecutionRecord(
                 attack_run_id=run_id,
@@ -329,11 +405,11 @@ class StorageRepository:
                 attack_type=str(attack_result.get("attack_type", "white_box")),
                 attack_objective="targeted" if attack_result.get("is_targeted") else "untargeted",
                 target_label=attack_result.get("target_label"),
-                epsilon=float(attack_result.get("epsilon_used") or attack_result.get("epsilon", 0.0)),
-                attack_parameters=attack_params or attack_result.get("parameters") or {},
+                epsilon=float(eps_val or 0.0),
+                attack_parameters=resolved_params,
                 execution_status="completed" if attack_result.get("clean_accuracy") is not None else "failed",
-                execution_time_seconds=float(attack_result.get("execution_time", 0.0)),
-                total_samples=int(attack_result.get("total_samples", 0)),
+                execution_time_seconds=exec_time,
+                total_samples=tot_samples,
                 clean_accuracy=float(attack_result.get("clean_accuracy", 0.0)),
                 adversarial_accuracy=float(attack_result.get("adversarial_accuracy", 0.0)),
                 accuracy_drop=float(attack_result.get("accuracy_drop", 0.0)),
@@ -346,7 +422,7 @@ class StorageRepository:
                 l2_norm=attack_result.get("l2"),
                 l0_norm=attack_result.get("l0"),
                 mae=attack_result.get("mae"),
-                perturbation_metrics=attack_result.get("perturbation_metrics") or {},
+                perturbation_metrics=pert_metrics,
                 prediction_changed=bool(attack_result.get("accuracy_drop", 0.0) > 0.0),
                 attack_success=bool(attack_result.get("asr_percentage", 0.0) > 0.0),
                 failure_reason=attack_result.get("error_message"),
