@@ -230,3 +230,77 @@ def test_assessment_comparison_invalid_scan_ids():
     assert res["success"] is False
     assert "not found" in res["error"]
 
+
+def test_assessment_comparison_parameter_variations_and_time(clean_storage_and_state):
+    """Verify that attack parameter variations, execution time, and samples are contrasted."""
+    repo = clean_storage_and_state
+
+    # Baseline with eps=0.03, steps=20
+    repo.create_assessment(
+        scan_id="SCAN-P1",
+        model_info={"model_id": "vit-tiny", "model_name": "ViT-Tiny", "total_parameters": 5000000},
+        modality="image",
+    )
+    repo.record_attack_execution(
+        scan_id="SCAN-P1",
+        attack_result={
+            "attack_name": "FGSM",
+            "clean_accuracy": 95.0,
+            "adversarial_accuracy": 40.0,
+            "asr_percentage": 57.9,
+            "execution_time": 2.5,
+            "total_samples": 20,
+            "parameters": {"epsilon": 0.03, "steps": 20, "norm": "L_inf"},
+            "linf": 0.03,
+            "l2": 1.25,
+        },
+    )
+
+    # Comparison with eps=0.05, steps=40
+    repo.create_assessment(
+        scan_id="SCAN-P2",
+        model_info={"model_id": "vit-base", "model_name": "ViT-Base", "total_parameters": 86000000},
+        modality="image",
+    )
+    repo.record_attack_execution(
+        scan_id="SCAN-P2",
+        attack_result={
+            "attack_name": "FGSM",
+            "clean_accuracy": 96.0,
+            "adversarial_accuracy": 60.0,
+            "asr_percentage": 37.5,
+            "execution_time": 5.0,
+            "total_samples": 20,
+            "parameters": {"epsilon": 0.05, "steps": 40, "norm": "L_inf"},
+            "linf": 0.05,
+            "l2": 2.10,
+        },
+    )
+
+    res = compare_assessments("SCAN-P1", "SCAN-P2")
+    assert res["success"] is True
+
+    # Check model parameter comparison
+    models = res["models"]
+    assert models["baseline"]["total_parameters"] == 5000000
+    assert models["comparison"]["total_parameters"] == 86000000
+    assert models["delta_total_parameters"] == 81000000
+
+    # Check attack parameter variations & timing
+    atk = res["attack_comparisons"][0]
+    assert atk["baseline_time_seconds"] == 2.5
+    assert atk["comparison_time_seconds"] == 5.0
+    assert atk["delta_time_seconds"] == 2.5
+    assert atk["baseline_samples"] == 20
+    assert atk["comparison_samples"] == 20
+
+    # Parameter diffs
+    diffs = atk["parameter_differences"]
+    assert "epsilon" in diffs
+    assert diffs["epsilon"]["baseline"] == 0.03
+    assert diffs["epsilon"]["comparison"] == 0.05
+    assert "steps" in diffs
+    assert diffs["steps"]["baseline"] == 20
+    assert diffs["steps"]["comparison"] == 40
+
+

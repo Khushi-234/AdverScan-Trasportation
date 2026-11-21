@@ -60,24 +60,46 @@ def compare_assessments(
         or (comp.get("defenses") and not base.get("defenses"))
     )
 
+    base_m_rec = base.get("model") or {}
+    comp_m_rec = comp.get("model") or {}
+
+    b_tot_params = base_m_rec.get("total_parameters")
+    c_tot_params = comp_m_rec.get("total_parameters")
+    delta_params = None
+    if isinstance(b_tot_params, (int, float)) and isinstance(c_tot_params, (int, float)):
+        delta_params = c_tot_params - b_tot_params
+
     models_comparison = {
         "baseline": {
             "scan_id": baseline_scan_id,
             "model_name": base_m_name,
+            "architecture": base_m_rec.get("architecture"),
+            "framework": base_m_rec.get("framework"),
+            "total_parameters": b_tot_params,
+            "trainable_parameters": base_m_rec.get("trainable_parameters"),
+            "classes_count": base_m_rec.get("num_classes"),
             "modality": base_mod,
             "dataset_name": base.get("dataset_name") or "N/A",
+            "dataset_samples": base.get("dataset", {}).get("number_of_samples"),
             "created_at": str(base.get("created_at"))[:19],
         },
         "comparison": {
             "scan_id": comparison_scan_id,
             "model_name": comp_m_name,
+            "architecture": comp_m_rec.get("architecture"),
+            "framework": comp_m_rec.get("framework"),
+            "total_parameters": c_tot_params,
+            "trainable_parameters": comp_m_rec.get("trainable_parameters"),
+            "classes_count": comp_m_rec.get("num_classes"),
             "modality": comp_mod,
             "dataset_name": comp.get("dataset_name") or "N/A",
+            "dataset_samples": comp.get("dataset", {}).get("number_of_samples"),
             "created_at": str(comp.get("created_at"))[:19],
         },
         "modality_match": modality_match,
         "same_model": same_model,
         "is_defense_comparison": is_defense_comparison,
+        "delta_total_parameters": delta_params,
     }
 
     # 3. Attack-by-Attack Comparison
@@ -107,6 +129,26 @@ def compare_assessments(
             c_adv = float(c_atk.get("adversarial_accuracy", 0.0))
             delta_adv = c_adv - b_adv
 
+            # Execution time comparison
+            b_time = float(b_atk.get("execution_time_seconds") or 0.0)
+            c_time = float(c_atk.get("execution_time_seconds") or 0.0)
+            delta_time = round(c_time - b_time, 2)
+
+            # Sample count comparison
+            b_samples = int(b_atk.get("total_samples") or 0)
+            c_samples = int(c_atk.get("total_samples") or 0)
+            delta_samples = c_samples - b_samples
+
+            # Parameter variations comparison
+            b_params = b_atk.get("attack_parameters") or {}
+            c_params = c_atk.get("attack_parameters") or {}
+            param_diffs: Dict[str, Dict[str, Any]] = {}
+            for pk in sorted(set(b_params.keys()) | set(c_params.keys())):
+                bv = b_params.get(pk)
+                cv = c_params.get(pk)
+                if bv != cv:
+                    param_diffs[pk] = {"baseline": bv, "comparison": cv}
+
             # Status determination
             # A negative ASR delta means attack is LESS successful on comparison = Robustness Improved!
             if delta_asr <= -3.0 or delta_adv >= 3.0:
@@ -131,8 +173,23 @@ def compare_assessments(
                 "baseline_adv_acc": b_adv,
                 "comparison_adv_acc": c_adv,
                 "delta_adv_acc": round(delta_adv, 2),
+                "baseline_time_seconds": b_time,
+                "comparison_time_seconds": c_time,
+                "delta_time_seconds": delta_time,
+                "baseline_samples": b_samples,
+                "comparison_samples": c_samples,
+                "delta_samples": delta_samples,
                 "baseline_epsilon": b_atk.get("epsilon", 0.0),
                 "comparison_epsilon": c_atk.get("epsilon", 0.0),
+                "baseline_parameters": b_params,
+                "comparison_parameters": c_params,
+                "parameter_differences": param_diffs,
+                "baseline_linf": b_atk.get("l_inf_norm"),
+                "comparison_linf": c_atk.get("l_inf_norm"),
+                "baseline_l2": b_atk.get("l2_norm"),
+                "comparison_l2": c_atk.get("l2_norm"),
+                "baseline_mae": b_atk.get("mae"),
+                "comparison_mae": c_atk.get("mae"),
                 "eval_status": eval_status,
             })
         elif b_atk:
@@ -142,6 +199,9 @@ def compare_assessments(
                 "present_in": "baseline_only",
                 "baseline_asr": float(b_atk.get("attack_success_rate", 0.0)),
                 "baseline_adv_acc": float(b_atk.get("adversarial_accuracy", 0.0)),
+                "baseline_time_seconds": float(b_atk.get("execution_time_seconds") or 0.0),
+                "baseline_samples": int(b_atk.get("total_samples") or 0),
+                "baseline_parameters": b_atk.get("attack_parameters") or {},
                 "eval_status": "unmatched",
             })
         elif c_atk:
@@ -151,6 +211,9 @@ def compare_assessments(
                 "present_in": "comparison_only",
                 "comparison_asr": float(c_atk.get("attack_success_rate", 0.0)),
                 "comparison_adv_acc": float(c_atk.get("adversarial_accuracy", 0.0)),
+                "comparison_time_seconds": float(c_atk.get("execution_time_seconds") or 0.0),
+                "comparison_samples": int(c_atk.get("total_samples") or 0),
+                "comparison_parameters": c_atk.get("attack_parameters") or {},
                 "eval_status": "unmatched",
             })
 

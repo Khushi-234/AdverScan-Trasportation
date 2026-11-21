@@ -376,11 +376,26 @@ def render_assessment_detail_drawer(scan_id: str) -> None:
                     c3.metric("Accuracy Drop", f"{atk.get('accuracy_drop', 0.0):.1f}%")
                     c4.metric("Attack Success Rate", f"{atk.get('attack_success_rate', 0.0):.1f}%")
 
-                    st.markdown("**Perturbation Telemetry:**")
+                    # Configured Attack Parameters
+                    atk_params = atk.get("attack_parameters") or {}
+                    st.markdown("**⚙️ Configured Attack Parameters:**")
+                    if atk_params:
+                        param_pills = " • ".join([f"<code>{k}: {v}</code>" for k, v in atk_params.items()])
+                        st.markdown(f"<div style='font-size: 0.85rem; margin-bottom: 0.5rem;'>{param_pills}</div>", unsafe_allow_html=True)
+                    else:
+                        st.caption("Standard / Default hyperparameters")
+
+                    # Execution Time & Sample Telemetry
+                    exec_s = atk.get('execution_time_seconds', 0.0)
+                    tot_s = atk.get('total_samples', 0)
+                    ms_sample = f"{(exec_s * 1000.0 / tot_s):.1f} ms/sample" if tot_s and exec_s else "N/A"
+
+                    st.markdown("**⏱️ Performance & Distortion Telemetry:**")
                     st.write(
-                        f"• $L_\\infty$: `{atk.get('l_inf_norm')}` | $L_2$: `{atk.get('l2_norm')}` | "
-                        f"$L_0$: `{atk.get('l0_norm')}` | $\\text{{MAE}}$: `{atk.get('mae')}` | "
-                        f"Execution Time: `{atk.get('execution_time_seconds', 0.0):.2f}s`"
+                        f"• Execution Time: `{exec_s:.2f}s` (`{ms_sample}`) | "
+                        f"Samples Evaluated: `{tot_s}` | "
+                        f"$L_\\infty$: `{atk.get('l_inf_norm')}` | $L_2$: `{atk.get('l2_norm')}` | "
+                        f"$L_0$: `{atk.get('l0_norm')}` | $\\text{{MAE}}$: `{atk.get('mae')}`"
                     )
                     if atk.get("adversarial_samples_path"):
                         st.caption(f"💾 Adversarial Tensor Artifact: `{atk.get('adversarial_samples_path')}`")

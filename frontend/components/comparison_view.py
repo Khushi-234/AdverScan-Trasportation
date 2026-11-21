@@ -181,18 +181,26 @@ def render_comparison_view() -> None:
         with c_base_info:
             st.markdown(f"**Baseline (`{selected_base_id}`)**")
             st.write(f"• Model: `{models['baseline']['model_name']}`")
+            st.write(f"• Architecture: `{models['baseline'].get('architecture') or 'N/A'}`")
+            b_params = models['baseline'].get('total_parameters')
+            st.write(f"• Total Parameters: `{b_params:,}`" if isinstance(b_params, (int, float)) else f"• Total Parameters: `{b_params or 'N/A'}`")
+            st.write(f"• Framework: `{models['baseline'].get('framework') or 'N/A'}`")
             st.write(f"• Modality: `{models['baseline']['modality']}`")
             st.write(f"• Dataset: `{models['baseline']['dataset_name']}`")
             st.write(f"• Evaluated: {models['baseline']['created_at']}")
         with c_comp_info:
             st.markdown(f"**Comparison (`{selected_comp_id}`)**")
             st.write(f"• Model: `{models['comparison']['model_name']}`")
+            st.write(f"• Architecture: `{models['comparison'].get('architecture') or 'N/A'}`")
+            c_params = models['comparison'].get('total_parameters')
+            st.write(f"• Total Parameters: `{c_params:,}`" if isinstance(c_params, (int, float)) else f"• Total Parameters: `{c_params or 'N/A'}`")
+            st.write(f"• Framework: `{models['comparison'].get('framework') or 'N/A'}`")
             st.write(f"• Modality: `{models['comparison']['modality']}`")
             st.write(f"• Dataset: `{models['comparison']['dataset_name']}`")
             st.write(f"• Evaluated: {models['comparison']['created_at']}")
 
     # 4. Attack-by-Attack Side-by-Side Comparison Table
-    st.markdown("### ⚔️ Attack-by-Attack Telemetry Comparison")
+    st.markdown("### ⚔️ Attack-by-Attack Telemetry & Hyperparameters Comparison")
     if not attack_comps:
         st.info("No attacks found in either assessment.")
     else:
@@ -240,7 +248,47 @@ def render_comparison_view() -> None:
                         delta=f"{atk.get('delta_clean_acc', 0.0):+.1f}%",
                         delta_color="normal",
                     )
-                    c_a4.metric("Epsilon (Bound)", f"{atk.get('baseline_epsilon', 0.0)}")
+                    delta_time = atk.get("delta_time_seconds", 0.0)
+                    c_a4.metric(
+                        "Execution Time",
+                        f"{atk.get('baseline_time_seconds', 0.0):.2f}s → {atk.get('comparison_time_seconds', 0.0):.2f}s",
+                        delta=f"{delta_time:+.2f}s",
+                        delta_color="inverse",
+                    )
+
+                    # Attack Parameters & Distortion Norms Side-by-Side
+                    param_diffs = atk.get("parameter_differences", {})
+                    b_p = atk.get("baseline_parameters", {})
+                    b_samples = atk.get("baseline_samples", 0)
+                    c_samples = atk.get("comparison_samples", 0)
+
+                    st.markdown(
+                        f"""
+                        <div style="font-size: 0.85rem; color: var(--text-secondary); margin: 0.35rem 0;">
+                            <strong>Samples Evaluated:</strong> Baseline: <code>{b_samples}</code> vs Comparison: <code>{c_samples}</code>
+                            &nbsp;|&nbsp;
+                            <strong>Distortion (L_inf):</strong> Baseline: <code>{atk.get('baseline_linf') or 'N/A'}</code> vs Comparison: <code>{atk.get('comparison_linf') or 'N/A'}</code>
+                            &nbsp;|&nbsp;
+                            <strong>L_2:</strong> Baseline: <code>{atk.get('baseline_l2') or 'N/A'}</code> vs Comparison: <code>{atk.get('comparison_l2') or 'N/A'}</code>
+                        </div>
+                        """,
+                        unsafe_allow_html=True,
+                    )
+
+                    if param_diffs:
+                        diff_items = " • ".join([f"<strong>{k}:</strong> <code>{v['baseline']} → {v['comparison']}</code>" for k, v in param_diffs.items()])
+                        st.markdown(
+                            f"""
+                            <div style="background: rgba(245, 158, 11, 0.1); border-left: 3px solid #f59e0b; padding: 0.35rem 0.6rem; border-radius: 4px; font-size: 0.82rem; margin-top: 0.3rem;">
+                                ⚙️ <strong>Configured Parameter Variations:</strong> {diff_items}
+                            </div>
+                            """,
+                            unsafe_allow_html=True,
+                        )
+                    elif b_p:
+                        p_str = ", ".join([f"{k}={v}" for k, v in b_p.items()])
+                        st.caption(f"⚙️ Attack Parameters: {p_str}")
+
                     st.markdown("---")
             else:
                 pres = atk.get("present_in", "")
