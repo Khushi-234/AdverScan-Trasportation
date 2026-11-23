@@ -104,23 +104,38 @@ class PredictionEnsembleModelWrapper(nn.Module):
             weighted += lg * w
         return weighted
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: Any = None, **kwargs: Any) -> torch.Tensor:
         """Forward pass running model on each transformed view and aggregating."""
         all_logits: List[torch.Tensor] = []
         for t_fn in self.transforms:
-            transformed_x = t_fn(x)
-            out = self.base_model(transformed_x)
-            if isinstance(out, tuple):
+            transformed_x = t_fn(x) if x is not None else t_fn(kwargs)
+            if isinstance(transformed_x, dict):
+                out = self.base_model(**transformed_x)
+            else:
+                out = self.base_model(transformed_x)
+            if hasattr(out, "logits"):
+                out = out.logits
+            elif isinstance(out, tuple):
                 out = out[0]
             all_logits.append(out)
 
         if not all_logits:
-            out = self.base_model(x)
-            return out[0] if isinstance(out, tuple) else out
+            if isinstance(x, dict):
+                out = self.base_model(**x)
+            elif kwargs:
+                out = self.base_model(x, **kwargs) if x is not None else self.base_model(**kwargs)
+            else:
+                out = self.base_model(x)
+
+            if hasattr(out, "logits"):
+                out = out.logits
+            elif isinstance(out, tuple):
+                out = out[0]
+            return out
 
         return self._aggregate_outputs(all_logits)
 
-    def predict_with_metadata(self, x: torch.Tensor) -> Dict[str, Any]:
+    def predict_with_metadata(self, x: Any = None, **kwargs: Any) -> Dict[str, Any]:
         """
         Evaluate inputs and return consensus rate and prediction variance across views
         without duplicate forward passes.
@@ -128,15 +143,28 @@ class PredictionEnsembleModelWrapper(nn.Module):
         with torch.no_grad():
             all_logits: List[torch.Tensor] = []
             for t_fn in self.transforms:
-                transformed_x = t_fn(x)
-                out = self.base_model(transformed_x)
-                if isinstance(out, tuple):
+                transformed_x = t_fn(x) if x is not None else t_fn(kwargs)
+                if isinstance(transformed_x, dict):
+                    out = self.base_model(**transformed_x)
+                else:
+                    out = self.base_model(transformed_x)
+                if hasattr(out, "logits"):
+                    out = out.logits
+                elif isinstance(out, tuple):
                     out = out[0]
                 all_logits.append(out)
 
             if not all_logits:
-                out = self.base_model(x)
-                if isinstance(out, tuple):
+                if isinstance(x, dict):
+                    out = self.base_model(**x)
+                elif kwargs:
+                    out = self.base_model(x, **kwargs) if x is not None else self.base_model(**kwargs)
+                else:
+                    out = self.base_model(x)
+
+                if hasattr(out, "logits"):
+                    out = out.logits
+                elif isinstance(out, tuple):
                     out = out[0]
                 return {"aggregated_logits": out}
 

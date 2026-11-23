@@ -312,6 +312,8 @@ class DefenseSelector:
         elif defense_key == "confidence_rejection":
             return {"threshold": 0.6 if context.risk_level in ("CRITICAL", "HIGH") else 0.5}
         elif defense_key == "adversarial_detection":
+            if context.input_domain in ("nlp", "text"):
+                return {"threshold": 0.5, "method": "margin"}
             return {"threshold": 0.5, "method": "sensitivity" if context.is_iterative else "margin"}
         return {}
 
