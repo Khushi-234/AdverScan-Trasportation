@@ -53,7 +53,7 @@ class EnsembleModelWrapper(nn.Module):
         else:
             self.weights = [1.0 / len(self.models)] * len(self.models)
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: Any = None, **kwargs: Any) -> torch.Tensor:
         """
         Execute forward pass across all ensemble member models and aggregate predictions.
 
@@ -62,8 +62,16 @@ class EnsembleModelWrapper(nn.Module):
         """
         outputs: List[torch.Tensor] = []
         for model in self.models:
-            out = model(x)
-            if isinstance(out, tuple):
+            if isinstance(x, dict):
+                out = model(**x)
+            elif kwargs:
+                out = model(x, **kwargs) if x is not None else model(**kwargs)
+            else:
+                out = model(x)
+
+            if hasattr(out, "logits"):
+                out = out.logits
+            elif isinstance(out, tuple):
                 out = out[0]
             outputs.append(out)
 

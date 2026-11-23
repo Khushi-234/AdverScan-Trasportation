@@ -37,7 +37,7 @@ class AdversarialDetectorModelWrapper(nn.Module):
         self.rejection_value = float(rejection_value)
         self.last_detection_result: Optional[Dict[str, Any]] = None
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: Any = None, **kwargs: Any) -> torch.Tensor:
         """
         Forward pass actively routing through adversarial detection.
 
@@ -47,19 +47,32 @@ class AdversarialDetectorModelWrapper(nn.Module):
         from silently bypassing the defense by construction.
         """
         if not self.enforce_defense:
+            if isinstance(x, dict):
+                return self.model(**x)
+            if kwargs:
+                return self.model(x, **kwargs) if x is not None else self.model(**kwargs)
             return self.model(x)
 
-        res = self.predict_with_detection(x)
+        if isinstance(x, dict):
+            res = self.predict_with_detection(x)
+        elif kwargs:
+            combined = {**kwargs}
+            if x is not None:
+                combined["input_ids"] = x
+            res = self.predict_with_detection(combined)
+        else:
+            res = self.predict_with_detection(x)
+
         self.last_detection_result = res
         logits = res["logits"].clone()
         is_adversarial = res["is_adversarial"]
 
         if is_adversarial.any():
-            logits[is_adversarial] = self.rejection_value
+            logits[is_adversarial.to(logits.device)] = self.rejection_value
 
         return logits
 
-    def predict_with_detection(self, x: torch.Tensor) -> Dict[str, Any]:
+    def predict_with_detection(self, x: Any) -> Dict[str, Any]:
         """
         Evaluate inputs and return predictions alongside adversarial detection metrics.
         """
@@ -149,10 +162,25 @@ class AdversarialDetectionDefense(BaseDefense):
         if hasattr(model, "eval"):
             model.eval()
         try:
-            device = inputs.device
-            batch_size = inputs.size(0)
+            if isinstance(inputs, dict):
+                first_t = next((v for v in inputs.values() if isinstance(v, torch.Tensor)), None)
+                if first_t is not None:
+                    device = first_t.device
+                    batch_size = len(first_t)
+                else:
+                    device = next(model.parameters()).device if hasattr(model, "parameters") else torch.device("cpu")
+                    batch_size = len(next((v for v in inputs.values() if hasattr(v, "__len__")), []))
+                is_floating = any(v.is_floating_point() for v in inputs.values() if isinstance(v, torch.Tensor))
+            elif isinstance(inputs, torch.Tensor):
+                device = inputs.device
+                batch_size = inputs.size(0)
+                is_floating = inputs.is_floating_point()
+            else:
+                device = torch.device("cpu")
+                batch_size = len(inputs)
+                is_floating = True
 
-            if not inputs.is_floating_point() and self.method == "sensitivity":
+            if not is_floating and self.method == "sensitivity":
                 raise HardeningConfigurationError(
                     "Sensitivity detection using Gaussian noise is incompatible with discrete integer token IDs. Use 'margin' or 'entropy' for text."
                 )
@@ -166,8 +194,16 @@ class AdversarialDetectionDefense(BaseDefense):
                     clean_logits = torch.log(clean_probs.clamp_min(1e-12))
                     clean_preds = torch.argmax(clean_probs, dim=1)
                 else:
-                    clean_logits = model(inputs)
-                    if isinstance(clean_logits, tuple):
+                    if isinstance(inputs, dict):
+                        m_dev = next(model.parameters()).device if hasattr(model, "parameters") else device
+                        in_dict = {k: (v.to(m_dev) if isinstance(v, torch.Tensor) else v) for k, v in inputs.items()}
+                        clean_logits = model(**in_dict)
+                    else:
+                        clean_logits = model(inputs)
+
+                    if hasattr(clean_logits, "logits"):
+                        clean_logits = clean_logits.logits
+                    elif isinstance(clean_logits, tuple):
                         clean_logits = clean_logits[0]
 
                     if clean_logits.ndim > 1 and clean_logits.size(1) > 1:
@@ -206,9 +242,24 @@ class AdversarialDetectionDefense(BaseDefense):
                 # Evaluate prediction instability under small random noise
                 divergence_accum = torch.zeros(batch_size, device=device)
                 for _ in range(self.num_samples):
-                    noise = torch.randn_like(inputs) * self.noise_std
-                    noisy_logits = model(inputs + noise)
-                    if isinstance(noisy_logits, tuple):
+                    if isinstance(inputs, dict):
+                        m_dev = next(model.parameters()).device if hasattr(model, "parameters") else device
+                        noisy_inputs = {}
+                        for k, v in inputs.items():
+                            if isinstance(v, torch.Tensor) and v.is_floating_point():
+                                noisy_inputs[k] = (v + torch.randn_like(v) * self.noise_std).to(m_dev)
+                            elif isinstance(v, torch.Tensor):
+                                noisy_inputs[k] = v.to(m_dev)
+                            else:
+                                noisy_inputs[k] = v
+                        noisy_logits = model(**noisy_inputs)
+                    else:
+                        noise = torch.randn_like(inputs) * self.noise_std
+                        noisy_logits = model(inputs + noise)
+
+                    if hasattr(noisy_logits, "logits"):
+                        noisy_logits = noisy_logits.logits
+                    elif isinstance(noisy_logits, tuple):
                         noisy_logits = noisy_logits[0]
 
                     if noisy_logits.ndim > 1 and noisy_logits.size(1) > 1:
@@ -290,15 +341,36 @@ class AdversarialDetectionDefense(BaseDefense):
             is_adversarial = res["is_adversarial"]
             scores = res["scores"]
             detected_count = int(is_adversarial.sum().item())
-            total_samples = int(inputs.size(0))
+            if isinstance(inputs, dict):
+                total_samples = len(next((v for v in inputs.values() if hasattr(v, "__len__")), []))
+            elif isinstance(inputs, torch.Tensor):
+                total_samples = int(inputs.size(0))
+            else:
+                total_samples = len(inputs)
             detection_rate = float(detected_count / total_samples) if total_samples > 0 else 0.0
 
             # Filter inputs and labels synchronously to preserve dataset index alignment
             is_accepted = ~is_adversarial
-            hardened_inputs = inputs[is_accepted] if is_accepted.any() else inputs[:0]
+            if isinstance(inputs, dict):
+                hardened_inputs = {
+                    k: (
+                        v[is_accepted.to(v.device)]
+                        if isinstance(v, torch.Tensor) and v.ndim > 0 and len(v) == len(is_accepted)
+                        else v
+                    )
+                    for k, v in inputs.items()
+                }
+            elif isinstance(inputs, torch.Tensor):
+                hardened_inputs = inputs[is_accepted] if is_accepted.any() else inputs[:0]
+            else:
+                hardened_inputs = inputs
+
             hardened_labels = None
             if labels is not None:
-                hardened_labels = labels[is_accepted] if is_accepted.any() else labels[:0]
+                if isinstance(labels, torch.Tensor):
+                    hardened_labels = labels[is_accepted.to(labels.device)] if is_accepted.any() else labels[:0]
+                else:
+                    hardened_labels = [l for l, acc in zip(labels, is_accepted) if acc]
 
             exec_time = time.time() - start_time
             metadata_dict.update(

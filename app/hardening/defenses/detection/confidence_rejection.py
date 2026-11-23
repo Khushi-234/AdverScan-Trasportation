@@ -37,7 +37,7 @@ class ConfidenceRejectionModelWrapper(nn.Module):
         self.rejection_value = float(rejection_value)
         self.last_rejection_result: Optional[Dict[str, Any]] = None
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: Any = None, **kwargs: Any) -> torch.Tensor:
         """
         Forward pass actively routing through confidence rejection.
 
@@ -46,24 +46,37 @@ class ConfidenceRejectionModelWrapper(nn.Module):
         preventing generic evaluation loops from silently bypassing rejection.
         """
         if not self.enforce_defense:
+            if isinstance(x, dict):
+                return self.model(**x)
+            if kwargs:
+                return self.model(x, **kwargs) if x is not None else self.model(**kwargs)
             return self.model(x)
 
-        res = self.predict_with_rejection(x)
+        if isinstance(x, dict):
+            res = self.predict_with_rejection(x)
+        elif kwargs:
+            combined = {**kwargs}
+            if x is not None:
+                combined["input_ids"] = x
+            res = self.predict_with_rejection(combined)
+        else:
+            res = self.predict_with_rejection(x)
+
         self.last_rejection_result = res
         outputs = res["logits"].clone()
         is_rejected = res["is_rejected"]
 
         if is_rejected.any():
-            outputs[is_rejected] = self.rejection_value
+            outputs[is_rejected.to(outputs.device)] = self.rejection_value
 
         return outputs
 
-    def predict_with_rejection(self, x: torch.Tensor) -> Dict[str, Any]:
+    def predict_with_rejection(self, x: Any) -> Dict[str, Any]:
         """
         Evaluate inputs and return predictions alongside abstention / rejection flags.
 
         Args:
-            x: Input tensor.
+            x: Input tensor or dict of input tensors.
 
         Returns:
             Dict containing:
@@ -85,8 +98,20 @@ class ConfidenceRejectionModelWrapper(nn.Module):
                 outputs = torch.log(probs.clamp_min(1e-12))
                 max_probs, preds = torch.max(probs, dim=1)
             else:
-                outputs = self.model(x)
-                if isinstance(outputs, tuple):
+                if isinstance(x, dict):
+                    # Ensure tensors are moved to model device if applicable
+                    device = next(self.model.parameters()).device if hasattr(self.model, "parameters") else None
+                    if device is not None:
+                        x_dict = {k: (v.to(device) if isinstance(v, torch.Tensor) else v) for k, v in x.items()}
+                    else:
+                        x_dict = x
+                    outputs = self.model(**x_dict)
+                else:
+                    outputs = self.model(x)
+
+                if hasattr(outputs, "logits"):
+                    outputs = outputs.logits
+                elif isinstance(outputs, tuple):
                     outputs = outputs[0]
 
                 if outputs.ndim > 1 and outputs.size(1) > 1:
@@ -202,15 +227,36 @@ class ConfidenceRejectionDefense(BaseDefense):
                 is_rejected = res["is_rejected"]
                 is_accepted = ~is_rejected
                 rejected_count = int(is_rejected.sum().item())
-                total_samples = int(inputs.size(0))
+                if isinstance(inputs, dict):
+                    total_samples = len(next((v for v in inputs.values() if hasattr(v, "__len__")), []))
+                elif isinstance(inputs, torch.Tensor):
+                    total_samples = int(inputs.size(0))
+                else:
+                    total_samples = len(inputs)
                 rejection_rate = float(rejected_count / total_samples) if total_samples > 0 else 0.0
                 coverage = float(1.0 - rejection_rate)
 
             # Filter inputs and labels synchronously to preserve dataset index alignment
-            hardened_inputs = inputs[is_accepted] if is_accepted.any() else inputs[:0]
+            if isinstance(inputs, dict):
+                hardened_inputs = {
+                    k: (
+                        v[is_accepted.to(v.device)]
+                        if isinstance(v, torch.Tensor) and v.ndim > 0 and len(v) == len(is_accepted)
+                        else v
+                    )
+                    for k, v in inputs.items()
+                }
+            elif isinstance(inputs, torch.Tensor):
+                hardened_inputs = inputs[is_accepted] if is_accepted.any() else inputs[:0]
+            else:
+                hardened_inputs = inputs
+
             hardened_labels = None
             if labels is not None:
-                hardened_labels = labels[is_accepted] if is_accepted.any() else labels[:0]
+                if isinstance(labels, torch.Tensor):
+                    hardened_labels = labels[is_accepted.to(labels.device)] if is_accepted.any() else labels[:0]
+                else:
+                    hardened_labels = [l for l, acc in zip(labels, is_accepted) if acc]
 
             exec_time = time.time() - start_time
             metadata_dict.update(
