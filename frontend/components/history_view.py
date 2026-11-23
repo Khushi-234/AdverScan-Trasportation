@@ -232,7 +232,7 @@ def render_history_view() -> None:
                 col_btn1, col_btn2 = st.columns(2)
                 with col_btn1:
                     is_current_inspect = (selected_scan_id == s_id)
-                    btn_label = "Hide" if is_current_inspect else "Inspect"
+                    btn_label = "Hide Details" if is_current_inspect else "Inspect"
                     if st.button(btn_label, key=f"inspect_{s_id}", use_container_width=True):
                         set_state("history_inspected_scan_id", None if is_current_inspect else s_id)
                         st.rerun()
@@ -242,11 +242,11 @@ def render_history_view() -> None:
                         set_workflow_stage("comparison")
                         st.rerun()
 
-            st.markdown("---")
+            # Inline Drill-Down Drawer directly under this particular assessment card
+            if selected_scan_id == s_id:
+                render_assessment_detail_drawer(s_id)
 
-    # 4. Detailed Drill-Down Drawer (if an assessment is selected)
-    if selected_scan_id:
-        render_assessment_detail_drawer(selected_scan_id)
+            st.markdown("---")
 
 
 def render_assessment_detail_drawer(scan_id: str) -> None:
@@ -256,8 +256,23 @@ def render_assessment_detail_drawer(scan_id: str) -> None:
         st.error(f"Could not load scan details for '{scan_id}'.")
         return
 
-    st.markdown(f"## 🔍 Assessment Drill-Down: `{scan_id}`")
-    st.caption(f"Full historical audit for {detail.get('model_name', 'Model')} on {detail.get('dataset_name', 'Dataset')}")
+    st.markdown(
+        f"""
+        <div style="background: rgba(255, 255, 255, 0.02); border-left: 4px solid var(--accent-cyan, #06b6d4); border-top: 1px solid rgba(255, 255, 255, 0.08); border-right: 1px solid rgba(255, 255, 255, 0.08); border-bottom: 1px solid rgba(255, 255, 255, 0.08); border-radius: 6px; padding: 1rem 1.25rem; margin-top: 0.75rem; margin-bottom: 1rem;">
+            <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap;">
+                <div>
+                    <div style="font-weight: 700; font-size: 1.15rem; color: var(--text-primary);">
+                        🔍 Assessment Audit & Telemetry: <code>{scan_id}</code>
+                    </div>
+                    <div style="font-size: 0.85rem; color: var(--text-secondary); margin-top: 0.2rem;">
+                        Target Model: <strong>{detail.get('model_name', 'Model')}</strong> • Dataset: <strong>{detail.get('dataset_name', 'Dataset')}</strong> • Modality: <strong>{str(detail.get('modality', 'image')).capitalize()}</strong>
+                    </div>
+                </div>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
     tab_overview, tab_attacks, tab_defenses, tab_xai, tab_vulns, tab_report = st.tabs([
         "Model & Dataset",
