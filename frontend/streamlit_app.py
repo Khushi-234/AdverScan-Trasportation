@@ -2564,7 +2564,6 @@ elif stage == "attack_results":
                         )
                         set_xai_result(res_xai)
                         set_report_result(None)
-<<<<<<< ours
                         active_sid = ensure_active_scan_id()
                         if res_xai.get("executed", False):
                             try:
@@ -2576,8 +2575,6 @@ elif stage == "attack_results":
                                 )
                             except Exception as xai_err:
                                 print(f"[AdverScan Database] Error saving XAI: {xai_err}")
-=======
->>>>>>> theirs
                         if res_xai.get("executed", False):
                             st.success(f"Generated {expander_tech.upper()} explanation successfully!")
                         else:
@@ -4019,5 +4016,4 @@ elif stage == "history":
 # ==============================================================================
 elif stage == "comparison":
     render_comparison_view()
-
 
