@@ -164,28 +164,14 @@ class ReportWriter:
 
     def _write_pdf(self, result: ReportResult, path: Path) -> bool:
         """
-        Write the report as a PDF document if a supported PDF engine is available.
-        Returns True if successful, False if no PDF engine is installed.
+        Write the report as a publication-grade PDF document using ReportLab Platypus.
+        Returns True if successful, False if no PDF engine is installed or generation fails.
         """
         try:
-            import reportlab  # type: ignore # noqa: F401
-            from reportlab.lib.pagesizes import letter
-            from reportlab.pdfgen import canvas
+            from .pdf_generator import compile_pdf_report
 
             path.parent.mkdir(parents=True, exist_ok=True)
-            c = canvas.Canvas(str(path), pagesize=letter)
-            textobject = c.beginText(40, 750)
-            textobject.setFont("Courier", 8)
-            for line in result.formatted_report.splitlines():
-                if textobject.getY() <= 45:
-                    c.drawText(textobject)
-                    c.showPage()
-                    textobject = c.beginText(40, 750)
-                    textobject.setFont("Courier", 8)
-                textobject.textLine(line[:95])
-            c.drawText(textobject)
-            c.showPage()
-            c.save()
+            compile_pdf_report(result, target_path=path)
             return True
         except ImportError:
             return False

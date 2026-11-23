@@ -451,3 +451,108 @@ def test_report_writer_pdf_multipage(tmp_path):
         assert len(reader.pages) >= 1
     except ImportError:
         pass
+
+
+def test_compile_pdf_report_from_report_result():
+    """Verify compile_pdf_report compiles valid PDF bytes directly from ReportResult."""
+    from app.report_generator.pdf_generator import compile_pdf_report
+
+    sample_data = ReportData(
+        model_info={"model_name": "DirectPDFNet", "architecture": "ResNet18"},
+        baseline_performance={"metrics": {"accuracy": 0.94}},
+        attack_results={
+            "PGD": {"parameters": {"eps": 0.03}, "evaluation": {"metrics": {"attack_success_rate": 0.82}}},
+        },
+        vulnerability_score=68.5,
+        risk_level="HIGH",
+    )
+    generator = ReportGenerator()
+    res = generator.generate(sample_data)
+
+    pdf_bytes = compile_pdf_report(res)
+    assert isinstance(pdf_bytes, bytes)
+    assert pdf_bytes.startswith(b"%PDF-")
+    assert len(pdf_bytes) > 2000
+
+
+def test_compile_pdf_report_from_history_detail(tmp_path):
+    """Verify compile_pdf_report compiles valid PDF bytes from raw history detail dict."""
+    from app.report_generator.pdf_generator import compile_pdf_report
+    from app.storage.storage import StorageRepository
+
+    db_path = tmp_path / "test_pdf_history.db"
+    art_dir = tmp_path / "artifacts"
+    repo = StorageRepository(db_path=str(db_path), artifact_dir=art_dir)
+
+    scan_id = "SCAN-PDF-001"
+    repo.create_assessment(
+        scan_id=scan_id,
+        assessment_name="Historical PDF Scan",
+        model_info={"model_name": "ResNet-50", "architecture": "ResNet", "framework": "PyTorch"},
+        dataset_info={"dataset_name": "TestSet", "total_samples": 50},
+    )
+    repo.record_attack_execution(
+        scan_id=scan_id,
+        attack_result={"attack_name": "PGD", "clean_accuracy": 0.95, "adv_accuracy": 0.15, "asr": 0.80},
+    )
+    repo.record_defense_execution(
+        scan_id=scan_id,
+        defense_result={
+            "defense_technique": "spatial_smoothing",
+            "validation_status": "accepted",
+            "before_clean_accuracy": 0.95,
+            "after_clean_accuracy": 0.94,
+            "before_adv_accuracy": 0.15,
+            "after_adv_accuracy": 0.65,
+            "before_asr": 0.80,
+            "after_asr": 0.30,
+            "asr_reduction_percentage": 50.0,
+            "accuracy_recovery": 50.0,
+            "is_improved": True,
+        },
+    )
+    repo.record_vulnerabilities(
+        scan_id=scan_id,
+        vuln_result={"vulnerability_score": 62.0, "risk_level": "High"},
+    )
+    repo.update_assessment_status(
+        scan_id=scan_id,
+        status="completed",
+        overall_summary={"risk_level": "HIGH", "vulnerability_score": 62.0},
+    )
+
+    detail = repo.get_assessment(scan_id)
+    assert detail is not None
+
+    pdf_bytes = compile_pdf_report(detail)
+    assert isinstance(pdf_bytes, bytes)
+    assert pdf_bytes.startswith(b"%PDF-")
+    assert len(pdf_bytes) > 2000
+
+    # Save via ArtifactManager and verify persistence
+    saved_rel = repo.artifacts.save_artifact(
+        data=pdf_bytes,
+        scan_id=scan_id,
+        category="reports",
+        filename_prefix=f"Security_Report_{scan_id}",
+        extension=".pdf",
+    )
+    assert saved_rel is not None
+    assert saved_rel.endswith(".pdf")
+
+    # Record report in database
+    rec = repo.record_report(
+        scan_id=scan_id,
+        report_path=saved_rel,
+        report_name=f"Security_Report_{scan_id}.pdf",
+        report_format="pdf",
+        summary_metrics={"risk_level": "HIGH", "vulnerability_score": 62.0},
+    )
+    assert rec["report_format"] == "pdf"
+    assert rec["report_name"] == f"Security_Report_{scan_id}.pdf"
+
+    # Reload from storage
+    loaded_bytes = repo.artifacts.load_artifact(saved_rel)
+    assert isinstance(loaded_bytes, bytes)
+    assert loaded_bytes.startswith(b"%PDF-")
+    assert len(loaded_bytes) == len(pdf_bytes)

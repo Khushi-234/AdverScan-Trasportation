@@ -11,6 +11,7 @@ Public API:
 """
 
 from .execution_summary import ExecutionSummary, ModuleExecutionRecord
+from .pdf_generator import compile_pdf_report
 from .report_data import ReportData
 from .report_generator import ReportGenerator
 from .report_result import ReportResult
@@ -23,4 +24,5 @@ __all__ = [
     "ReportGenerator",
     "ReportResult",
     "ReportWriter",
+    "compile_pdf_report",
 ]
