@@ -368,15 +368,16 @@ def detect_model_domain(
         vision_keywords = (
             "vit", "resnet", "convnext", "swin", "deit", "vision", "cifar", "gtsrb",
             "mnist", "imagenet", "mobilenet", "efficientnet", "vgg", "clip_vision", "beit",
-            "yolo", "densenet", "segmentation", "object_detection"
+            "yolo", "densenet", "segmentation", "object_detection", "scenery", "intel", "traffic"
         )
         ts_keywords = (
             "patchtst", "patchtsmixer", "timesnet", "informer", "autoformer",
             "timeseries", "time-series", "chronos", "timesfm", "1dcnn", "cnn1d",
-            "lstm", "gru"
+            "lstm", "gru", "ecg", "sensor", "telemetry", "temporal"
         )
         tabular_keywords = (
-            "tabular", "tabnet", "tabtransformer", "fttransformer", "tabularmlp"
+            "tabular", "tabnet", "tabtransformer", "fttransformer", "tabularmlp",
+            "credit", "fraud", "census", "adult", "churn", "housing", "titanic"
         )
 
         # Fast local name keyword matching first

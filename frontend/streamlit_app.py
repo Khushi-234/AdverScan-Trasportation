@@ -61,6 +61,24 @@ from frontend.services.ingestion_service import (
     get_dataset_total_samples,
     load_model_and_dataset,
 )
+from app.ingestion.utils.model_utils import detect_model_domain
+
+# Domain selection options, labels and descriptions
+DATA_DOMAIN_OPTIONS = ["image", "text", "tabular", "time-series"]
+
+DATA_DOMAIN_LABELS = {
+    "image": "Image (Computer Vision)",
+    "text": "Text (Natural Language Processing)",
+    "tabular": "Tabular (Structured / Relational Data)",
+    "time-series": "Time-Series (Sequential / Temporal Signals)",
+}
+
+DATA_DOMAIN_DESCRIPTIONS = {
+    "image": "2D/3D visual tensors (e.g. GTSRB, CIFAR-10, ImageNet, ViT, ResNet, CNNs)",
+    "text": "Tokenized text sequences & embeddings (e.g. SST-2, IMDB, BERT, RoBERTa, DistilBERT)",
+    "tabular": "Structured numerical & categorical features (e.g. Adult Census, Credit Fraud, Random Forest, MLP)",
+    "time-series": "Sequential sensor traces & temporal signals (e.g. ECG signals, telemetry, forecasting)",
+}
 from frontend.services.report_service import generate_security_report
 from frontend.services.vulnerability_service import (
     assess_and_score_vulnerability,
@@ -272,7 +290,7 @@ elif stage == "ingestion":
         preset_choice = st.selectbox(
             "Select Pre-Configured Model Preset",
             preset_keys,
-            format_func=lambda k: f"{k} ({presets[k].get('data_domain', 'image').capitalize()} - {presets[k].get('name', '')})",
+            format_func=lambda k: f"{k} ({DATA_DOMAIN_LABELS.get(presets[k].get('data_domain', 'image'), presets[k].get('data_domain', 'image').capitalize())} - {presets[k].get('name', '')})",
         )
         selected_preset_info = presets[preset_choice]
         model_identifier = preset_choice
@@ -281,19 +299,41 @@ elif stage == "ingestion":
         default_framework = selected_preset_info.get("framework", "huggingface")
 
         st.caption(
-            f"**Preset Description**: {selected_preset_info.get('description', '')}"
+            f"**Preset Description**: {selected_preset_info.get('description', '')} • **Domain**: {DATA_DOMAIN_LABELS.get(default_domain, default_domain.capitalize())}"
         )
 
     elif source_type == "Hugging Face Model ID":
         model_identifier = st.text_input(
             "Hugging Face Repository ID",
             value="bazyl/gtsrb-model",
-            placeholder="e.g. bazyl/gtsrb-model, google/vit-base-patch16-224",
+            placeholder="e.g. bazyl/gtsrb-model, google/vit-base-patch16-224, distilbert-base-uncased",
             help="Hugging Face model repository identifier",
         )
+        detected_dom = detect_model_domain(model_identifier.strip()) if model_identifier.strip() else "unknown"
+        dom_idx = DATA_DOMAIN_OPTIONS.index(detected_dom) if detected_dom in DATA_DOMAIN_OPTIONS else 0
+
         default_domain = st.selectbox(
-            "Data Domain", ["image", "text", "tabular", "time-series"], index=0
+            "Data Domain",
+            options=DATA_DOMAIN_OPTIONS,
+            index=dom_idx,
+            format_func=lambda d: DATA_DOMAIN_LABELS.get(d, d.capitalize()),
+            help="Select the data domain representation expected by this model.",
         )
+        if detected_dom in DATA_DOMAIN_OPTIONS:
+            st.markdown(
+                f"""
+                <div style="background: rgba(16, 185, 129, 0.08); border: 1px solid rgba(16, 185, 129, 0.25); border-radius: 6px; padding: 6px 12px; margin-top: -6px; margin-bottom: 8px;">
+                    <span style="font-size: 0.84rem; color: #10b981; font-weight: 600;">
+                        💡 Suggested Domain: <strong>{DATA_DOMAIN_LABELS.get(detected_dom)}</strong>
+                    </span>
+                    <span style="font-size: 0.78rem; color: var(--text-secondary); margin-left: 6px;">
+                        (Auto-detected from model identifier)
+                    </span>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+        st.caption(f"ℹ️ **Supported Architectures**: {DATA_DOMAIN_DESCRIPTIONS.get(default_domain, '')}")
         default_framework = "huggingface"
 
     else:  # Local Model Path
@@ -303,10 +343,41 @@ elif stage == "ingestion":
             placeholder="e.g. models/classifier.pth or models/tabular-mlp-adult-census.pt",
             help="Path to pre-trained model file on local disk",
         )
-        default_domain = st.selectbox(
-            "Data Domain", ["tabular", "image", "text", "time-series"], index=0
-        )
-        default_framework = st.selectbox("Framework", ["pytorch", "sklearn"], index=0)
+        detected_dom = detect_model_domain(model_identifier.strip()) if model_identifier.strip() else "unknown"
+        dom_idx = DATA_DOMAIN_OPTIONS.index(detected_dom) if detected_dom in DATA_DOMAIN_OPTIONS else 2
+
+        col_dom, col_fw = st.columns([1, 1])
+        with col_dom:
+            default_domain = st.selectbox(
+                "Data Domain",
+                options=DATA_DOMAIN_OPTIONS,
+                index=dom_idx,
+                format_func=lambda d: DATA_DOMAIN_LABELS.get(d, d.capitalize()),
+                help="Select the data domain representation expected by this model.",
+            )
+            if detected_dom in DATA_DOMAIN_OPTIONS:
+                st.markdown(
+                    f"""
+                    <div style="background: rgba(16, 185, 129, 0.08); border: 1px solid rgba(16, 185, 129, 0.25); border-radius: 6px; padding: 6px 12px; margin-top: -6px; margin-bottom: 8px;">
+                        <span style="font-size: 0.84rem; color: #10b981; font-weight: 600;">
+                            💡 Suggested Domain: <strong>{DATA_DOMAIN_LABELS.get(detected_dom)}</strong>
+                        </span>
+                        <span style="font-size: 0.78rem; color: var(--text-secondary); margin-left: 6px;">
+                            (Auto-detected from model path)
+                        </span>
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
+            st.caption(f"ℹ️ **Supported Architectures**: {DATA_DOMAIN_DESCRIPTIONS.get(default_domain, '')}")
+
+        with col_fw:
+            default_framework = st.selectbox(
+                "Framework",
+                ["pytorch", "sklearn"],
+                index=0,
+                format_func=lambda fw: "🔥 PyTorch (.pt, .pth)" if fw == "pytorch" else "⚙️ Scikit-Learn (.pkl, .joblib)",
+            )
 
     col_data, col_sample = st.columns([1, 1])
 
@@ -2564,7 +2635,6 @@ elif stage == "attack_results":
                         )
                         set_xai_result(res_xai)
                         set_report_result(None)
-<<<<<<< ours
                         active_sid = ensure_active_scan_id()
                         if res_xai.get("executed", False):
                             try:
@@ -2576,8 +2646,6 @@ elif stage == "attack_results":
                                 )
                             except Exception as xai_err:
                                 print(f"[AdverScan Database] Error saving XAI: {xai_err}")
-=======
->>>>>>> theirs
                         if res_xai.get("executed", False):
                             st.success(f"Generated {expander_tech.upper()} explanation successfully!")
                         else:
