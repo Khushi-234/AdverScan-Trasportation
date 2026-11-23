@@ -20,6 +20,7 @@ from frontend.services.assessment_history_service import (
     get_scan_detail,
     get_scan_history,
     get_storage_repository,
+    mark_scan_completed,
 )
 from app.storage.db import get_db_session
 from app.storage.models import ModelRecord, DatasetRecord
@@ -237,10 +238,15 @@ def render_history_view() -> None:
                         set_state("history_inspected_scan_id", None if is_current_inspect else s_id)
                         st.rerun()
                 with col_btn2:
-                    if st.button("Compare", key=f"comp_btn_{s_id}", use_container_width=True):
-                        set_state("comparison_baseline_scan_id", s_id)
-                        set_workflow_stage("comparison")
-                        st.rerun()
+                    if status == "running":
+                        if st.button("Mark Done", key=f"mark_comp_{s_id}", use_container_width=True):
+                            mark_scan_completed(s_id)
+                            st.rerun()
+                    else:
+                        if st.button("Compare", key=f"comp_btn_{s_id}", use_container_width=True):
+                            set_state("comparison_baseline_scan_id", s_id)
+                            set_workflow_stage("comparison")
+                            st.rerun()
 
             # Inline Drill-Down Drawer directly under this particular assessment card
             if selected_scan_id == s_id:
@@ -273,6 +279,15 @@ def render_assessment_detail_drawer(scan_id: str) -> None:
         """,
         unsafe_allow_html=True,
     )
+
+    if str(detail.get("status", "")).lower() == "running":
+        col_st_msg, col_st_act = st.columns([3, 1])
+        with col_st_msg:
+            st.warning("⚠️ This scan is marked as 'Running' (pipeline session was exited or interrupted before final report).")
+        with col_st_act:
+            if st.button("✅ Mark Completed", key=f"drawer_mark_comp_{scan_id}", use_container_width=True):
+                mark_scan_completed(scan_id)
+                st.rerun()
 
     tab_overview, tab_attacks, tab_defenses, tab_xai, tab_vulns, tab_report = st.tabs([
         "Model & Dataset",
@@ -570,8 +585,110 @@ def render_assessment_detail_drawer(scan_id: str) -> None:
         if not reports:
             st.info("No compiled report generated for this scan.")
         else:
+            scan_id = detail.get("scan_id", "SCAN-UNKNOWN")
+            repo = get_storage_repository()
+
+            st.markdown("#### 📄 Certified Assessment Security Reports")
+            st.caption("Retrieve or download certified security evaluation reports for this scan.")
+
+        # 1. Resolve or compile official PDF report
+        pdf_bytes = None
+        pdf_filename = f"adverscan_security_report_{scan_id}.pdf"
+        pdf_rep_record = None
+
+        # Check existing recorded reports on disk
+        for rep in reports:
+            fmt = str(rep.get("report_format", "")).lower()
+            r_path = rep.get("report_path", "")
+            resolved_p = None
+            if r_path:
+                p_cand = Path(r_path)
+                if p_cand.is_file():
+                    resolved_p = p_cand
+                elif repo and (repo.artifacts.base_dir / r_path).is_file():
+                    resolved_p = (repo.artifacts.base_dir / r_path).resolve()
+
+            if fmt == "pdf" and resolved_p and resolved_p.is_file():
+                try:
+                    with open(resolved_p, "rb") as f:
+                        pdf_bytes = f.read()
+                    pdf_filename = resolved_p.name
+                    pdf_rep_record = rep
+                    break
+                except Exception:
+                    pass
+
+        # If no PDF pre-exists on disk, compile on-demand from scan detail
+        if not pdf_bytes:
+            try:
+                from app.report_generator.pdf_generator import compile_pdf_report
+                pdf_bytes = compile_pdf_report(detail)
+                # Persist to disk and record in database so subsequent fetches are instant
+                if repo:
+                    saved_path = repo.artifacts.save_artifact(
+                        data=pdf_bytes,
+                        scan_id=scan_id,
+                        category="reports",
+                        filename_prefix=f"Security_Report_{scan_id}",
+                        extension=".pdf",
+                    )
+                    if saved_path:
+                        repo.record_report(
+                            scan_id=scan_id,
+                            report_path=saved_path,
+                            report_name=f"Security_Report_{scan_id}.pdf",
+                            report_format="pdf",
+                            summary_metrics=detail.get("overall_summary") or {},
+                        )
+            except Exception:
+                pdf_bytes = None
+
+        # 2. Prominent Certified PDF Download Card
+        st.markdown(
+            """
+            <div class="modern-card card-accent-cyan" style="padding: 1rem; margin-bottom: 1rem;">
+                <div style="font-size: 1.05rem; font-weight: 700; color: var(--text-primary);">
+                    Certified PDF Security Assessment Report
+                </div>
+                <div style="font-size: 0.85rem; color: var(--text-secondary); margin-top: 0.2rem;">
+                    Official audit document containing model specs, threat telemetry, vulnerability diagnostics, and hardening re-tests.
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+        col_pdf_dl, col_pdf_info = st.columns([1, 2])
+        with col_pdf_dl:
+            if pdf_bytes:
+                st.download_button(
+                    label="⬇️ Download PDF Report (.pdf)",
+                    data=pdf_bytes,
+                    file_name=pdf_filename,
+                    mime="application/pdf",
+                    type="primary",
+                    key=f"dl_pdf_btn_{scan_id}",
+                    use_container_width=True,
+                )
+            else:
+                st.button("⬇️ PDF Unavailable", disabled=True, key=f"dl_pdf_dis_{scan_id}", use_container_width=True)
+
+        with col_pdf_info:
+            file_sz_kb = f"{len(pdf_bytes) / 1024:.1f} KB" if pdf_bytes else "N/A"
+            gen_time = (
+                pdf_rep_record.get("generated_at")
+                if pdf_rep_record
+                else (detail.get("completed_at") or detail.get("created_at") or "Certified")
+            )
+            st.caption(f"Status: **Certified PDF Ready** • Size: **{file_sz_kb}** • Recorded: **{gen_time}**")
+
+        # 3. Additional Formats & Raw Artifacts
+        if reports:
+            st.markdown("<div style='height: 10px;'></div>", unsafe_allow_html=True)
+            st.markdown("##### 📁 Stored Assessment Report Files")
             for rep in reports:
                 r_name = rep.get("report_name", "Report")
+                r_fmt = str(rep.get("report_format", "bin")).upper()
                 r_path = rep.get("report_path", "")
                 st.write(f"📄 **{r_name}** ({rep.get('report_format', 'pdf').upper()})")
                 st.caption(f"Path: `{r_path}` • Generated: {rep.get('generated_at')}")
@@ -583,4 +700,30 @@ def render_assessment_detail_drawer(scan_id: str) -> None:
                             file_name=Path(r_path).name,
                             key=f"dl_rep_{rep.get('report_id')}",
                         )
+                resolved_p = None
+                if r_path:
+                    if Path(r_path).is_file():
+                        resolved_p = Path(r_path)
+                    elif repo and (repo.artifacts.base_dir / r_path).is_file():
+                        resolved_p = (repo.artifacts.base_dir / r_path).resolve()
+
+                col_r_meta, col_r_act = st.columns([3, 1])
+                with col_r_meta:
+                    st.write(f"📄 **{r_name}** (`{r_fmt}`)")
+                    st.caption(f"Path: `{r_path}` • Created: {rep.get('generated_at')}")
+                with col_r_act:
+                    if resolved_p and resolved_p.is_file():
+                        try:
+                            with open(resolved_p, "rb") as f:
+                                st.download_button(
+                                    label=f"⬇️ {r_fmt}",
+                                    data=f.read(),
+                                    file_name=resolved_p.name,
+                                    key=f"dl_stored_{rep.get('report_id')}_{r_fmt}",
+                                    use_container_width=True,
+                                )
+                        except Exception:
+                            st.caption("Unable to read file")
+                    else:
+                        st.caption("File on disk")
 

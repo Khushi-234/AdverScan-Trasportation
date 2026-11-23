@@ -100,22 +100,7 @@ def generate_security_report(
     }
 
     # 4. Format Attack Results (M3)
-    atk_id = str(attack_result.get("attack_name", "fgsm")).lower()
-    atk_dict = {
-        atk_id: {
-            "attack_name": attack_result.get("attack_name", "FGSM"),
-            "category": (attack_result.get("attack_meta") or {}).get("category", "Gradient-based"),
-            "threat_model": "White-Box",
-            "execution_time_seconds": attack_result.get("execution_time", 0.0),
-            "perturbation_metrics": attack_result.get("perturbation_metrics", {}),
-            "parameters": attack_result.get("parameters", {}),
-            "epsilon": attack_result.get("epsilon_used", 0.05),
-        }
-    }
-
-    # 5. Format Vulnerability Assessment & Scoring (M5) - Authentic M5 integration (A11, A12, A15)
-    v_res = vulnerability_result or attack_result.get("vulnerability_assessment")
-    adv_acc_raw = attack_result.get("adversarial_accuracy")
+    adv_acc_raw = attack_result.get("adversarial_accuracy") if attack_result.get("adversarial_accuracy") is not None else attack_result.get("adv_accuracy")
     if adv_acc_raw is not None:
         try:
             adv_acc_pct = float(adv_acc_raw)
@@ -124,10 +109,11 @@ def generate_security_report(
             adv_acc_pct = None
             adv_acc_frac = None
     else:
-        adv_acc_pct = 0.0
-        adv_acc_frac = 0.0
+        is_zero_asr = (attack_result.get("asr_percentage") == 0.0 or attack_result.get("asr") == 0.0 or attack_result.get("attack_success_rate") == 0.0)
+        adv_acc_pct = clean_acc_pct if is_zero_asr else 0.0
+        adv_acc_frac = clean_acc_frac if is_zero_asr else 0.0
 
-    asr_raw = attack_result.get("asr_percentage")
+    asr_raw = attack_result.get("asr_percentage") if attack_result.get("asr_percentage") is not None else attack_result.get("attack_success_rate", attack_result.get("asr"))
     if asr_raw is not None:
         try:
             asr_pct = float(asr_raw)
@@ -136,8 +122,51 @@ def generate_security_report(
             asr_pct = None
             asr_frac = None
     else:
-        asr_pct = None
-        asr_frac = None
+        asr_pct = 0.0
+        asr_frac = 0.0
+
+    atk_id = str(attack_result.get("attack_name", "fgsm")).lower()
+    pert_dict = attack_result.get("perturbation_metrics") or {}
+    linf_val = (
+        attack_result.get("linf")
+        or attack_result.get("l_inf")
+        or pert_dict.get("linf")
+        or pert_dict.get("l_inf")
+        or pert_dict.get("linf_mean")
+        or attack_result.get("epsilon_used")
+        or 0.0
+    )
+    l2_val = (
+        attack_result.get("l2")
+        or attack_result.get("l_2")
+        or pert_dict.get("l2")
+        or pert_dict.get("l_2")
+        or pert_dict.get("l2_mean")
+        or pert_dict.get("mean_perturbation")
+        or 0.0
+    )
+
+    atk_dict = {
+        atk_id: {
+            "attack_name": attack_result.get("attack_name", "FGSM"),
+            "category": (attack_result.get("attack_meta") or {}).get("category", "Gradient-based"),
+            "threat_model": "White-Box",
+            "clean_accuracy": clean_acc_frac,
+            "adversarial_accuracy": adv_acc_frac,
+            "attack_success_rate": asr_frac,
+            "execution_time_seconds": attack_result.get("execution_time", 0.0),
+            "perturbation_metrics": pert_dict,
+            "l_inf_distortion": float(linf_val),
+            "l_2_distortion": float(l2_val),
+            "linf": float(linf_val),
+            "l2": float(l2_val),
+            "parameters": attack_result.get("parameters", {}),
+            "epsilon": attack_result.get("epsilon_used", 0.05),
+        }
+    }
+
+    # 5. Format Vulnerability Assessment & Scoring (M5) - Authentic M5 integration (A11, A12, A15)
+    v_res = vulnerability_result or attack_result.get("vulnerability_assessment")
 
     if v_res and isinstance(v_res, dict):
         vuln_score = float(v_res.get("vulnerability_score", 0.0))

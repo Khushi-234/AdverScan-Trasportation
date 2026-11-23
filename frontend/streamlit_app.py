@@ -1683,6 +1683,17 @@ elif stage == "attack_config":
                         )
                 except Exception as rec_err:
                     print(f"[AdverScan Database] Notice generating recommendations: {rec_err}")
+
+                # Ensure scan is marked completed so leaving the pipeline doesn't leave it in 'running'
+                repo.update_assessment_status(
+                    scan_id=active_sid,
+                    status="completed",
+                    overall_summary={
+                        "risk_level": (vuln_result or {}).get("risk_level", "Medium"),
+                        "vulnerability_score": (vuln_result or {}).get("vulnerability_score", 50.0),
+                        "asr": attack_result.get("asr_percentage", 0.0),
+                    },
+                )
             except Exception as persist_err:
                 print(f"[AdverScan Database] Error recording attack: {persist_err}")
             set_workflow_stage("attack_results")
@@ -1719,10 +1730,31 @@ elif stage == "attack_results":
             "This experiment reflects model behavior on generated synthetic samples, not a real dataset benchmark."
         )
 
-    asr = result.get("asr_percentage", 0.0)
-    clean_acc = result.get("clean_accuracy", 0.0)
-    adv_acc = result.get("adversarial_accuracy", 0.0)
-    acc_drop = result.get("accuracy_drop", 0.0)
+    asr_raw_in = result.get("asr_percentage")
+    if asr_raw_in is None:
+        asr_raw_in = result.get("attack_success_rate", result.get("asr", 0.0))
+    try:
+        asr = float(asr_raw_in) if asr_raw_in is not None else 0.0
+    except (ValueError, TypeError):
+        asr = 0.0
+
+    clean_acc_raw = result.get("clean_accuracy") if result.get("clean_accuracy") is not None else result.get("clean_acc", 0.0)
+    try:
+        clean_acc = float(clean_acc_raw) if clean_acc_raw is not None else 0.0
+    except (ValueError, TypeError):
+        clean_acc = 0.0
+
+    adv_acc_raw = result.get("adversarial_accuracy") if result.get("adversarial_accuracy") is not None else result.get("adv_accuracy", 0.0)
+    try:
+        adv_acc = float(adv_acc_raw) if adv_acc_raw is not None else 0.0
+    except (ValueError, TypeError):
+        adv_acc = 0.0
+
+    acc_drop_raw = result.get("accuracy_drop")
+    try:
+        acc_drop = float(acc_drop_raw) if acc_drop_raw is not None else (clean_acc - adv_acc)
+    except (ValueError, TypeError):
+        acc_drop = 0.0
 
     clean_conf = result.get("clean_confidence", 0.0)
     adv_conf = result.get("adversarial_confidence", 0.0)
@@ -1901,14 +1933,29 @@ elif stage == "attack_results":
     )
 
     col_v1, col_v2, col_v3 = st.columns(3)
-    sub_scores = vuln_res.get("sub_scores", {})
-    asr_sc = float(sub_scores.get("asr_score", vuln_res.get("asr_score", asr)))
-    deg_sc = float(sub_scores.get("degradation_score", vuln_res.get("degradation_score", 0.0)))
-    stl_sc = float(sub_scores.get("stealth_score", vuln_res.get("stealth_score", 0.0)))
-    weights = vuln_res.get("weights", {"weight_asr": 0.50, "weight_degradation": 0.35, "weight_stealth": 0.15})
-    w_asr = float(weights.get("weight_asr", 0.50))
-    w_deg = float(weights.get("weight_degradation", 0.35))
-    w_stl = float(weights.get("weight_stealth", 0.15))
+    sub_scores = (vuln_res or {}).get("sub_scores") or {}
+
+    def _safe_float(val: Any, default: float = 0.0) -> float:
+        if val is None:
+            return default
+        try:
+            return float(val)
+        except (ValueError, TypeError):
+            return default
+
+    asr_raw_val = sub_scores.get("asr_score") if sub_scores.get("asr_score") is not None else (vuln_res or {}).get("asr_score", asr)
+    asr_sc = _safe_float(asr_raw_val, asr if asr is not None else 0.0)
+
+    deg_raw_val = sub_scores.get("degradation_score") if sub_scores.get("degradation_score") is not None else (vuln_res or {}).get("degradation_score", 0.0)
+    deg_sc = _safe_float(deg_raw_val, 0.0)
+
+    stl_raw_val = sub_scores.get("stealth_score") if sub_scores.get("stealth_score") is not None else (vuln_res or {}).get("stealth_score", 0.0)
+    stl_sc = _safe_float(stl_raw_val, 0.0)
+
+    weights = (vuln_res or {}).get("weights") or {"weight_asr": 0.50, "weight_degradation": 0.35, "weight_stealth": 0.15}
+    w_asr = _safe_float(weights.get("weight_asr"), 0.50)
+    w_deg = _safe_float(weights.get("weight_degradation"), 0.35)
+    w_stl = _safe_float(weights.get("weight_stealth"), 0.15)
 
     with col_v1:
         st.markdown(
@@ -1959,11 +2006,11 @@ elif stage == "attack_results":
     st.markdown("<div style='height: 8px;'></div>", unsafe_allow_html=True)
     st.markdown("##### 📋 Vulnerability Score Vectors & Empirical Telemetry")
 
-    metrics = result.get("perturbation_metrics", {})
+    metrics = result.get("perturbation_metrics") or {}
     linf_val_prev = metrics.get("linf_mean") if metrics.get("linf_mean") is not None else metrics.get("linf", 0.0)
     l2_val_prev = metrics.get("l2_mean") if metrics.get("l2_mean") is not None else metrics.get("l2", 0.0)
-    linf_str = f"{float(linf_val_prev):.4f}" if metrics else "N/A"
-    l2_str = f"{float(l2_val_prev):.3f}" if metrics else "N/A"
+    linf_str = f"{_safe_float(linf_val_prev):.4f}" if metrics else "0.0000"
+    l2_str = f"{_safe_float(l2_val_prev):.4f}" if metrics else "0.0000"
 
     vuln_table_data = [
         {
@@ -3059,6 +3106,16 @@ elif stage == "defense_config":
                         scan_id=active_sid,
                         recommendations=defense_res["recommendations"],
                     )
+                # Ensure scan is marked completed so leaving the pipeline doesn't leave it in 'running'
+                repo.update_assessment_status(
+                    scan_id=active_sid,
+                    status="completed",
+                    overall_summary={
+                        "defense_applied": defense_res.get("defense_name"),
+                        "asr_after": defense_res.get("after_asr", 0.0),
+                        "clean_accuracy_after": defense_res.get("after_clean_accuracy", 0.0),
+                    },
+                )
             except Exception as def_persist_err:
                 print(f"[AdverScan Database] Error recording defense: {def_persist_err}")
             set_workflow_stage("defense_results")
@@ -3503,17 +3560,28 @@ elif stage == "report":
         else json.dumps(report_dict, indent=2)
     )
 
+    # Compile PDF report bytes
+    pdf_bytes = None
+    try:
+        from app.report_generator.pdf_generator import compile_pdf_report
+        pdf_bytes = compile_pdf_report(report_res)
+    except Exception:
+        pdf_bytes = None
+
     # Persist report and update assessment status to completed
     active_sid = ensure_active_scan_id()
     if active_sid:
         try:
             repo = get_storage_repository()
             r_id = report_dict.get("report_id", f"REP-{active_sid}")
+
+            # 1. Save Markdown report artifact
             art_path = repo.artifacts.save_artifact(
                 data=formatted_md,
                 scan_id=active_sid,
                 category="reports",
                 filename_prefix=f"report_{r_id}",
+                extension=".md",
             )
             repo.record_report(
                 scan_id=active_sid,
@@ -3525,6 +3593,27 @@ elif stage == "report":
                     "vulnerability_score": report_dict.get("vulnerability_score"),
                 },
             )
+
+            # 2. Automatically save certified PDF report artifact
+            if pdf_bytes:
+                pdf_art_path = repo.artifacts.save_artifact(
+                    data=pdf_bytes,
+                    scan_id=active_sid,
+                    category="reports",
+                    filename_prefix=f"Security_Report_{active_sid}",
+                    extension=".pdf",
+                )
+                repo.record_report(
+                    scan_id=active_sid,
+                    report_path=pdf_art_path or f"reports/{active_sid}/Security_Report_{active_sid}.pdf",
+                    report_name=f"Security_Report_{active_sid}.pdf",
+                    report_format="pdf",
+                    summary_metrics={
+                        "risk_level": report_dict.get("risk_level"),
+                        "vulnerability_score": report_dict.get("vulnerability_score"),
+                    },
+                )
+
             repo.update_assessment_status(
                 scan_id=active_sid,
                 status="completed",
@@ -3824,7 +3913,20 @@ elif stage == "report":
         else ""
     )
 
-    col_dl1, col_dl2, col_dl3, col_dl4 = st.columns(4)
+    col_dl0, col_dl1, col_dl2, col_dl3, col_dl4 = st.columns(5)
+
+    with col_dl0:
+        if pdf_bytes:
+            st.download_button(
+                label="⬇️ PDF (.pdf)",
+                data=pdf_bytes,
+                file_name=f"adverscan_report_{rep_id}.pdf",
+                mime="application/pdf",
+                type="primary",
+                use_container_width=True,
+            )
+        else:
+            st.button("⬇️ PDF Unavailable", disabled=True, use_container_width=True)
 
     with col_dl1:
         st.download_button(

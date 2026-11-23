@@ -59,15 +59,17 @@ class ArtifactManager:
         scan_id: str,
         category: str,
         filename_prefix: str,
+        extension: Optional[str] = None,
     ) -> Optional[str]:
         """
         Serialize and save a data artifact to the filesystem.
 
         Args:
-            data: NumPy ndarray, PyTorch Tensor, dictionary, or bytes.
+            data: NumPy ndarray, PyTorch Tensor, dictionary, string, or bytes.
             scan_id: Assessment scan identifier.
             category: 'attacks', 'defenses', 'xai', or 'reports'.
             filename_prefix: Base name for the artifact.
+            extension: Optional file extension override (e.g. '.pdf', '.md', '.json').
 
         Returns:
             Relative path string to the saved file (relative to self.base_dir),
@@ -80,6 +82,13 @@ class ArtifactManager:
         cat_dir = self.base_dir / clean_cat / scan_id
         cat_dir.mkdir(parents=True, exist_ok=True)
 
+        clean_prefix = filename_prefix
+        target_ext = None
+        if extension:
+            target_ext = extension if extension.startswith(".") else f".{extension}"
+            if clean_prefix.endswith(target_ext):
+                clean_prefix = clean_prefix[:-len(target_ext)]
+
         # 1. PyTorch Tensor / NumPy Array
         if hasattr(data, "cpu") and hasattr(data, "numpy"):
             data_np = data.detach().cpu().numpy()
@@ -89,14 +98,14 @@ class ArtifactManager:
             data_np = None
 
         if data_np is not None:
-            file_name = f"{filename_prefix}.npz"
+            file_name = f"{clean_prefix}.npz"
             file_path = cat_dir / file_name
             np.savez_compressed(file_path, data=data_np)
             return str(file_path.relative_to(self.base_dir))
 
         # 2. Dictionary / List
         if isinstance(data, (dict, list)):
-            file_name = f"{filename_prefix}.json"
+            file_name = f"{clean_prefix}.json"
             file_path = cat_dir / file_name
             try:
                 with open(file_path, "w", encoding="utf-8") as f:
@@ -107,7 +116,8 @@ class ArtifactManager:
 
         # 3. String / Text / Markdown
         if isinstance(data, str):
-            file_name = f"{filename_prefix}.txt"
+            file_ext = target_ext if target_ext else (".md" if clean_prefix.endswith(".md") else ".txt")
+            file_name = f"{clean_prefix}{file_ext}" if not clean_prefix.endswith(file_ext) else clean_prefix
             file_path = cat_dir / file_name
             with open(file_path, "w", encoding="utf-8") as f:
                 f.write(data)
@@ -115,7 +125,13 @@ class ArtifactManager:
 
         # 4. Raw Bytes
         if isinstance(data, (bytes, bytearray)):
-            file_name = f"{filename_prefix}.bin"
+            if target_ext:
+                file_ext = target_ext
+            elif data.startswith(b"%PDF"):
+                file_ext = ".pdf"
+            else:
+                file_ext = ".bin"
+            file_name = f"{clean_prefix}{file_ext}" if not clean_prefix.endswith(file_ext) else clean_prefix
             file_path = cat_dir / file_name
             with open(file_path, "wb") as f:
                 f.write(data)
@@ -407,21 +423,38 @@ class StorageRepository:
                 target_label=attack_result.get("target_label"),
                 epsilon=float(eps_val or 0.0),
                 attack_parameters=resolved_params,
-                execution_status="completed" if attack_result.get("clean_accuracy") is not None else "failed",
+                execution_status="completed" if (attack_result.get("clean_accuracy") is not None or attack_result.get("clean_acc") is not None) else "failed",
                 execution_time_seconds=exec_time,
                 total_samples=tot_samples,
-                clean_accuracy=float(attack_result.get("clean_accuracy", 0.0)),
-                adversarial_accuracy=float(attack_result.get("adversarial_accuracy", 0.0)),
+                clean_accuracy=float(attack_result.get("clean_accuracy") if attack_result.get("clean_accuracy") is not None else attack_result.get("clean_acc", 0.0)),
+                adversarial_accuracy=float(attack_result.get("adversarial_accuracy") if attack_result.get("adversarial_accuracy") is not None else attack_result.get("adv_accuracy", 0.0)),
                 accuracy_drop=float(attack_result.get("accuracy_drop", 0.0)),
-                attack_success_rate=float(attack_result.get("asr_percentage", 0.0)),
+                attack_success_rate=float(attack_result.get("asr_percentage") if attack_result.get("asr_percentage") is not None else attack_result.get("attack_success_rate", attack_result.get("asr", 0.0))),
                 successful_attacks_count=int(attack_result.get("successful_count", 0)),
                 clean_confidence_avg=attack_result.get("clean_confidence_avg") or attack_result.get("clean_confidence"),
                 adv_confidence_avg=attack_result.get("adv_confidence_avg") or attack_result.get("adversarial_confidence"),
                 confidence_drop=attack_result.get("confidence_drop"),
-                l_inf_norm=attack_result.get("linf") or attack_result.get("l_inf"),
-                l2_norm=attack_result.get("l2"),
-                l0_norm=attack_result.get("l0"),
-                mae=attack_result.get("mae"),
+                l_inf_norm=float(
+                    attack_result.get("linf")
+                    or attack_result.get("l_inf")
+                    or attack_result.get("l_inf_norm")
+                    or pert_metrics.get("linf")
+                    or pert_metrics.get("l_inf")
+                    or pert_metrics.get("linf_mean")
+                    or (eps_val if eps_val is not None else 0.0)
+                ),
+                l2_norm=float(
+                    attack_result.get("l2")
+                    or attack_result.get("l_2")
+                    or attack_result.get("l2_norm")
+                    or pert_metrics.get("l2")
+                    or pert_metrics.get("l_2")
+                    or pert_metrics.get("l2_mean")
+                    or pert_metrics.get("mean_perturbation")
+                    or 0.0
+                ),
+                l0_norm=float(attack_result.get("l0") or pert_metrics.get("l0") or 0.0),
+                mae=float(attack_result.get("mae") or pert_metrics.get("mean_abs_error") or 0.0),
                 perturbation_metrics=pert_metrics,
                 prediction_changed=bool(attack_result.get("accuracy_drop", 0.0) > 0.0),
                 attack_success=bool(attack_result.get("asr_percentage", 0.0) > 0.0),
