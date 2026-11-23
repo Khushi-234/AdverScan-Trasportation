@@ -173,3 +173,70 @@ def test_confidence_rejection_hardened_inputs_and_labels_alignment():
     is_accepted_mask = res.metadata.extra_metadata["is_accepted_mask"]
     expected_labels = labels[torch.tensor(is_accepted_mask)]
     assert torch.equal(res.hardened_labels, expected_labels)
+
+
+class MockTransformerTextModel(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.fc = nn.Linear(8, 2)
+
+    def forward(self, input_ids=None, attention_mask=None, **kwargs):
+        if not isinstance(input_ids, torch.Tensor):
+            raise TypeError(f"embedding(): argument 'indices' (position 2) must be Tensor, not {type(input_ids).__name__}")
+        x = input_ids.float()
+        return self.fc(x)
+
+
+def test_confidence_rejection_dictionary_inputs_text_model():
+    """Verify ConfidenceRejectionDefense works with transformer dictionary inputs without TypeError."""
+    model = MockTransformerTextModel()
+    defense = ConfidenceRejectionDefense(threshold=0.6)
+
+    inputs = {
+        "input_ids": torch.randint(0, 100, (6, 8)),
+        "attention_mask": torch.ones((6, 8)),
+    }
+    labels = torch.tensor([0, 1, 0, 1, 0, 1])
+
+    res = defense.apply(model=model, inputs=inputs, labels=labels)
+    assert res.success is True
+    assert isinstance(res.hardened_inputs, dict)
+    assert "input_ids" in res.hardened_inputs
+    assert res.hardened_labels is not None
+    assert len(res.hardened_inputs["input_ids"]) == len(res.hardened_labels)
+
+    # Calling wrapped model with kwargs and positional dict
+    out_kwargs = res.hardened_model(**inputs)
+    assert isinstance(out_kwargs, torch.Tensor)
+    assert out_kwargs.shape == (6, 2)
+
+    out_pos = res.hardened_model(inputs)
+    assert isinstance(out_pos, torch.Tensor)
+    assert out_pos.shape == (6, 2)
+
+
+def test_adversarial_detection_dictionary_inputs_text_model():
+    """Verify AdversarialDetectionDefense works with transformer dictionary inputs without TypeError."""
+    model = MockTransformerTextModel()
+    defense = AdversarialDetectionDefense(method="margin", threshold=0.5)
+
+    inputs = {
+        "input_ids": torch.randint(0, 100, (6, 8)),
+        "attention_mask": torch.ones((6, 8)),
+    }
+    labels = torch.tensor([0, 1, 0, 1, 0, 1])
+
+    res = defense.apply(model=model, inputs=inputs, labels=labels)
+    assert res.success is True
+    assert isinstance(res.hardened_inputs, dict)
+    assert "input_ids" in res.hardened_inputs
+    assert res.hardened_labels is not None
+    assert len(res.hardened_inputs["input_ids"]) == len(res.hardened_labels)
+
+    out_kwargs = res.hardened_model(**inputs)
+    assert isinstance(out_kwargs, torch.Tensor)
+    assert out_kwargs.shape == (6, 2)
+
+    out_pos = res.hardened_model(inputs)
+    assert isinstance(out_pos, torch.Tensor)
+    assert out_pos.shape == (6, 2)
