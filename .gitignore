@@ -17,6 +17,14 @@ venv/
 env/
 .env
 
+# Testing & Quality Assurance
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+
 # Logs and databases
 *.log
 logs/
@@ -25,23 +33,31 @@ mlruns/
 *.db-wal
 *.db-shm
 
-# Persistent SQLite Storage and Evaluation Artifacts
+# Persistent SQLite Storage, Backups and Evaluation Artifacts
 storage_data/*
 !storage_data/.gitkeep
 storage_data/artifacts/*
 !storage_data/artifacts/.gitkeep
+storage_data/backups/*
+!storage_data/backups/.gitkeep
 
-# Datasets and model checkpoints (large files)
+# Datasets, model weights, and scan outputs (large files & caches)
 data/*
 !data/.gitkeep
-datasets/*
-!datasets/.gitkeep
 models/*
 !models/.gitkeep
 results/*
 !results/.gitkeep
 reports/*
 !reports/.gitkeep
+*.pt
+*.pth
+*.bin
+*.onnx
+*.safetensors
+
+# Streamlit secrets and caches
+.streamlit/secrets.toml
 
 # IDEs and Editors
 .vscode/
