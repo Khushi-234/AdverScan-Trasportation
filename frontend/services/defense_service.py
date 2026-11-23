@@ -221,6 +221,18 @@ DOMAIN_DEFENSE_CATALOG: Dict[str, List[Dict[str, Any]]] = {
             "description": "Flags and rejects ambiguous inputs whose prediction entropy or top margin falls below a high-confidence threshold.",
             "is_auto": False,
             "default_params": {"threshold": 0.55},
+            "param_specs": [
+                {
+                    "name": "threshold",
+                    "label": "Confidence Threshold",
+                    "type": "slider",
+                    "min_value": 0.1,
+                    "max_value": 0.95,
+                    "default": 0.55,
+                    "step": 0.05,
+                    "help": "Prediction confidence below which inputs are rejected as ambiguous.",
+                }
+            ],
         },
         {
             "id": "adversarial_detection",
@@ -228,7 +240,27 @@ DOMAIN_DEFENSE_CATALOG: Dict[str, List[Dict[str, Any]]] = {
             "family": "Detection",
             "description": "Screens input representations for out-of-manifold perturbations before model classification.",
             "is_auto": False,
-            "default_params": {},
+            "default_params": {"threshold": 0.5, "method": "margin"},
+            "param_specs": [
+                {
+                    "name": "method",
+                    "label": "Detection Method",
+                    "type": "select",
+                    "options": ["margin", "entropy"],
+                    "default": "margin",
+                    "help": "Anomaly score heuristic for text representations.",
+                },
+                {
+                    "name": "threshold",
+                    "label": "Anomaly Score Threshold",
+                    "type": "slider",
+                    "min_value": 0.1,
+                    "max_value": 0.9,
+                    "default": 0.5,
+                    "step": 0.05,
+                    "help": "Threshold above which inputs are flagged and rejected as adversarial.",
+                },
+            ],
         },
     ],
     "time-series": [
@@ -304,7 +336,21 @@ def execute_configured_defense(
         device = torch.device("cpu")
 
     # Never substitute clean inputs for adversarial examples (A08)
-    if adversarial_examples is None or not isinstance(adversarial_examples, torch.Tensor):
+    # Support both pure torch.Tensor and dictionary-based tensor batches (e.g. HuggingFace NLP BatchEncoding)
+    if adversarial_examples is None:
+        # Check if attack result dictionary preserved adversarial examples under other standard keys
+        adversarial_examples = (
+            attack_result.get("_adversarial_examples")
+            or attack_result.get("adversarial_examples")
+        )
+
+    is_valid_adv = False
+    if isinstance(adversarial_examples, torch.Tensor):
+        is_valid_adv = True
+    elif isinstance(adversarial_examples, dict) and any(isinstance(v, torch.Tensor) for v in adversarial_examples.values()):
+        is_valid_adv = True
+
+    if not is_valid_adv:
         raise ValueError(
             "Adversarial examples tensor is missing or invalid. "
             "Cannot perform defense evaluation without genuine adversarial examples from M3. "
@@ -313,13 +359,25 @@ def execute_configured_defense(
     adv_tensor = adversarial_examples
 
     # Ensure consistent batch dimensions across clean inputs, labels, and adversarial examples
-    min_samples = min(adv_tensor.size(0), len(labels_tensor))
+    adv_len = adv_tensor.size(0) if isinstance(adv_tensor, torch.Tensor) else len(next(v for v in adv_tensor.values() if hasattr(v, "__len__")))
+    min_samples = min(adv_len, len(labels_tensor))
     if isinstance(test_inputs, torch.Tensor):
         min_samples = min(min_samples, test_inputs.size(0))
-    adv_tensor = adv_tensor[:min_samples]
+    elif isinstance(test_inputs, dict):
+        first_in = next((v for v in test_inputs.values() if hasattr(v, "__len__")), None)
+        if first_in is not None:
+            min_samples = min(min_samples, len(first_in))
+
+    if isinstance(adv_tensor, torch.Tensor):
+        adv_tensor = adv_tensor[:min_samples]
+    elif isinstance(adv_tensor, dict):
+        adv_tensor = {k: (v[:min_samples] if hasattr(v, "__getitem__") else v) for k, v in adv_tensor.items()}
+
     labels_tensor = labels_tensor[:min_samples]
     if isinstance(test_inputs, torch.Tensor):
         test_inputs = test_inputs[:min_samples]
+    elif isinstance(test_inputs, dict):
+        test_inputs = {k: (v[:min_samples] if hasattr(v, "__getitem__") else v) for k, v in test_inputs.items()}
     total_samples = min_samples
 
     params = attack_result.get("parameters") or attack_result.get("parameters_used") or {}
@@ -404,8 +462,15 @@ def execute_configured_defense(
         t0 = time.time()
         with torch.no_grad():
             # 1. Clean accuracy
-            inp_clean = test_inputs.to(device) if isinstance(test_inputs, torch.Tensor) else test_inputs
-            logits_clean = _extract_model_logits(candidate_model(inp_clean))
+            if isinstance(test_inputs, dict):
+                inp_clean = {k: (v.to(device) if isinstance(v, torch.Tensor) else v) for k, v in test_inputs.items()}
+                logits_clean = _extract_model_logits(candidate_model(**inp_clean))
+            elif isinstance(test_inputs, torch.Tensor):
+                inp_clean = test_inputs.to(device)
+                logits_clean = _extract_model_logits(candidate_model(inp_clean))
+            else:
+                logits_clean = _extract_model_logits(candidate_model(test_inputs))
+
             if not isinstance(logits_clean, torch.Tensor):
                 logits_clean = torch.as_tensor(logits_clean)
             c_preds = logits_clean.argmax(dim=-1).cpu()
@@ -413,8 +478,15 @@ def execute_configured_defense(
             cand_clean_acc = float(c_correct / total_samples) if total_samples > 0 else 0.0
 
             # 2. Defended accuracy on adversarial examples
-            inp_adv = adv_tensor.to(device) if isinstance(adv_tensor, torch.Tensor) else adv_tensor
-            logits_adv = _extract_model_logits(candidate_model(inp_adv))
+            if isinstance(adv_tensor, dict):
+                inp_adv = {k: (v.to(device) if isinstance(v, torch.Tensor) else v) for k, v in adv_tensor.items()}
+                logits_adv = _extract_model_logits(candidate_model(**inp_adv))
+            elif isinstance(adv_tensor, torch.Tensor):
+                inp_adv = adv_tensor.to(device)
+                logits_adv = _extract_model_logits(candidate_model(inp_adv))
+            else:
+                logits_adv = _extract_model_logits(candidate_model(adv_tensor))
+
             if not isinstance(logits_adv, torch.Tensor):
                 logits_adv = torch.as_tensor(logits_adv)
             a_preds = logits_adv.argmax(dim=-1).cpu()
@@ -493,16 +565,30 @@ def execute_configured_defense(
     if hasattr(defended_model, "eval"):
         defended_model.eval()
     with torch.no_grad():
-        inp_c = test_inputs.to(device) if isinstance(test_inputs, torch.Tensor) else test_inputs
-        logits_c = _extract_model_logits(defended_model(inp_c))
+        if isinstance(test_inputs, dict):
+            inp_c = {k: (v.to(device) if isinstance(v, torch.Tensor) else v) for k, v in test_inputs.items()}
+            logits_c = _extract_model_logits(defended_model(**inp_c))
+        elif isinstance(test_inputs, torch.Tensor):
+            inp_c = test_inputs.to(device)
+            logits_c = _extract_model_logits(defended_model(inp_c))
+        else:
+            logits_c = _extract_model_logits(defended_model(test_inputs))
+
         if not isinstance(logits_c, torch.Tensor):
             logits_c = torch.as_tensor(logits_c)
         probs_c = F.softmax(logits_c, dim=-1)
         def_clean_preds = probs_c.argmax(dim=-1).cpu()
         def_clean_confs = probs_c.max(dim=-1).values.cpu()
 
-        inp_a = adv_tensor.to(device) if isinstance(adv_tensor, torch.Tensor) else adv_tensor
-        logits_a = _extract_model_logits(defended_model(inp_a))
+        if isinstance(adv_tensor, dict):
+            inp_a = {k: (v.to(device) if isinstance(v, torch.Tensor) else v) for k, v in adv_tensor.items()}
+            logits_a = _extract_model_logits(defended_model(**inp_a))
+        elif isinstance(adv_tensor, torch.Tensor):
+            inp_a = adv_tensor.to(device)
+            logits_a = _extract_model_logits(defended_model(inp_a))
+        else:
+            logits_a = _extract_model_logits(defended_model(adv_tensor))
+
         if not isinstance(logits_a, torch.Tensor):
             logits_a = torch.as_tensor(logits_a)
         probs_a = F.softmax(logits_a, dim=-1)
