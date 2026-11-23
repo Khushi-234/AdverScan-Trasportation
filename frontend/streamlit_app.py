@@ -2842,6 +2842,20 @@ elif stage == "defense_config":
     domain = active_data.get("domain", "image")
     adapter = active_data.get("adapter")
     adv_inputs = attack_res.get("_adversarial_examples")
+    if adv_inputs is None:
+        adv_inputs = attack_res.get("adversarial_examples")
+    if adv_inputs is None and active_data.get("active_scan_id"):
+        try:
+            repo = get_storage_repository()
+            scan_detail = repo.get_assessment(active_data.get("active_scan_id"))
+            if scan_detail and scan_detail.get("attacks"):
+                latest_atk = scan_detail["attacks"][-1]
+                adv_path = latest_atk.get("adversarial_samples_path")
+                if adv_path:
+                    adv_inputs = repo.artifacts.load_artifact(adv_path)
+        except Exception:
+            pass
+
     test_inputs = attack_res.get("_clean_inputs")
     if test_inputs is None:
         test_inputs = active_data.get("test_inputs")
@@ -2856,6 +2870,12 @@ elif stage == "defense_config":
             test_inputs = test_inputs[:target_n]
         if test_labels is not None and hasattr(test_labels, "size") and test_labels.size(0) > target_n:
             test_labels = test_labels[:target_n]
+    elif adv_inputs is not None and isinstance(adv_inputs, dict):
+        first_t = next((v for v in adv_inputs.values() if isinstance(v, torch.Tensor)), None)
+        if first_t is not None:
+            target_n = first_t.size(0)
+            if test_labels is not None and hasattr(test_labels, "size") and test_labels.size(0) > target_n:
+                test_labels = test_labels[:target_n]
 
     atk_name = attack_res.get("attack_name", "Adversarial Attack")
     asr_pct = attack_res.get("asr_percentage", 0.0)
