@@ -1,5 +1,5 @@
 """
-Attack Engine Service for AdverScan Frontend.
+Attack Engine Service for Frontend.
 
 Bridges the Streamlit UI to the existing backend attack engine (Module 3)
 without duplicating attack discovery or execution logic.

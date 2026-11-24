@@ -1,5 +1,5 @@
 """
-Interactive Plotly Chart Components for AdverScan.
+Interactive Plotly Chart Components for Frontend.
 """
 
 from __future__ import annotations

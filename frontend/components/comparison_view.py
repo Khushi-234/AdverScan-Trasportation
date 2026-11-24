@@ -1,5 +1,5 @@
 """
-Assessment Comparison View Component for AdverScan Frontend.
+Assessment Comparison View Component for Frontend.
 
 Renders:
 1. Dual scan selectors (Baseline vs Comparison)

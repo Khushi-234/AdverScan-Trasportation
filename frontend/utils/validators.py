@@ -1,5 +1,5 @@
 """
-Validation Utilities for AdverScan Frontend.
+Validation Utilities for Frontend.
 
 Validates user input parameters, paths, and configurations prior to execution.
 """

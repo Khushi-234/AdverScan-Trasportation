@@ -1,4 +1,4 @@
-"""AdverScan Frontend UI Components."""
+"""Frontend UI Components."""
 
 from frontend.components.charts import (
     render_attacks_frequency_chart,

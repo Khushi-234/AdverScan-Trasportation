@@ -130,7 +130,7 @@ class AdverScanOrchestrator:
         step_start = time.time()
         print("  ⏳ [Step 1/9] M1 Model Ingestion...", end="", flush=True)
         try:
-            from app.core.device_manager import DeviceManager
+            from app.utils.device_manager import DeviceManager
             target_device = DeviceManager.resolve_device(config.device)
             config.device = str(target_device)
 

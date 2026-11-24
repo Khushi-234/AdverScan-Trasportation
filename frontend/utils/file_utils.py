@@ -1,5 +1,5 @@
 """
-File Utilities for AdverScan Frontend.
+File Utilities for Frontend.
 
 Safely reads scan results, reports, and logs from disk without mutating
 backend behavior or inventing historical scan data.
@@ -38,7 +38,7 @@ def get_all_scans() -> List[Dict[str, Any]]:
         return []
 
     scans: List[Dict[str, Any]] = []
-    # Search for all adverscan_report*.json files within subdirectories of reports
+    # Search for all report*.json files within subdirectories of reports
     pattern = str(reports_dir / "SCAN-*" / "*.json")
     for filepath in glob.glob(pattern):
         try:

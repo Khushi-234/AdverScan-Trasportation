@@ -1,5 +1,5 @@
 """
-Model Ingestion Service for AdverScan Frontend.
+Model Ingestion Service for Frontend.
 
 Bridges the Streamlit UI to the existing backend ingestion engine (Module 1)
 and evaluation dataset loader without duplicating backend logic.
@@ -33,8 +33,11 @@ from app.ingestion.presets import KNOWN_DATASET_SAMPLE_COUNTS, MODEL_PRESETS
 
 
 def get_available_presets() -> Dict[str, Dict[str, Any]]:
-    """Retrieve existing model presets configured in the backend."""
-    return MODEL_PRESETS
+    """Retrieve image-domain model presets from the backend (image domain only)."""
+    return {
+        k: v for k, v in MODEL_PRESETS.items()
+        if v.get("data_domain", "image") == "image"
+    }
 
 
 def get_dataset_total_samples(

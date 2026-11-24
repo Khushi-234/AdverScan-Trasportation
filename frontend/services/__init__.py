@@ -1,5 +1,5 @@
 """
-AdverScan Frontend Services Package.
+Frontend Services Package.
 """
 
 from frontend.services.attack_service import (
@@ -20,10 +20,6 @@ from frontend.services.vulnerability_service import (
     assess_and_score_vulnerability,
     generate_vulnerability_recommendations,
 )
-from frontend.services.xai_service import (
-    explain_assessment,
-    get_available_xai_techniques,
-)
 from frontend.services.assessment_history_service import (
     delete_scan,
     get_database_status,
@@ -42,8 +38,6 @@ __all__ = [
     "execute_configured_attack",
     "assess_and_score_vulnerability",
     "generate_vulnerability_recommendations",
-    "explain_assessment",
-    "get_available_xai_techniques",
     "get_available_defenses_for_domain",
     "execute_configured_defense",
     "generate_security_report",

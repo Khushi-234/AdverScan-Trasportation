@@ -1,5 +1,5 @@
 """
-Defense and Hardening Service for AdverScan Frontend.
+Defense and Hardening Service for Frontend.
 
 Bridges the Streamlit UI to Module 7 (Hardening Engine) and Module 8 (Re-Test),
 providing domain-aware defense cataloging, iterative candidate evaluation,
@@ -142,14 +142,6 @@ DOMAIN_DEFENSE_CATALOG: Dict[str, List[Dict[str, Any]]] = {
                     "default": 1.0,
                 },
             ],
-        },
-        {
-            "id": "image_denoising",
-            "name": "Image Denoising",
-            "family": "Preprocessing",
-            "description": "Non-local or adaptive bilateral filtering designed to strip adversarial noise patterns.",
-            "is_auto": False,
-            "default_params": {"strength": 0.1},
         },
         {
             "id": "jpeg_compression",
@@ -316,7 +308,7 @@ def execute_configured_defense(
     robustness metrics before vs. after defense.
 
     Returns:
-        Structured result dict matching AdverScan standards, with full telemetry,
+        Structured result dict matching platform standards, with full telemetry,
         candidate attempt details, restored prediction tables, and hardened model.
     """
     raw_model = getattr(model, "get_model", lambda: model)()

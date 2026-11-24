@@ -1,5 +1,5 @@
 """
-Adversarial Attack Engine Module for AdverScan.
+Adversarial Attack Engine Module.
 """
 
 from app.attack_engine.attacks.base_attack import BaseAttack
@@ -8,21 +8,6 @@ from app.attack_engine.attacks.image.pgd import PGD
 from app.attack_engine.attacks.image.deepfool import DeepFool
 from app.attack_engine.attacks.image.cw import CW
 from app.attack_engine.attacks.image.fab import FAB
-from app.attack_engine.attacks.text.hotflip import HotFlip
-from app.attack_engine.attacks.text.embedding_pgd import EmbeddingPGD
-from app.attack_engine.attacks.text.textbugger_wb import TextBuggerWB
-from app.attack_engine.attacks.text.universal_trigger import UniversalTrigger
-from app.attack_engine.attacks.text.gradient_substitution import GradientSubstitution
-from app.attack_engine.attacks.tabular.cap_pgd import CapPGD
-from app.attack_engine.attacks.tabular.lowprofool import LowProFool
-from app.attack_engine.attacks.tabular.carlini_wagner import TabularCW
-from app.attack_engine.attacks.tabular.jsma import TabularJSMA
-from app.attack_engine.attacks.tabular.vae_attack import VAEAttack
-from app.attack_engine.attacks.time_series.pgd import TimeSeriesPGD
-from app.attack_engine.attacks.time_series.smooth_pgd import SmoothPGD
-from app.attack_engine.attacks.time_series.wavelet import WaveletAttack
-from app.attack_engine.attacks.time_series.soft_dtw import SoftDTWAttack
-from app.attack_engine.attacks.time_series.jsma import JSMA as TimeSeriesJSMA
 from app.attack_engine.config import AttackConfig
 from app.attack_engine.models import AttackMetadata, AttackResult, AttackResults
 from app.attack_engine.exceptions import (
@@ -60,21 +45,6 @@ __all__ = [
     "DeepFool",
     "CW",
     "FAB",
-    "HotFlip",
-    "EmbeddingPGD",
-    "TextBuggerWB",
-    "UniversalTrigger",
-    "GradientSubstitution",
-    "CapPGD",
-    "LowProFool",
-    "TabularCW",
-    "TabularJSMA",
-    "VAEAttack",
-    "TimeSeriesPGD",
-    "SmoothPGD",
-    "WaveletAttack",
-    "SoftDTWAttack",
-    "TimeSeriesJSMA",
     "AttackConfig",
     "AttackResult",
     "AttackResults",

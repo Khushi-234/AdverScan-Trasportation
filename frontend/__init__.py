@@ -1,1 +1,1 @@
-"""AdverScan Streamlit Frontend Package."""
+"""Streamlit Frontend Package."""

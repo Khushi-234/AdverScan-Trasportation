@@ -1,5 +1,5 @@
 """
-Security Assessment Report Service for AdverScan Frontend.
+Security Assessment Report Service for Frontend.
 
 Aggregates outputs from Model Ingestion, Attack Execution, Vulnerability Assessment,
 and Hardening & Retest into a comprehensive 15-section ReportResult.
@@ -368,7 +368,7 @@ def generate_security_report(
         )
 
     exec_summary = ExecutionSummary(
-        run_label="AdverScan Interactive Assessment",
+        run_label="Interactive Security Assessment",
         run_timestamp=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         total_elapsed_seconds=sum(r.elapsed_seconds for r in exec_modules),
         modules=exec_modules,
@@ -391,7 +391,7 @@ def generate_security_report(
         execution_summary=exec_summary,
         extra_metadata={
             "scan_id": f"scan-{uuid.uuid4().hex[:8]}",
-            "generator": "AdverScan UI Pipeline",
+            "generator": "UI Security Pipeline",
         },
     )
 

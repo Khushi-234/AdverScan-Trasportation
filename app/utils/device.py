@@ -110,6 +110,10 @@ class DeviceManager:
         return resolve_device(preferred_device)
 
     @staticmethod
+    def resolve_device(preferred_device: Optional[Union[str, torch.device]] = None) -> str:
+        return resolve_device(preferred_device)
+
+    @staticmethod
     def to_device(obj: Any, device: Union[str, torch.device]) -> Any:
         return to_device(obj, device)
 

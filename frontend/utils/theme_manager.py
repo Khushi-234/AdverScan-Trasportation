@@ -1,5 +1,5 @@
 """
-AdverScan theme manager.
+Theme manager.
 
 Why the old versions only updated on page change
 ------------------------------------------------
@@ -10,7 +10,7 @@ inject css) only runs on the NEXT rerun, i.e. when you change page.
 Approach used here: switch in the browser, no rerun at all
 ----------------------------------------------------------
 * base.css + dark.css + light.css are all injected once (by the script, into a
-  single <style id="adverscan-theme-css">). Each theme is scoped under
+  single <style id="app-theme-css">). Each theme is scoped under
   <html data-theme="dark|light">, so only one applies at a time.
 * A small script watches Streamlit's native theme and sets that attribute
   instantly. To read the native theme without reading our own colours back
@@ -28,7 +28,7 @@ from pathlib import Path
 import streamlit as st
 
 STYLES_DIR = Path(__file__).resolve().parents[1] / "styles"
-_STYLE_ID = "adverscan-theme-css"
+_STYLE_ID = "app-theme-css"
 
 _JS = r"""
 <script>
@@ -40,7 +40,7 @@ _JS = r"""
   var FORCE = __FORCE__;                    // true when ?theme= is used
   var STYLE_ID = "__STYLE_ID__";
 
-  var S = W.__adverscanTheme;
+  var S = W.__appTheme;
   if (S && S.setCss) { S.setCss(CSS); S.refresh(); return; }   // already running: just update css
 
   var styleEl = D.getElementById(STYLE_ID);
@@ -105,7 +105,7 @@ _JS = r"""
   }
   W.setInterval(function () { observe(); check(false); }, 700);       // cheap safety net
 
-  W.__adverscanTheme = {
+  W.__appTheme = {
     setCss: function (c) { styleEl.textContent = c; },
     refresh: function () { observe(); check(true); }
   };

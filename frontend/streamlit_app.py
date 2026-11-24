@@ -1,5 +1,5 @@
 """
-AdverScan — Adversarial Robustness and Security Testing Platform
+Adversarial Robustness and Security Testing Platform
 Continuous Assessment Pipeline:
 Dashboard → Model Ingestion → Attack Configuration → Attack Execution
 """
@@ -29,7 +29,7 @@ import streamlit as st
 
 # Configure page metadata
 st.set_page_config(
-    page_title="AdverScan - Robustness Assessment",
+    page_title="AI Robustness & Security Assessment",
     page_icon="🛡️",
     layout="wide",
     initial_sidebar_state="expanded",
@@ -42,10 +42,6 @@ from frontend.components.sidebar import (
 )
 from frontend.components.history_view import render_history_view
 from frontend.components.comparison_view import render_comparison_view
-from frontend.components.xai_visualizer import (
-    render_dynamic_xai_dashboard,
-    render_pre_post_defense_comparison,
-)
 from frontend.services.assessment_history_service import get_storage_repository
 from frontend.services.attack_service import (
     execute_configured_attack,
@@ -61,58 +57,40 @@ from frontend.services.ingestion_service import (
     get_dataset_total_samples,
     load_model_and_dataset,
 )
-from app.ingestion.utils.model_utils import detect_model_domain
-
-# Domain selection options, labels and descriptions
-DATA_DOMAIN_OPTIONS = ["image", "text", "tabular", "time-series"]
+# Domain selection — Image only
+DATA_DOMAIN_OPTIONS = ["image"]
 
 DATA_DOMAIN_LABELS = {
     "image": "Image (Computer Vision)",
-    "text": "Text (Natural Language Processing)",
-    "tabular": "Tabular (Structured / Relational Data)",
-    "time-series": "Time-Series (Sequential / Temporal Signals)",
 }
 
 DATA_DOMAIN_DESCRIPTIONS = {
     "image": "2D/3D visual tensors (e.g. GTSRB, CIFAR-10, ImageNet, ViT, ResNet, CNNs)",
-    "text": "Tokenized text sequences & embeddings (e.g. SST-2, IMDB, BERT, RoBERTa, DistilBERT)",
-    "tabular": "Structured numerical & categorical features (e.g. Adult Census, Credit Fraud, Random Forest, MLP)",
-    "time-series": "Sequential sensor traces & temporal signals (e.g. ECG signals, telemetry, forecasting)",
 }
 from frontend.services.report_service import generate_security_report
 from frontend.services.vulnerability_service import (
     assess_and_score_vulnerability,
     generate_vulnerability_recommendations,
 )
-from frontend.services.xai_service import (
-    explain_assessment,
-    get_available_xai_techniques,
-    get_suggested_xai_technique,
-    TECHNIQUE_DISPLAY_NAMES,
-)
 from frontend.utils.session_state import (
     get_active_assessment,
     get_active_scan_id,
     get_attack_result,
     get_defense_result,
-    get_defense_xai_result,
     get_report_result,
     get_state,
     get_vulnerability_result,
     get_workflow_stage,
-    get_xai_result,
     init_session_state,
     reset_workflow_state,
     set_active_assessment,
     set_active_scan_id,
     set_attack_result,
     set_defense_result,
-    set_defense_xai_result,
     set_report_result,
     set_state,
     set_vulnerability_result,
     set_workflow_stage,
-    set_xai_result,
 )
 from frontend.utils.theme_manager import initialize_theme, load_theme
 
@@ -205,9 +183,9 @@ if stage == "dashboard":
             <div style="display: flex; align-items: center; gap: 16px;">
                 <span style="font-size: 3rem;">🛡️</span>
                 <div>
-                    <h1 style="margin: 0; font-size: 2.2rem; font-weight: 700;">Welcome to AdverScan</h1>
+                    <h1 style="margin: 0; font-size: 2.2rem; font-weight: 700;">AI Security & Robustness Platform</h1>
                     <p style="margin: 0.5rem 0 0 0; font-size: 1.05rem;">
-                        Automated End-to-End Adversarial Robustness and AI Security Assessment Platform.
+                        Automated End-to-End Adversarial Robustness and Security Assessment Platform.
                     </p>
                 </div>
             </div>
@@ -221,16 +199,20 @@ if stage == "dashboard":
     with col_intro1:
         st.subheader("The Continuous Assessment Workflow")
         st.markdown("""
-            AdverScan coordinates a systematic, step-by-step security assessment lifecycle:
+            The platform coordinates a systematic, step-by-step security assessment lifecycle for **Image (Computer Vision)** models:
 
-            1. **Model Ingestion & Introspection**: Load pre-trained models across Vision, Tabular, NLP, and Time-Series domains with automated weight introspection and dataset resolution.
-            2. **Attack Discovery & Threat Formulation**: Dynamically discover compatible attacks from the verified backend catalog with guided hyperparameter configuration.
-            3. **Adversarial Perturbation Execution**: Execute gradient-based and optimization attacks within mathematical bounds with real-time progress tracking.
+            1. **Model Ingestion & Introspection**: Load pre-trained image classification models (ViT, ResNet, CNNs) with automated weight introspection and dataset resolution.
+            2. **Attack Discovery & Threat Formulation**: Dynamically discover compatible image attacks from the verified backend catalog with guided hyperparameter configuration.
+            3. **Adversarial Perturbation Execution**: Execute gradient-based pixel-space attacks within mathematical bounds with real-time progress tracking.
             4. **Comprehensive Telemetry & Distortion Overview**: Evaluate model degradation, accuracy drop, confidence shifts, and exact perturbation norms ($L_\\infty, L_2, L_0, \\text{MAE}$).
             """)
 
         st.info(
-            "ℹ️ **Current Phase**: **Model Ingestion** and **Adversarial Attack Execution** are the active workflow stages in this phase."
+            "ℹ️ **Current Phase**: **Image Model Ingestion** and **Adversarial Attack Execution** are the active workflow stages in this phase."
+        )
+
+        st.info(
+            "ℹ️ **Current Phase**: **Image Model Ingestion** and **Adversarial Attack Execution** are the active workflow stages in this phase."
         )
 
         st.markdown("<div style='height: 15px;'></div>", unsafe_allow_html=True)
@@ -244,9 +226,9 @@ if stage == "dashboard":
     with col_intro2:
         st.subheader("Key Platform Capabilities")
         st.markdown("""
-            - **Zero Fabricated Telemetry**: Every metric, gradient shift, and distortion score is calculated directly from PyTorch / scikit-learn models.
+            - **Image Domain Focus**: Specialized for Computer Vision models (ViT, ResNet, CNNs) on pixel-space adversarial robustness.
+            - **Zero Fabricated Telemetry**: Every metric, gradient shift, and distortion score is calculated directly from PyTorch models.
             - **Hardware-Adaptive Sample Slicing**: Evaluate on flexible sample batches (2 to 100+) for rapid experimentation on CPU without GPU bottlenecks.
-            - **Unified Modality Support**: Standardized model adapters and dataset loaders for Computer Vision, Tabular, Text, and Temporal signals.
             - **Mathematical Distortion Bounds**: Precise $L_\\infty$, $L_2$, $L_0$, and Mean Absolute Error verification.
             """)
 
@@ -290,94 +272,44 @@ elif stage == "ingestion":
         preset_choice = st.selectbox(
             "Select Pre-Configured Model Preset",
             preset_keys,
-            format_func=lambda k: f"{k} ({DATA_DOMAIN_LABELS.get(presets[k].get('data_domain', 'image'), presets[k].get('data_domain', 'image').capitalize())} - {presets[k].get('name', '')})",
+            format_func=lambda k: f"{k} ({presets[k].get('name', '')})",
         )
         selected_preset_info = presets[preset_choice]
         model_identifier = preset_choice
         default_dataset = selected_preset_info.get("dataset_name", "")
-        default_domain = selected_preset_info.get("data_domain", "image")
+        default_domain = "image"
         default_framework = selected_preset_info.get("framework", "huggingface")
 
         st.caption(
-            f"**Preset Description**: {selected_preset_info.get('description', '')} • **Domain**: {DATA_DOMAIN_LABELS.get(default_domain, default_domain.capitalize())}"
+            f"**Preset Description**: {selected_preset_info.get('description', '')} • **Domain**: Image (Computer Vision)"
         )
 
     elif source_type == "Hugging Face Model ID":
         model_identifier = st.text_input(
             "Hugging Face Repository ID",
             value="bazyl/gtsrb-model",
-            placeholder="e.g. bazyl/gtsrb-model, google/vit-base-patch16-224, distilbert-base-uncased",
-            help="Hugging Face model repository identifier",
+            placeholder="e.g. bazyl/gtsrb-model, google/vit-base-patch16-224, microsoft/resnet-18",
+            help="Hugging Face model repository identifier for an image classification model",
         )
-        detected_dom = detect_model_domain(model_identifier.strip()) if model_identifier.strip() else "unknown"
-        dom_idx = DATA_DOMAIN_OPTIONS.index(detected_dom) if detected_dom in DATA_DOMAIN_OPTIONS else 0
-
-        default_domain = st.selectbox(
-            "Data Domain",
-            options=DATA_DOMAIN_OPTIONS,
-            index=dom_idx,
-            format_func=lambda d: DATA_DOMAIN_LABELS.get(d, d.capitalize()),
-            help="Select the data domain representation expected by this model.",
-        )
-        if detected_dom in DATA_DOMAIN_OPTIONS:
-            st.markdown(
-                f"""
-                <div style="background: rgba(16, 185, 129, 0.08); border: 1px solid rgba(16, 185, 129, 0.25); border-radius: 6px; padding: 6px 12px; margin-top: -6px; margin-bottom: 8px;">
-                    <span style="font-size: 0.84rem; color: #10b981; font-weight: 600;">
-                        💡 Suggested Domain: <strong>{DATA_DOMAIN_LABELS.get(detected_dom)}</strong>
-                    </span>
-                    <span style="font-size: 0.78rem; color: var(--text-secondary); margin-left: 6px;">
-                        (Auto-detected from model identifier)
-                    </span>
-                </div>
-                """,
-                unsafe_allow_html=True,
-            )
-        st.caption(f"ℹ️ **Supported Architectures**: {DATA_DOMAIN_DESCRIPTIONS.get(default_domain, '')}")
+        default_domain = "image"
+        st.caption(f"ℹ️ **Supported Architectures**: {DATA_DOMAIN_DESCRIPTIONS.get('image', '')}")
         default_framework = "huggingface"
 
     else:  # Local Model Path
         model_identifier = st.text_input(
             "Local Model File Path",
-            value="models/tabular-mlp-adult-census.pt",
-            placeholder="e.g. models/classifier.pth or models/tabular-mlp-adult-census.pt",
-            help="Path to pre-trained model file on local disk",
+            value="models/image-classifier.pt",
+            placeholder="e.g. models/image-classifier.pth or models/resnet.pt",
+            help="Path to pre-trained image model file on local disk",
         )
-        detected_dom = detect_model_domain(model_identifier.strip()) if model_identifier.strip() else "unknown"
-        dom_idx = DATA_DOMAIN_OPTIONS.index(detected_dom) if detected_dom in DATA_DOMAIN_OPTIONS else 2
-
-        col_dom, col_fw = st.columns([1, 1])
-        with col_dom:
-            default_domain = st.selectbox(
-                "Data Domain",
-                options=DATA_DOMAIN_OPTIONS,
-                index=dom_idx,
-                format_func=lambda d: DATA_DOMAIN_LABELS.get(d, d.capitalize()),
-                help="Select the data domain representation expected by this model.",
-            )
-            if detected_dom in DATA_DOMAIN_OPTIONS:
-                st.markdown(
-                    f"""
-                    <div style="background: rgba(16, 185, 129, 0.08); border: 1px solid rgba(16, 185, 129, 0.25); border-radius: 6px; padding: 6px 12px; margin-top: -6px; margin-bottom: 8px;">
-                        <span style="font-size: 0.84rem; color: #10b981; font-weight: 600;">
-                            💡 Suggested Domain: <strong>{DATA_DOMAIN_LABELS.get(detected_dom)}</strong>
-                        </span>
-                        <span style="font-size: 0.78rem; color: var(--text-secondary); margin-left: 6px;">
-                            (Auto-detected from model path)
-                        </span>
-                    </div>
-                    """,
-                    unsafe_allow_html=True,
-                )
-            st.caption(f"ℹ️ **Supported Architectures**: {DATA_DOMAIN_DESCRIPTIONS.get(default_domain, '')}")
-
-        with col_fw:
-            default_framework = st.selectbox(
-                "Framework",
-                ["pytorch", "sklearn"],
-                index=0,
-                format_func=lambda fw: "🔥 PyTorch (.pt, .pth)" if fw == "pytorch" else "⚙️ Scikit-Learn (.pkl, .joblib)",
-            )
+        default_domain = "image"
+        default_framework = st.selectbox(
+            "Framework",
+            ["pytorch"],
+            index=0,
+            format_func=lambda fw: "🔥 PyTorch (.pt, .pth)",
+        )
+        st.caption(f"ℹ️ **Supported Architectures**: {DATA_DOMAIN_DESCRIPTIONS.get('image', '')}")
 
     col_data, col_sample = st.columns([1, 1])
 
@@ -900,7 +832,7 @@ elif stage == "attack_config":
                 Domain Context: {domain.upper()} ADVERSARIAL ROBUSTNESS
             </div>
             <div style="color: var(--text-secondary); font-size: 0.85rem; line-height: 1.5; margin-top: 0.35rem;">
-                AdverScan evaluates your model under a <strong>White-Box</strong> threat model. The attack engine leverages complete
+                The platform evaluates your model under a <strong>White-Box</strong> threat model. The attack engine leverages complete
                 access to the model's loss landscape, forward activation maps, and backpropagation gradients to construct minimal
                 adversarial perturbations. Only verified canonical attacks implemented in the backend engine are presented below.
             </div>
@@ -1753,7 +1685,7 @@ elif stage == "attack_config":
                             recommendations=recs,
                         )
                 except Exception as rec_err:
-                    print(f"[AdverScan Database] Notice generating recommendations: {rec_err}")
+                    print(f"[Database] Notice generating recommendations: {rec_err}")
 
                 # Ensure scan is marked completed so leaving the pipeline doesn't leave it in 'running'
                 repo.update_assessment_status(
@@ -1766,7 +1698,7 @@ elif stage == "attack_config":
                     },
                 )
             except Exception as persist_err:
-                print(f"[AdverScan Database] Error recording attack: {persist_err}")
+                print(f"[Database] Error recording attack: {persist_err}")
             set_workflow_stage("attack_results")
             st.rerun()
         except Exception as exc:
@@ -2572,108 +2504,14 @@ elif stage == "attack_results":
 
     st.markdown("---")
 
-    # --------------------------------------------------------------------------
-    # M6: Explainable AI (XAI) Root-Cause Analysis Expander
-    # --------------------------------------------------------------------------
-    with st.expander("🔍 Explainable AI (XAI) Root-Cause Analysis (M6)", expanded=False):
-        st.markdown(
-            """
-            <div style="font-size: 0.92rem; color: var(--text-secondary); margin-bottom: 12px;">
-                Investigate which input features, tokens, frequency bands, or pixels were most leveraged by the adversarial perturbation to cause model failure.
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-
-        domain = active_data.get("domain", "image")
-        model = (
-            active_data.get("adapter")
-            or active_data.get("raw_model")
-            or active_data.get("model")
-        )
-        vuln_res = get_vulnerability_result() or result.get("vulnerability_assessment")
-        available_techs = get_available_xai_techniques(domain, model)
-        suggested_tech = get_suggested_xai_technique(domain, model)
-
-        if not available_techs:
-            st.warning("No compatible XAI explainers found for this model architecture.")
-        else:
-            def _format_tech_expander(t: str) -> str:
-                base = TECHNIQUE_DISPLAY_NAMES.get(t, t.upper())
-                return f"{base} ★ (Suggested)" if t == suggested_tech else base
-
-            default_exp_idx = available_techs.index(suggested_tech) if suggested_tech in available_techs else 0
-
-            col_x1, col_x2 = st.columns([3, 1])
-            with col_x1:
-                expander_tech = st.selectbox(
-                    "Attribution Method",
-                    available_techs,
-                    index=default_exp_idx,
-                    format_func=_format_tech_expander,
-                    key="xai_expander_tech_select",
-                )
-            with col_x2:
-                st.markdown("<div style='height: 28px;'></div>", unsafe_allow_html=True)
-                btn_run_xai_expander = st.button(
-                    "🚀 Explain Attack",
-                    type="primary",
-                    use_container_width=True,
-                    key="btn_run_xai_expander",
-                )
-
-            if btn_run_xai_expander:
-                with st.spinner(f"Computing {expander_tech.upper()} root-cause attribution..."):
-                    try:
-                        res_xai = explain_assessment(
-                            model=model,
-                            attack_result=result,
-                            vulnerability_result=vuln_res,
-                            domain=domain,
-                            technique=expander_tech,
-                            mode="standard",
-                        )
-                        set_xai_result(res_xai)
-                        set_report_result(None)
-                        active_sid = ensure_active_scan_id()
-                        if res_xai.get("executed", False):
-                            try:
-                                repo = get_storage_repository()
-                                repo.record_xai_result(
-                                    scan_id=active_sid,
-                                    xai_result=res_xai,
-                                    raw_attributions=res_xai.get("attribution"),
-                                )
-                            except Exception as xai_err:
-                                print(f"[AdverScan Database] Error saving XAI: {xai_err}")
-                        if res_xai.get("executed", False):
-                            st.success(f"Generated {expander_tech.upper()} explanation successfully!")
-                        else:
-                            st.error(f"XAI {expander_tech.upper()} Generation Failed: {res_xai.get('message', 'Attribution error')}")
-                    except Exception as e:
-                        st.error(f"XAI Execution Failed: {e}")
-
-        # If XAI result exists, render preview and link to dedicated page
-        current_xai = get_xai_result()
-        if current_xai and current_xai.get("executed", False):
-            render_dynamic_xai_dashboard(current_xai, title="Root-Cause Attribution Preview")
-            if st.button("Open Full Dedicated XAI Analysis Page ↗️", use_container_width=True, key="btn_goto_xai_from_expander"):
-                set_workflow_stage("xai_analysis")
-                st.rerun()
-
     st.markdown("<div style='height: 12px;'></div>", unsafe_allow_html=True)
 
     # Workflow Actions
-    col_back, col_xai, col_comp, col_fwd = st.columns([1, 1, 1, 1])
+    col_back, col_comp, col_fwd = st.columns([1, 1, 1])
 
     with col_back:
         if st.button("⬅️ Test Another Attack on this Model", use_container_width=True):
             set_workflow_stage("attack_config")
-            st.rerun()
-
-    with col_xai:
-        if st.button("🔍 Root-Cause XAI Analysis ➡️", use_container_width=True):
-            set_workflow_stage("xai_analysis")
             st.rerun()
 
     with col_comp:
@@ -2699,199 +2537,7 @@ elif stage == "attack_results":
 
 
 # ==============================================================================
-# STAGE 4: EXPLAINABLE AI (XAI) ROOT-CAUSE & ATTRIBUTION ANALYSIS
-# ==============================================================================
-elif stage == "xai_analysis":
-    st.markdown("## 🔍 Explainable AI (XAI) Root-Cause Analysis")
-    st.caption(
-        "Step 4 of 7 • Isolate sensitive input features, inspect adversarial attribution drift, and understand decision shifts."
-    )
-
-    active_data = get_active_assessment()
-    attack_res = get_attack_result()
-
-    if not active_data or not attack_res:
-        st.warning("No active attack results found to explain. Run an adversarial attack first.")
-        col_warn1, col_warn2 = st.columns(2)
-        with col_warn1:
-            if st.button("⬅️ Go to Model Ingestion", use_container_width=True):
-                set_workflow_stage("ingestion")
-                st.rerun()
-        with col_warn2:
-            if st.button("⬅️ Go to Attack Engine", type="primary", use_container_width=True):
-                set_workflow_stage("attack_config")
-                st.rerun()
-        st.stop()
-
-    model = (
-        active_data.get("adapter")
-        or active_data.get("raw_model")
-        or active_data.get("model")
-    )
-    domain = active_data.get("domain", "image")
-    vuln_res = get_vulnerability_result() or attack_res.get("vulnerability_assessment")
-    cached_xai = get_xai_result()
-
-    available_techs = get_available_xai_techniques(domain, model)
-    suggested_tech = get_suggested_xai_technique(domain, model)
-
-    if not available_techs:
-        st.warning("No compatible XAI explainers found for this model architecture.")
-        st.stop()
-
-    def format_tech_label(t: str) -> str:
-        base = TECHNIQUE_DISPLAY_NAMES.get(t, t.upper())
-        if t == suggested_tech:
-            return f"{base} ★ (Suggested)"
-        return base
-
-    default_idx = (
-        available_techs.index(cached_xai["technique"])
-        if (cached_xai and cached_xai.get("technique") in available_techs)
-        else (available_techs.index(suggested_tech) if suggested_tech in available_techs else 0)
-    )
-
-    # Clean, non-overwhelming Controls Card
-    st.markdown(
-        """
-        <div class="modern-card" style="margin-bottom: 1.25rem;">
-            <div style="font-size: 1.05rem; font-weight: 700; color: var(--text-primary); margin-bottom: 0.5rem;">
-                ⚙️ Explainability Diagnostic Controls
-            </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
-    ctrl_col1, ctrl_col2 = st.columns([3, 1])
-    with ctrl_col1:
-        selected_tech = st.selectbox(
-            "Attribution Technique",
-            available_techs,
-            index=default_idx,
-            format_func=format_tech_label,
-            help="Supported explainability algorithms verified for this model architecture and data domain.",
-            key="xai_tech_select",
-        )
-    with ctrl_col2:
-        st.markdown("<div style='height: 28px;'></div>", unsafe_allow_html=True)
-        btn_run_xai = st.button(
-            "🚀 Generate Explanation",
-            type="primary",
-            use_container_width=True,
-            key="btn_run_xai_page",
-        )
-
-    # Optional Collapsible Advanced Settings (Keeps screen clean and uncluttered)
-    with st.expander("⚙️ Advanced Parameters (Optional)", expanded=False):
-        selected_mode = st.selectbox(
-            "Evaluation Mode",
-            ["standard", "fast", "thorough"],
-            index=0,
-            help="Fast uses fewer evaluation steps; thorough maximizes sampling / IG integration steps.",
-            key="xai_mode_select",
-        )
-
-    st.markdown("</div>", unsafe_allow_html=True)
-
-    if btn_run_xai:
-        with st.spinner(f"Computing {selected_tech.upper()} attributions for {domain} model..."):
-            try:
-                xai_res = explain_assessment(
-                    model=model,
-                    attack_result=attack_res,
-                    vulnerability_result=vuln_res,
-                    domain=domain,
-                    technique=selected_tech,
-                    mode=selected_mode,
-                )
-                set_xai_result(xai_res)
-                set_report_result(None)
-                try:
-                    active_sid = ensure_active_scan_id()
-                    repo = get_storage_repository()
-                    repo.record_xai_result(
-                        scan_id=active_sid,
-                        xai_result=xai_res,
-                        raw_attributions=xai_res.get("attribution"),
-                    )
-                except Exception as xai_persist_err:
-                    print(f"[AdverScan Database] Error recording XAI: {xai_persist_err}")
-                cached_xai = xai_res
-                if xai_res.get("executed", False):
-                    st.success(f"Successfully generated {selected_tech.upper()} explainability diagnostics!")
-                else:
-                    st.error(f"{selected_tech.upper()} Explainer Error: {xai_res.get('message', 'Attribution generation failed.')}")
-            except Exception as e:
-                st.error(f"XAI Generation Failed: {e}")
-
-    # Render Active XAI Results
-    if cached_xai and cached_xai.get("executed", False):
-        render_dynamic_xai_dashboard(cached_xai)
-    elif cached_xai and not cached_xai.get("executed", False):
-        st.warning(f"XAI Explainer Status: {cached_xai.get('status', 'unknown')}. Message: {cached_xai.get('message', 'No details available.')}")
-    else:
-        st.info("💡 Click **'🚀 Generate / Refresh XAI Explanation'** above to compute feature attributions, attribution drift, and decision-boundary shift metrics for this attack.")
-
-    # Pre-Defense vs. Post-Defense Comparison Section (if defense has been executed)
-    defense_res = get_defense_result()
-    if defense_res:
-        st.markdown("---")
-        st.markdown("### 🛡️ Defense Verification: Pre vs. Post-Hardening Attribution")
-        st.caption("Evaluate whether model hardening neutralized adversarial sensitivity hotspots and stabilized feature attributions.")
-
-        defended_xai = get_defense_xai_result()
-        if defended_xai:
-            render_pre_post_defense_comparison(cached_xai or {}, defended_xai)
-        else:
-            st.info("Defense hardening has been executed! Compute post-defense explainability to compare attribution stabilization.")
-            if st.button("🔬 Compute Post-Defense Explanations", key="btn_compute_def_xai"):
-                defended_model = defense_res.get("defended_model", model)
-                with st.spinner("Computing post-defense attribution profiles..."):
-                    try:
-                        post_xai_res = explain_assessment(
-                            model=defended_model,
-                            attack_result=attack_res,
-                            vulnerability_result=vuln_res,
-                            domain=domain,
-                            technique=selected_tech,
-                            mode=selected_mode,
-                        )
-                        set_defense_xai_result(post_xai_res)
-                        set_report_result(None)
-                        if post_xai_res.get("executed", False):
-                            st.success("Post-defense XAI attribution profile computed successfully!")
-                        else:
-                            st.error(f"Post-Defense XAI Failed: {post_xai_res.get('message', 'Attribution error')}")
-                        st.rerun()
-                    except Exception as e:
-                        st.error(f"Post-Defense XAI Generation Failed: {e}")
-
-    st.markdown("---")
-
-    # Workflow Actions
-    col_nav1, col_nav2, col_nav3 = st.columns([1, 1, 1])
-    with col_nav1:
-        if st.button("⬅️ Back to Attack Results", use_container_width=True):
-            set_workflow_stage("attack_results")
-            st.rerun()
-    with col_nav2:
-        if st.button("🛡️ Proceed to Defense Hardening ➡️", type="primary", use_container_width=True):
-            set_workflow_stage("defense_config")
-            st.rerun()
-    with col_nav3:
-        if st.button("📄 Jump to Security Report ➡️", use_container_width=True):
-            set_workflow_stage("report")
-            st.rerun()
-
-    st.markdown("<div style='height: 8px;'></div>", unsafe_allow_html=True)
-    if st.button("🔄 Start New Assessment (Reset)", use_container_width=True, key="reset_from_xai"):
-        reset_workflow_state()
-        set_workflow_stage("dashboard")
-        st.rerun()
-
-
-# ==============================================================================
-# STAGE 5: DEFENSE CONFIGURATION & HARDENING SELECTION
+# STAGE 4: DEFENSE CONFIGURATION & HARDENING SELECTION
 # ==============================================================================
 elif stage == "defense_config":
     st.markdown("## 🛡️ Model Hardening & Defense Configuration")
@@ -3193,10 +2839,24 @@ elif stage == "defense_config":
                     attack_run_id=latest_atk_run_id,
                 )
                 if defense_res.get("recommendations"):
-                    repo.record_recommendations(
-                        scan_id=active_sid,
-                        recommendations=defense_res["recommendations"],
-                    )
+                    raw_recs = defense_res["recommendations"]
+                    norm_recs = []
+                    for r in raw_recs:
+                        if isinstance(r, dict):
+                            norm_recs.append(r)
+                        elif isinstance(r, str):
+                            norm_recs.append({
+                                "rationale": r,
+                                "technique": defense_res.get("defense_name", "Hardening"),
+                                "defense_family": defense_res.get("defense_family", "Preprocessing"),
+                                "defense_stage": defense_res.get("defense_stage", "preprocessing"),
+                                "confidence": 0.85,
+                            })
+                    if norm_recs:
+                        repo.record_recommendations(
+                            scan_id=active_sid,
+                            recommendations=norm_recs,
+                        )
                 # Ensure scan is marked completed so leaving the pipeline doesn't leave it in 'running'
                 repo.update_assessment_status(
                     scan_id=active_sid,
@@ -3208,7 +2868,7 @@ elif stage == "defense_config":
                     },
                 )
             except Exception as def_persist_err:
-                print(f"[AdverScan Database] Error recording defense: {def_persist_err}")
+                print(f"[Database] Error recording defense: {def_persist_err}")
             set_workflow_stage("defense_results")
             st.rerun()
         except Exception as exc:
@@ -3574,16 +3234,11 @@ elif stage == "defense_results":
     st.markdown("---")
 
     # Workflow Actions (Backward left, Forward right, Reset below)
-    col_back, col_xai, col_fwd = st.columns([1, 1, 1])
+    col_back, col_fwd = st.columns([1, 1])
 
     with col_back:
         if st.button("⬅️ Reconfigure Defense", use_container_width=True):
             set_workflow_stage("defense_config")
-            st.rerun()
-
-    with col_xai:
-        if st.button("🔬 Compare Pre vs. Post-Defense XAI ➡️", use_container_width=True):
-            set_workflow_stage("xai_analysis")
             st.rerun()
 
     with col_fwd:
@@ -3636,7 +3291,6 @@ elif stage == "report":
                 defense_result=defense_res,
                 domain=active_data.get("domain", "image"),
                 vulnerability_result=get_vulnerability_result() or attack_res.get("vulnerability_assessment"),
-                xai_result=get_xai_result(),
             )
             set_report_result(report_res)
 
@@ -3852,57 +3506,7 @@ elif stage == "report":
                 """
             )
 
-    with st.expander("🔍 Section 9: Explainable AI (XAI) Root Cause Analysis (M6)", expanded=False):
-        xai_info = report_dict.get("xai_findings", {})
-        if xai_info:
-            tech = xai_info.get("technique") or "attribution"
-            st.markdown(f"**Explainability Method**: `{tech.upper()}`")
-            if "status" in xai_info:
-                st.caption(f"Status: {xai_info.get('status')} • {xai_info.get('message', '')}")
-
-            local_exp = xai_info.get("local_explanation", {})
-            global_exp = xai_info.get("global_explanation", {})
-
-            if local_exp:
-                st.markdown("##### 📍 Local Feature Attribution (Sample Level)")
-                clean_top = local_exp.get("clean_top_features", [])
-                adv_top = local_exp.get("adversarial_top_features", [])
-                if clean_top or adv_top:
-                    col_l1, col_l2 = st.columns(2)
-                    with col_l1:
-                        st.markdown("**Clean Prediction Top Features:**")
-                        for f in clean_top[:5]:
-                            st.markdown(f"- `{f.get('feature', 'feat')}`: {f.get('weight', 0.0):.4f}")
-                    with col_l2:
-                        st.markdown("**Adversarial Prediction Top Features:**")
-                        for f in adv_top[:5]:
-                            st.markdown(f"- `{f.get('feature', 'feat')}`: {f.get('weight', 0.0):.4f}")
-
-            if global_exp:
-                glob_imp = global_exp.get("global_feature_importance", [])
-                vuln_freq = global_exp.get("vulnerability_frequency", []) or global_exp.get("global_top_features", [])
-
-                if glob_imp:
-                    st.markdown("##### 🌐 Global Feature Importance (Aggregated SHAP / Attribution)")
-                    for g in glob_imp[:5]:
-                        imp_val = g.get("mean_abs_importance", g.get("importance", 0.0))
-                        st.markdown(f"- **{g.get('feature', 'feat')}**: mean |attribution| `{imp_val:.4f}` (sample coverage: {g.get('sample_count', 0)})")
-
-                if vuln_freq:
-                    st.markdown("##### 🎯 Adversarial Vulnerability Frequency")
-                    for g in vuln_freq[:5]:
-                        succ_f = g.get("success_frequency", g.get("frequency", 0))
-                        tot_f = g.get("frequency", g.get("total_frequency", 0))
-                        st.markdown(f"- **{g.get('feature', 'feat')}**: exploited in `{succ_f}` attacks (total occurrences: `{tot_f}`)")
-
-            st.json(xai_info)
-        else:
-            st.info(
-                "No XAI explanation generated for this run (technique was not enabled or model unsupported). "
-                "Explanations are displayed only when genuinely computed by the M6 Explainability Engine."
-            )
-
-    with st.expander("🛠️ Section 10: Model Hardening Engine & Applied Mitigations (M7)", expanded=True):
+    with st.expander("🛠️ Section 9: Model Hardening Engine & Applied Mitigations (M7)", expanded=True):
         hard_data = report_dict.get("hardening_results", {})
         st.markdown(
             f"""
@@ -3979,10 +3583,10 @@ elif stage == "report":
             f"""
             <div class="modern-card card-accent-emerald" style="padding: 1rem;">
                 <div style="font-weight: 700; color: var(--text-primary); margin-bottom: 0.3rem;">
-                    AdverScan AI Security Assurance Attestation
+                    AI Security Assurance Attestation
                 </div>
                 <div style="font-size: 0.85rem; color: var(--text-secondary);">
-                    This report verifies that the evaluated model has completed empirical adversarial robustness testing under the AdverScan framework. Hardening filters have been evaluated and benchmarked for deployment readiness.
+                    This report verifies that the evaluated model has completed empirical adversarial robustness testing under the security framework. Hardening filters have been evaluated and benchmarked for deployment readiness.
                 </div>
                 <div style="margin-top: 0.6rem; font-size: 0.8rem; color: var(--text-secondary);">
                     Scan ID: <strong>{rep_id}</strong> • Certified: <strong>{rep_time}</strong>
@@ -4011,7 +3615,7 @@ elif stage == "report":
             st.download_button(
                 label="⬇️ PDF (.pdf)",
                 data=pdf_bytes,
-                file_name=f"adverscan_report_{rep_id}.pdf",
+                file_name=f"security_report_{rep_id}.pdf",
                 mime="application/pdf",
                 type="primary",
                 use_container_width=True,
@@ -4023,7 +3627,7 @@ elif stage == "report":
         st.download_button(
             label="⬇️ Markdown (.md)",
             data=formatted_md,
-            file_name=f"adverscan_report_{rep_id}.md",
+            file_name=f"security_report_{rep_id}.md",
             mime="text/markdown",
             use_container_width=True,
         )
@@ -4032,7 +3636,7 @@ elif stage == "report":
         st.download_button(
             label="⬇️ JSON (.json)",
             data=report_json,
-            file_name=f"adverscan_report_{rep_id}.json",
+            file_name=f"security_report_{rep_id}.json",
             mime="application/json",
             use_container_width=True,
         )
@@ -4041,7 +3645,7 @@ elif stage == "report":
         st.download_button(
             label="⬇️ Plaintext (.txt)",
             data=formatted_md,
-            file_name=f"adverscan_report_{rep_id}.txt",
+            file_name=f"security_report_{rep_id}.txt",
             mime="text/plain",
             use_container_width=True,
         )
@@ -4050,7 +3654,7 @@ elif stage == "report":
         st.download_button(
             label="⬇️ Timing CSV (.csv)",
             data=report_csv,
-            file_name=f"adverscan_report_{rep_id}_timing.csv",
+            file_name=f"security_report_{rep_id}_timing.csv",
             mime="text/csv",
             use_container_width=True,
         )

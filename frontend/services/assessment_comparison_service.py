@@ -1,5 +1,5 @@
 """
-Assessment Comparison Engine for AdverScan Frontend.
+Assessment Comparison Engine for Frontend.
 
 Computes multi-dimensional comparisons between two historical assessments:
 - Attack-by-Attack metrics (ASR delta, robust accuracy delta, distortion comparison)

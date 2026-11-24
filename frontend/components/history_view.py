@@ -1,5 +1,5 @@
 """
-Assessment History View Component for AdverScan Frontend.
+Assessment History View Component for Frontend.
 
 Renders:
 1. Database diagnostics banner & summary metrics
@@ -593,7 +593,7 @@ def render_assessment_detail_drawer(scan_id: str) -> None:
 
         # 1. Resolve or compile official PDF report
         pdf_bytes = None
-        pdf_filename = f"adverscan_security_report_{scan_id}.pdf"
+        pdf_filename = f"security_report_{scan_id}.pdf"
         pdf_rep_record = None
 
         # Check existing recorded reports on disk

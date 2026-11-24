@@ -1,4 +1,4 @@
-"""AdverScan Frontend Utilities."""
+"""Frontend Utilities."""
 
 from frontend.utils.file_utils import (
     find_reports_directory,

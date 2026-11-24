@@ -24,7 +24,7 @@ DEFENSE_CAPABILITIES: Dict[str, Dict[str, Any]] = {
     "normalization": {
         "defense_type": "preprocessing",
         "defense_family": "preprocessing",
-        "supported_domains": ["image", "tabular", "audio"],
+        "supported_domains": ["tabular", "audio"],
         "requires_retraining": False,
         "latency_cost": 1.0,
         "training_cost": 0.0,
@@ -108,7 +108,7 @@ DEFENSE_CAPABILITIES: Dict[str, Dict[str, Any]] = {
     "confidence_rejection": {
         "defense_type": "rejection",
         "defense_family": "detection",
-        "supported_domains": ["image", "nlp", "tabular", "audio"],
+        "supported_domains": ["nlp", "tabular"],
         "requires_retraining": False,
         "latency_cost": 2.0,
         "training_cost": 0.0,
@@ -118,7 +118,7 @@ DEFENSE_CAPABILITIES: Dict[str, Dict[str, Any]] = {
     "adversarial_detection": {
         "defense_type": "detection",
         "defense_family": "detection",
-        "supported_domains": ["image", "nlp", "tabular", "audio"],
+        "supported_domains": ["nlp", "tabular"],
         "requires_retraining": False,
         "latency_cost": 15.0,
         "training_cost": 0.0,
@@ -182,7 +182,7 @@ DEFENSE_CAPABILITIES: Dict[str, Dict[str, Any]] = {
     "feature_denoising": {
         "defense_type": "feature",
         "defense_family": "feature",
-        "supported_domains": ["image", "tabular"],
+        "supported_domains": ["tabular"],
         "requires_retraining": False,
         "latency_cost": 8.0,
         "training_cost": 0.0,
@@ -192,7 +192,7 @@ DEFENSE_CAPABILITIES: Dict[str, Dict[str, Any]] = {
     "feature_alignment": {
         "defense_type": "feature",
         "defense_family": "feature",
-        "supported_domains": ["image", "tabular"],
+        "supported_domains": ["tabular"],
         "requires_retraining": False,
         "latency_cost": 10.0,
         "training_cost": 0.0,

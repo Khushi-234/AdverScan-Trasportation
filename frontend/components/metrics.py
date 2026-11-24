@@ -1,5 +1,5 @@
 """
-Reusable Metric Card Components for AdverScan.
+Reusable Metric Card Components.
 """
 
 from __future__ import annotations

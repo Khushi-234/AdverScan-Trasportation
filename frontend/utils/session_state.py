@@ -1,5 +1,5 @@
 """
-Session State Management for AdverScan Frontend.
+Session State Management for Frontend.
 
 Manages the assessment workflow stages:
 Dashboard -> Model Ingestion -> Attack Configuration -> Attack Results

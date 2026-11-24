@@ -637,6 +637,17 @@ class StorageRepository:
 
         with get_db_session(self.db_path) as session:
             for item in findings:
+                if isinstance(item, str):
+                    item = {
+                        "name": item,
+                        "severity": "Medium",
+                        "score": 50.0,
+                        "description": item,
+                        "affected_region": "Input feature space",
+                        "evidence": {},
+                    }
+                elif not isinstance(item, dict):
+                    continue
                 f_id = f"VULN-{uuid.uuid4().hex[:8].upper()}"
                 rec = VulnerabilityFindingRecord(
                     finding_id=f_id,
@@ -658,12 +669,24 @@ class StorageRepository:
     def record_recommendations(
         self,
         scan_id: str,
-        recommendations: List[Dict[str, Any]],
+        recommendations: List[Any],
     ) -> List[Dict[str, Any]]:
         """Record actionable hardening recommendations."""
         out = []
         with get_db_session(self.db_path) as session:
             for item in recommendations:
+                if isinstance(item, str):
+                    item = {
+                        "rationale": item,
+                        "description": item,
+                        "technique": "auto",
+                        "recommended_technique": "auto",
+                        "defense_family": "Hardening",
+                        "defense_stage": "preprocessing",
+                        "confidence": 0.8,
+                    }
+                elif not isinstance(item, dict):
+                    continue
                 r_id = f"REC-{uuid.uuid4().hex[:8].upper()}"
                 rec = DefenseRecommendationRecord(
                     recommendation_id=r_id,

@@ -1,5 +1,5 @@
 """
-Sidebar Navigation and Status Component for AdverScan.
+Sidebar Navigation and Status Component.
 """
 
 from __future__ import annotations
@@ -18,14 +18,14 @@ from frontend.utils.session_state import (
 
 
 def render_sidebar_branding() -> None:
-    """Render AdverScan branding in sidebar header."""
+    """Render branding in sidebar header."""
     with st.sidebar:
         st.markdown(
             """
             <div class="sidebar-brand" style="display: flex; align-items: center; gap: 10px; margin-bottom: 0.5rem;">
                 <span class="brand-icon" style="font-size: 2rem;">🛡️</span>
                 <div>
-                    <h2 style="margin: 0; font-size: 1.35rem; font-weight: 700;">AdverScan</h2>
+                    <h2 style="margin: 0; font-size: 1.35rem; font-weight: 700;">AI Security</h2>
                     <span class="brand-subtitle" style="font-size: 0.72rem; letter-spacing: 1px; font-weight: 700;">ROBUSTNESS PLATFORM</span>
                 </div>
             </div>
@@ -97,12 +97,11 @@ def render_sidebar_session() -> None:
             ("ingestion", "1. Model Ingestion", True),
             ("attack_config", "2. Attack Engine", is_active),
             ("attack_results", "3. Attack Results", atk_res is not None),
-            ("xai_analysis", "4. XAI Analysis", atk_res is not None),
-            ("defense_config", "5. Defense & Hardening", atk_res is not None),
-            ("defense_results", "6. Defense Results", def_res is not None),
-            ("report", "7. Reports", atk_res is not None),
-            ("history", "8. Assessment History", True),
-            ("comparison", "9. Compare Assessments", True),
+            ("defense_config", "4. Defense & Hardening", atk_res is not None),
+            ("defense_results", "5. Defense Results", def_res is not None),
+            ("report", "6. Reports", atk_res is not None),
+            ("history", "7. Assessment History", True),
+            ("comparison", "8. Compare Assessments", True),
         ]
 
         for s_id, s_label, is_unlocked in pipeline_stages:
@@ -140,7 +139,7 @@ def render_sidebar_session() -> None:
         st.markdown(
             """
             <div class="sidebar-version" style="margin-top: 1rem; font-size: 0.78rem;">
-                AdverScan v0.1.0 • Pipeline Mode
+                AI Security Platform v0.1.0 • Pipeline Mode
             </div>
             """,
             unsafe_allow_html=True,
@@ -149,7 +148,7 @@ def render_sidebar_session() -> None:
 
 def render_sidebar() -> None:
     """
-    Render clean sidebar containing AdverScan branding and session info.
+    Render clean sidebar containing branding and session info.
     Theme selector is handled by theme_manager.initialize_theme().
     """
     render_sidebar_branding()

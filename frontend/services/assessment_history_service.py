@@ -1,5 +1,5 @@
 """
-Assessment History Service for AdverScan Frontend.
+Assessment History Service for Frontend.
 
 Interfaces the Streamlit frontend with the underlying SQLite StorageRepository.
 Provides methods for querying historical scan records, filtering by model/modality/status,

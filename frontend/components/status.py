@@ -1,5 +1,5 @@
 """
-Status Badges, Empty States, and Phase Placeholder Components for AdverScan.
+Status Badges, Empty States, and Phase Placeholder Components.
 """
 
 from __future__ import annotations
